@@ -8,11 +8,13 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject private var ai = AISettings.shared
     @ObservedObject private var remote = MIDIRemoteSettings.shared
+    @AppStorage(AutoScrollingTextView.leadInLinesKey) private var lyricsLeadInLines = AutoScrollingTextView.defaultLeadInLines
 
     var body: some View {
         NavigationStack {
             List {
                 midiSection
+                lyricsSection
                 if ai.anyAIAvailable {
                     offlineModeSection
                     apiKeysSection
@@ -53,6 +55,23 @@ struct SettingsView: View {
             Text("MIDI")
         } footer: {
             Text("Choose the receive channel and which messages recall snapshots or change songs — for foot controllers and other MIDI gear.")
+        }
+    }
+
+    // MARK: - Lyrics
+
+    private var lyricsSection: some View {
+        Section {
+            Stepper(value: $lyricsLeadInLines, in: 0...10) {
+                LabeledContent("Blank Lines Before Lyrics") {
+                    Text("\(lyricsLeadInLines)")
+                        .monospacedDigit()
+                }
+            }
+        } header: {
+            Text("Lyrics")
+        } footer: {
+            Text("Empty lines shown above a song's lyrics, so the first line starts lower and auto-scroll has a lead-in. Applies on the Perform screen and in full view.")
         }
     }
 

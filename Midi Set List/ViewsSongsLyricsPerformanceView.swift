@@ -23,124 +23,145 @@ struct LyricsPerformanceView: View {
     private var showingPDF: Bool { song.pdfFileURL != nil }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-
-            if let pdfURL = song.pdfFileURL {
-                PDFKitView(url: pdfURL)
-            } else {
-                AutoScrollingTextView(
-                    text: song.lyrics ?? "No lyrics added yet.\n\nTap 'Edit' to add lyrics or tabs.",
-                    isScrolling: $isAutoScrolling,
-                    scrollSpeed: $scrollSpeed,
-                    resetTrigger: $resetTrigger
-                )
+        // Stacked, not overlaid: the lyrics end where the controls begin, so text
+        // never shows through behind the buttons
+        VStack(spacing: 0) {
+            if showControls {
+                topBar
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            if showControls {
-                VStack {
-                    HStack {
-                        Button {
-                            isAutoScrolling = false
-                            dismiss()
-                        } label: {
-                            Label("Close", systemImage: "xmark.circle.fill")
-                                .font(.title2)
-                                .labelStyle(.iconOnly)
-                        }
-                        .tint(.white)
-
-                        Spacer()
-
-                        Button {
-                            isAutoScrolling = false
-                            showingEditLyrics = true
-                        } label: {
-                            Label("Edit Lyrics", systemImage: "pencil.circle.fill")
-                                .font(.title2)
-                                .labelStyle(.iconOnly)
-                        }
-                        .tint(.white)
-                    }
-                    .padding()
-                    .background(.ultraThinMaterial.opacity(0.3))
-
-                    Spacer()
-
-                    if !showingPDF {
-                        VStack(spacing: 16) {
-                            VStack(spacing: 8) {
-                                HStack {
-                                    Image(systemName: "speedometer")
-                                    Text("Scroll Speed")
-                                        .font(.subheadline)
-                                    Spacer()
-                                    Text("\(Int(scrollSpeed))")
-                                        .font(.subheadline)
-                                        .monospacedDigit()
-                                }
-                                .foregroundStyle(.white)
-
-                                Slider(value: $scrollSpeed, in: 5...100, step: 5)
-                                    .tint(.white)
-                            }
-                            .padding(.horizontal)
-
-                            Button {
-                                isAutoScrolling.toggle()
-                            } label: {
-                                HStack {
-                                    Image(systemName: isAutoScrolling ? "pause.fill" : "play.fill")
-                                        .font(.title2)
-                                    Text(isAutoScrolling ? "Pause Scrolling" : "Start Scrolling")
-                                        .font(.headline)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(isAutoScrolling ? Color.orange : Color.green)
-                                .foregroundStyle(.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                            }
-                            .padding(.horizontal)
-
-                            Button {
-                                isAutoScrolling = false
-                                resetTrigger.toggle()
-                            } label: {
-                                Label("Reset to Top", systemImage: "arrow.up.to.line")
-                                    .font(.subheadline)
-                            }
-                            .tint(.white)
-                        }
-                        .padding(.vertical)
-                        .background(.ultraThinMaterial.opacity(0.3))
-                    }
+            Group {
+                if let pdfURL = song.pdfFileURL {
+                    PDFKitView(url: pdfURL)
+                } else {
+                    AutoScrollingTextView(
+                        text: song.lyrics ?? "No lyrics added yet.\n\nTap 'Edit' to add lyrics or tabs.",
+                        isScrolling: $isAutoScrolling,
+                        scrollSpeed: $scrollSpeed,
+                        resetTrigger: $resetTrigger,
+                        insets: UIEdgeInsets(top: 24, left: 32, bottom: 500, right: 32)
+                    )
                 }
-                .transition(.opacity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation {
+                    showControls.toggle()
+                }
+            }
+
+            if showControls && !showingPDF {
+                bottomControls
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .background(Color.black.ignoresSafeArea())
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
-        .onTapGesture {
-            withAnimation {
-                showControls.toggle()
-            }
-        }
         .sheet(isPresented: $showingEditLyrics) {
             EditLyricsView(song: song)
         }
+    }
+
+    private var topBar: some View {
+        HStack {
+            Button {
+                isAutoScrolling = false
+                dismiss()
+            } label: {
+                Label("Close", systemImage: "xmark.circle.fill")
+                    .font(.title2)
+                    .labelStyle(.iconOnly)
+            }
+            .tint(.white)
+
+            Spacer()
+
+            Button {
+                isAutoScrolling = false
+                showingEditLyrics = true
+            } label: {
+                Label("Edit Lyrics", systemImage: "pencil.circle.fill")
+                    .font(.title2)
+                    .labelStyle(.iconOnly)
+            }
+            .tint(.white)
+        }
+        .padding()
+        .background(Color(white: 0.12))
+    }
+
+    private var bottomControls: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 8) {
+                HStack {
+                    Image(systemName: "speedometer")
+                    Text("Scroll Speed")
+                        .font(.subheadline)
+                    Spacer()
+                    Text("\(Int(scrollSpeed))")
+                        .font(.subheadline)
+                        .monospacedDigit()
+                }
+                .foregroundStyle(.white)
+
+                Slider(value: $scrollSpeed, in: 5...100, step: 5)
+                    .tint(.white)
+            }
+            .padding(.horizontal)
+
+            Button {
+                isAutoScrolling.toggle()
+            } label: {
+                HStack {
+                    Image(systemName: isAutoScrolling ? "pause.fill" : "play.fill")
+                        .font(.title2)
+                    Text(isAutoScrolling ? "Pause Scrolling" : "Start Scrolling")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(isAutoScrolling ? Color.orange : Color.green)
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .padding(.horizontal)
+
+            Button {
+                isAutoScrolling = false
+                resetTrigger.toggle()
+            } label: {
+                Label("Reset to Top", systemImage: "arrow.up.to.line")
+                    .font(.subheadline)
+            }
+            .tint(.white)
+        }
+        .padding(.vertical)
+        .background(Color(white: 0.12))
     }
 }
 
 // MARK: - UIKit Auto-Scrolling Text View
 
 struct AutoScrollingTextView: UIViewRepresentable {
+    /// Settings key for the blank lines shown above the lyrics (0–10)
+    static let leadInLinesKey = "lyricsLeadInLines"
+    static let defaultLeadInLines = 5
+
     let text: String
     @Binding var isScrolling: Bool
     @Binding var scrollSpeed: Double
     @Binding var resetTrigger: Bool
     var fontSize: CGFloat = 24
     var insets = UIEdgeInsets(top: 100, left: 32, bottom: 500, right: 32)
+    @AppStorage(AutoScrollingTextView.leadInLinesKey) private var leadInLines = AutoScrollingTextView.defaultLeadInLines
+
+    /// Blank lines first, so the opening lyrics start lower and auto-scroll eases into them
+    private var displayText: String {
+        String(repeating: "\n", count: min(max(leadInLines, 0), 10)) + text
+    }
 
     func makeUIView(context: Context) -> UIScrollView {
         let scrollView = UIScrollView()
@@ -149,7 +170,7 @@ struct AutoScrollingTextView: UIViewRepresentable {
         scrollView.showsHorizontalScrollIndicator = false
 
         let textView = UITextView()
-        textView.text = text
+        textView.text = displayText
         textView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         textView.textColor = .white
         textView.backgroundColor = .clear
@@ -179,8 +200,8 @@ struct AutoScrollingTextView: UIViewRepresentable {
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
 
-        if textView.text != text || textView.font?.pointSize != fontSize || textView.textContainerInset != insets {
-            textView.text = text
+        if textView.text != displayText || textView.font?.pointSize != fontSize || textView.textContainerInset != insets {
+            textView.text = displayText
             textView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
             textView.textContainerInset = insets
             scrollView.setNeedsLayout()

@@ -169,6 +169,9 @@ private struct PerformPlayingView: View {
                                    title: "\(performance.songIndex + 1)/\(songs.count) · \(song.name)")
                     .id(song.objectID)  // new song, fresh scroll position
                     .padding(.horizontal, lyricsExpanded ? 0 : 16)
+                    .overlay {
+                        if lyricsExpanded { songArrows(songs: songs) }
+                    }
 
                 if !lyricsExpanded {
                     remoteStatus
@@ -227,6 +230,42 @@ private struct PerformPlayingView: View {
         .sheet(isPresented: $showingBTMIDI) {
             BTMIDIConnectSheet()
         }
+    }
+
+    /// Previous / next song arrows over the expanded lyrics, since the song bar is hidden then
+    private func songArrows(songs: [Song]) -> some View {
+        HStack {
+            songArrow("chevron.left", label: "Previous Song",
+                      detail: name(in: songs, at: performance.songIndex - 1)) {
+                performance.previousSong()
+            }
+            .opacity(performance.hasPreviousSong ? 1 : 0)
+            .disabled(!performance.hasPreviousSong)
+
+            Spacer()
+
+            songArrow("chevron.right", label: "Next Song",
+                      detail: name(in: songs, at: performance.songIndex + 1)) {
+                performance.nextSong()
+            }
+            .opacity(performance.hasNextSong ? 1 : 0)
+            .disabled(!performance.hasNextSong)
+        }
+        .padding(.horizontal, 8)
+    }
+
+    private func songArrow(_ icon: String, label: String, detail: String?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 40, height: 64)
+                .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.2)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityValue(detail ?? "")
     }
 
     private func errorBanner(_ message: String) -> some View {
