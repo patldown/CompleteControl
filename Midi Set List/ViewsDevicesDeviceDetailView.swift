@@ -20,6 +20,11 @@ struct DeviceDetailView: View {
     @State private var importError: String?
     @State private var showingImportError = false
     @State private var viewingSpecFile: DeviceSpecFile?
+    @State private var referenceInputMode: ReferenceInputSheet.Mode?
+    /// A file just added from the paste/generate sheet, opened once that sheet closes
+    @State private var pendingReview: (file: DeviceSpecFile, note: String?)?
+    /// Review note shown on the viewer for a freshly AI-generated file
+    @State private var reviewNotes: [String: String] = [:]
     @State private var showingMemory = false
     @State private var showingClearMemoryConfirm = false
     @State private var memoryExists = false
@@ -96,10 +101,25 @@ struct DeviceDetailView: View {
                     } label: {
                         Label("Attach Spec File", systemImage: "doc.badge.plus")
                     }
+
+                    Button {
+                        referenceInputMode = .paste
+                    } label: {
+                        Label("Paste Reference Text", systemImage: "doc.on.clipboard")
+                    }
+
+                    if ai.isAvailable(.specAnalysis) {
+                        Button {
+                            referenceInputMode = .generate
+                        } label: {
+                            Label("Generate Reference with AI", systemImage: "sparkles")
+                                .foregroundStyle(ai.offlineMode ? Color.offlineMode : .accentColor)
+                        }
+                    }
                 } header: {
                     Text("Reference Files")
                 } footer: {
-                    Text("Attach PDF or text MIDI/OSC specifications. The AI macro generator will automatically use these as context when generating macros for this device.")
+                    Text("Attach or paste MIDI/OSC specifications, or have AI turn a manual excerpt into a structured reference. The AI macro generator automatically uses these as context for this device.")
                 }
 
                 Section {
@@ -177,7 +197,28 @@ struct DeviceDetailView: View {
             AddEditDeviceView(device: device)
         }
         .sheet(item: $viewingSpecFile) { file in
-            SpecFileViewerSheet(file: file)
+            SpecFileViewerSheet(
+                file: file,
+                reviewNote: reviewNotes[file.id],
+                onDiscard: {
+                    DeviceSpecManager.delete(file)
+                    device.removeSpecFile(file)
+                    try? viewContext.save()
+                    reviewNotes[file.id] = nil
+                },
+                onReviewed: { reviewNotes[file.id] = nil }
+            )
+        }
+        .sheet(item: $referenceInputMode, onDismiss: {
+            // Open the new file for review once the input sheet has closed
+            guard let pending = pendingReview else { return }
+            pendingReview = nil
+            if let note = pending.note { reviewNotes[pending.file.id] = note }
+            viewingSpecFile = pending.file
+        }) { mode in
+            ReferenceInputSheet(device: device, mode: mode) { file, note in
+                pendingReview = (file, note)
+            }
         }
         .sheet(isPresented: $showingMemory, onDismiss: { memoryExists = DeviceSpecManager.hasMemory(for: device) }) {
             DeviceMemorySheet(device: device)
@@ -518,14 +559,23 @@ private struct DeviceMemorySheet: View {
 
 private struct SpecFileViewerSheet: View {
     let file: DeviceSpecFile
+    /// Set for a freshly AI-generated file: shows a review banner
+    var reviewNote: String? = nil
+    var onDiscard: (() -> Void)? = nil
+    var onReviewed: (() -> Void)? = nil
+
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
     @State private var isEditing = false
     @State private var editedContent: String = ""
+    @State private var reviewed = false
 
     private var savedContent: String {
         DeviceSpecManager.extractText(file) ?? "(Unable to read file)"
     }
+
+    /// PDFs are shown as extracted text; saving that text back would corrupt the PDF
+    private var isEditable: Bool { !file.filename.lowercased().hasSuffix(".pdf") }
 
     var body: some View {
         NavigationStack {
@@ -569,21 +619,56 @@ private struct SpecFileViewerSheet: View {
                         }
                         .disabled(copied || isEditing)
 
-                        Button {
-                            if isEditing { saveEdits() }
-                            isEditing.toggle()
-                        } label: {
-                            Label(
-                                isEditing ? "Lock" : "Edit",
-                                systemImage: isEditing ? "lock.fill" : "pencil"
-                            )
-                            .foregroundStyle(isEditing ? .orange : .accentColor)
+                        if isEditable {
+                            Button {
+                                if isEditing { saveEdits() }
+                                isEditing.toggle()
+                            } label: {
+                                Label(
+                                    isEditing ? "Lock" : "Edit",
+                                    systemImage: isEditing ? "lock.fill" : "pencil"
+                                )
+                                .foregroundStyle(isEditing ? .orange : .accentColor)
+                            }
                         }
                     }
                 }
             }
+            .safeAreaInset(edge: .top) {
+                if let reviewNote, !reviewed { reviewBanner(reviewNote) }
+            }
         }
         .onAppear { editedContent = savedContent }
+    }
+
+    private func reviewBanner(_ note: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(note, systemImage: "sparkles")
+                .font(.caption)
+            HStack(spacing: 10) {
+                Button {
+                    if isEditing { saveEdits(); isEditing = false }
+                    reviewed = true
+                    onReviewed?()
+                } label: {
+                    Label("Looks Good", systemImage: "checkmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent).tint(.indigo)
+
+                Button(role: .destructive) {
+                    onDiscard?()
+                    dismiss()
+                } label: {
+                    Label("Discard", systemImage: "trash")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.indigo.opacity(0.1))
     }
 
     private func saveEdits() {

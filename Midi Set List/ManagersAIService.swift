@@ -295,6 +295,8 @@ struct AIResponse {
     let inputTokens: Int
     let outputTokens: Int
     let modelID: String
+    /// True when the model stopped because it hit the output limit (the text is cut off)
+    var truncated = false
 
     func cost() -> Double {
         // Approximate pricing per million tokens; best-effort by model family
@@ -318,23 +320,29 @@ enum ExternalAIClient {
         messages: [ExternalAIMessage],
         workspaceID: String? = nil,
         anthropicModelID: String = "claude-sonnet-4-6",
-        anthropicThinking: Bool = false
+        anthropicThinking: Bool = false,
+        maxOutputTokens: Int? = nil
     ) async throws -> AIResponse {
         // Fail fast with no connection so callers can fall back to on-device
         guard !AISettings.shared.offlineMode else { throw ExternalAIError.noConnection }
         switch provider {
-        case .openAI:    return try await openAI(apiKey: apiKey, system: systemPrompt, messages: messages)
-        case .anthropic: return try await anthropic(apiKey: apiKey, workspaceID: workspaceID, modelID: anthropicModelID, thinking: anthropicThinking, system: systemPrompt, messages: messages)
+        case .openAI:    return try await openAI(apiKey: apiKey, system: systemPrompt, messages: messages, maxTokens: maxOutputTokens)
+        case .anthropic: return try await anthropic(apiKey: apiKey, workspaceID: workspaceID, modelID: anthropicModelID, thinking: anthropicThinking, system: systemPrompt, messages: messages, maxTokens: maxOutputTokens)
         case .onDevice:  throw ExternalAIError.notConfigured
         }
     }
 
-    private static func openAI(apiKey: String, system: String, messages: [ExternalAIMessage]) async throws -> AIResponse {
+    /// Long outputs (e.g. a full reference file) can take well over the 60s default
+    private static let requestTimeout: TimeInterval = 300
+
+    private static func openAI(apiKey: String, system: String, messages: [ExternalAIMessage], maxTokens: Int?) async throws -> AIResponse {
         var msgs: [[String: String]] = [["role": "system", "content": system]]
         msgs += messages.map { ["role": $0.role, "content": $0.content] }
         let modelID = "gpt-4o-mini"
-        let body: [String: Any] = ["model": modelID, "messages": msgs]
+        var body: [String: Any] = ["model": modelID, "messages": msgs]
+        if let maxTokens { body["max_tokens"] = maxTokens }
         var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
+        req.timeoutInterval = requestTimeout
         req.httpMethod = "POST"
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -342,21 +350,25 @@ enum ExternalAIClient {
         let (data, response) = try await URLSession.shared.data(for: req)
         try validate(response, data: data)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = ((json["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any])?["content"] as? String
+              let choice = (json["choices"] as? [[String: Any]])?.first,
+              let content = (choice["message"] as? [String: Any])?["content"] as? String
         else { throw ExternalAIError.parseError }
         let usage = json["usage"] as? [String: Any]
         return AIResponse(
             text: content,
             inputTokens: usage?["prompt_tokens"] as? Int ?? 0,
             outputTokens: usage?["completion_tokens"] as? Int ?? 0,
-            modelID: modelID
+            modelID: modelID,
+            truncated: choice["finish_reason"] as? String == "length"
         )
     }
 
-    private static func anthropic(apiKey: String, workspaceID: String?, modelID: String, thinking: Bool, system: String, messages: [ExternalAIMessage]) async throws -> AIResponse {
+    private static func anthropic(apiKey: String, workspaceID: String?, modelID: String, thinking: Bool, system: String, messages: [ExternalAIMessage], maxTokens: Int?) async throws -> AIResponse {
+        // Thinking shares the output budget, so it always gets at least 16k
+        let limit = thinking ? max(16000, maxTokens ?? 0) : (maxTokens ?? 2048)
         var body: [String: Any] = [
             "model": modelID,
-            "max_tokens": thinking ? 16000 : 2048,
+            "max_tokens": limit,
             "system": system,
             "messages": messages.map { ["role": $0.role, "content": $0.content] }
         ]
@@ -365,6 +377,7 @@ enum ExternalAIClient {
             body["output_config"] = ["effort": "high"]
         }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        req.timeoutInterval = requestTimeout
         req.httpMethod = "POST"
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
@@ -383,7 +396,8 @@ enum ExternalAIClient {
             text: text,
             inputTokens: usage?["input_tokens"] as? Int ?? 0,
             outputTokens: usage?["output_tokens"] as? Int ?? 0,
-            modelID: modelID
+            modelID: modelID,
+            truncated: json["stop_reason"] as? String == "max_tokens"
         )
     }
 
