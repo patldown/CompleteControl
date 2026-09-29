@@ -100,9 +100,9 @@ struct MacroChatView: View {
                 if !canUseAI {
                     ContentUnavailableView(
                         "AI Not Available",
-                        systemImage: isOffline ? "airplane" : "brain.head.profile",
+                        systemImage: isOffline ? "wifi.slash" : "brain.head.profile",
                         description: Text(isOffline
-                            ? "Offline mode needs Apple Intelligence (iPhone 15 Pro / iPhone 16+, iOS 18.1+). Turn off Offline Mode in Settings to use an external AI."
+                            ? "No internet connection, and on-device AI needs Apple Intelligence (iPhone 15 Pro / iPhone 16+, iOS 18.1+). Reconnect to use Claude or ChatGPT."
                             : "Requires Apple Intelligence (iPhone 15 Pro / iPhone 16+, iOS 18.1+) or an external AI key configured in Settings.")
                     )
                 } else {
@@ -380,18 +380,18 @@ struct MacroChatView: View {
         do {
             let macro: ParsedMacro
             if activeProvider == .onDevice {
-                // Offline mode may have been switched on mid-chat — create the local session on demand
-                guard onDeviceAvailable else { throw ExternalAIError.apiError("On-device AI is not available.") }
-                let session = chatSession.languageModelSession ?? makeOnDeviceSession()
-                chatSession.languageModelSession = session
-                let response = try await session.respond(to: text, generating: GeneratedSingleMacro.self)
-                macro = ParsedMacro(response.content)
-                // No cost for on-device processing
+                macro = try await generateOnDevice(userText: text)
             } else {
-                let aiResponse = try await generateExternal(userText: text)
-                macro = aiResponse.macro
-                chatSession.sessionCost += aiResponse.response.cost()
-                if chatSession.sessionModelID.isEmpty { chatSession.sessionModelID = aiResponse.response.modelID }
+                do {
+                    let aiResponse = try await generateExternal(userText: text)
+                    macro = aiResponse.macro
+                    chatSession.sessionCost += aiResponse.response.cost()
+                    if chatSession.sessionModelID.isEmpty { chatSession.sessionModelID = aiResponse.response.modelID }
+                } catch let error where ExternalAIError.isConnectivity(error) && onDeviceAvailable {
+                    // Connection dropped mid-request — drop the unanswered turn and answer locally
+                    if chatSession.externalHistory.last?.role == "user" { chatSession.externalHistory.removeLast() }
+                    macro = try await generateOnDevice(userText: text)
+                }
             }
             chatSession.messages.append(MacroChatMessage(kind: .result(macro, prompt: text)))
         } catch {
@@ -399,6 +399,15 @@ struct MacroChatView: View {
         }
 
         chatSession.isGenerating = false
+    }
+
+    private func generateOnDevice(userText: String) async throws -> ParsedMacro {
+        guard onDeviceAvailable else { throw ExternalAIError.apiError("On-device AI is not available.") }
+        // Created on demand in case the connection dropped after the chat opened
+        let session = chatSession.languageModelSession ?? makeOnDeviceSession()
+        chatSession.languageModelSession = session
+        let response = try await session.respond(to: userText, generating: GeneratedSingleMacro.self)
+        return ParsedMacro(response.content)  // No cost for on-device processing
     }
 
     private func generateExternal(userText: String) async throws -> (macro: ParsedMacro, response: AIResponse) {

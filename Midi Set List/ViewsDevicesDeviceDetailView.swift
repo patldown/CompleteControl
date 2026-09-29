@@ -317,7 +317,7 @@ private struct DeviceMemorySheet: View {
                                 ProgressView().scaleEffect(0.8)
                                 Text("Compacting…")
                             } else {
-                                Image(systemName: ai.offlineMode ? "airplane" : "sparkles")
+                                Image(systemName: ai.offlineMode ? "wifi.slash" : "sparkles")
                                 Text(ai.offlineMode ? "Compact with On-Device AI" : "Compact with AI")
                             }
                         }
@@ -350,13 +350,18 @@ private struct DeviceMemorySheet: View {
         try? content.write(to: DeviceSpecManager.memoryFileURL(for: device), atomically: true, encoding: .utf8)
     }
 
+    private func compactOnDevice(systemPrompt: String) async throws -> String {
+        let session = LanguageModelSession(instructions: systemPrompt)
+        return try await session.respond(to: content).content
+    }
+
     @MainActor
     private func compactMemory() async {
         let provider = ai.provider(for: .macroChat)
         let apiKey = provider == .openAI ? ai.openAIKey : ai.anthropicKey
         if ai.offlineMode {
             guard SystemLanguageModel.default.isAvailable else {
-                compactError = "Offline mode uses on-device AI, which needs Apple Intelligence on this device. Turn off Offline Mode in Settings to compact with Claude or ChatGPT."
+                compactError = "No internet connection, and on-device AI needs Apple Intelligence on this device. Reconnect to compact with Claude or ChatGPT."
                 return
             }
         } else if provider == .onDevice || apiKey == nil {
@@ -400,18 +405,22 @@ private struct DeviceMemorySheet: View {
         do {
             let text: String
             if ai.offlineMode {
-                let session = LanguageModelSession(instructions: systemPrompt)
-                text = try await session.respond(to: content).content
+                text = try await compactOnDevice(systemPrompt: systemPrompt)
             } else {
-                text = try await ExternalAIClient.chat(
-                    provider: provider,
-                    apiKey: apiKey ?? "",
-                    systemPrompt: systemPrompt,
-                    messages: [ExternalAIMessage(role: "user", content: content)],
-                    workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
-                    anthropicModelID: ai.anthropicModel(for: .macroChat),
-                    anthropicThinking: false
-                ).text
+                do {
+                    text = try await ExternalAIClient.chat(
+                        provider: provider,
+                        apiKey: apiKey ?? "",
+                        systemPrompt: systemPrompt,
+                        messages: [ExternalAIMessage(role: "user", content: content)],
+                        workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
+                        anthropicModelID: ai.anthropicModel(for: .macroChat),
+                        anthropicThinking: false
+                    ).text
+                } catch let error where ExternalAIError.isConnectivity(error) && SystemLanguageModel.default.isAvailable {
+                    // Connection dropped mid-request — fall back to on-device
+                    text = try await compactOnDevice(systemPrompt: systemPrompt)
+                }
             }
             content = text.trimmingCharacters(in: .whitespacesAndNewlines)
             saveEdits()

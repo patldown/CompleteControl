@@ -22,7 +22,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Offline Mode
+    // MARK: - Connection
 
     private var offlineModeSection: some View {
         Section {
@@ -30,21 +30,20 @@ struct SettingsView: View {
                 OfflineModeBanner()
                     .listRowInsets(EdgeInsets())
             }
-            Toggle(isOn: $ai.offlineMode) {
-                Label {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Offline Mode").font(.body.weight(.semibold))
-                        Text("Force on-device AI for every task")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image(systemName: "airplane")
-                        .foregroundStyle(ai.offlineMode ? Color.offlineMode : .secondary)
+            HStack(spacing: 10) {
+                Image(systemName: ai.offlineMode ? "wifi.slash" : "wifi")
+                    .foregroundStyle(ai.offlineMode ? Color.offlineMode : .green)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ai.offlineMode ? "Offline" : "Online").font(.body.weight(.semibold))
+                    Text(ai.offlineMode ? "All AI tasks are using On-Device" : "AI tasks use the providers below")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .tint(.offlineMode)
+        } header: {
+            Text("Connection")
         } footer: {
-            Text("When on, every AI feature uses the on-device model — whatever provider or model is picked below. No requests are sent to Claude or ChatGPT. Your routing choices come back when you turn it off.")
+            Text("With no internet connection, every AI feature automatically falls back to the on-device model, whatever provider or model is picked below. Your choices take over again as soon as you're back online.")
         }
     }
 
@@ -96,7 +95,7 @@ struct SettingsView: View {
             Text("Task Routing")
         } footer: {
             if ai.offlineMode {
-                Label("Overridden by Offline Mode — all tasks use On-Device.", systemImage: "airplane")
+                Label("No connection — all tasks are using On-Device until you're back online.", systemImage: "wifi.slash")
                     .foregroundStyle(Color.offlineMode)
             } else {
                 Text("Choose which AI handles each task. External providers give higher quality but require a network connection and incur API costs.")

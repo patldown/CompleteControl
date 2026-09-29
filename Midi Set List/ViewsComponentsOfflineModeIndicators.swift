@@ -2,8 +2,8 @@
 //  OfflineModeIndicators.swift
 //  Midi Set List
 //
-//  Shared visuals shown on every AI surface while offline mode is on,
-//  so it's always obvious that only the on-device model is in use.
+//  Shared visuals shown on every AI surface while there's no network connection,
+//  so it's always obvious that AI has fallen back to the on-device model.
 //
 
 import SwiftUI
@@ -21,15 +21,15 @@ extension ShapeStyle where Self == LinearGradient {
 // MARK: - Full-width banner (top of AI screens)
 
 struct OfflineModeBanner: View {
-    var detail: String = "Using on-device AI only · nothing leaves this device"
+    var detail: String = "No connection · using on-device AI"
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "airplane.circle.fill")
+            Image(systemName: "wifi.slash")
                 .font(.title2)
                 .symbolEffect(.pulse, options: .repeating)
             VStack(alignment: .leading, spacing: 2) {
-                Text("OFFLINE MODE")
+                Text("OFFLINE")
                     .font(.subheadline.weight(.heavy))
                     .tracking(1.2)
                 Text(detail)
@@ -47,7 +47,7 @@ struct OfflineModeBanner: View {
         .frame(maxWidth: .infinity)
         .background(.offlineModeGradient)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Offline mode on. \(detail)")
+        .accessibilityLabel("Offline. \(detail)")
     }
 }
 
@@ -55,21 +55,21 @@ struct OfflineModeBanner: View {
 
 struct OfflineModeBadge: View {
     var body: some View {
-        Label("Offline", systemImage: "airplane")
+        Label("Offline", systemImage: "wifi.slash")
             .font(.caption2.weight(.bold))
             .textCase(.uppercase)
             .foregroundStyle(.white)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(.offlineModeGradient, in: Capsule())
-            .accessibilityLabel("Offline mode on")
+            .accessibilityLabel("Offline, using on-device AI")
     }
 }
 
 // MARK: - Modifiers
 
 extension View {
-    /// Outlines an AI input or action with the offline colors when offline mode is on.
+    /// Outlines an AI input or action with the offline colors when there's no connection.
     func offlineModeOutline(_ isOn: Bool, cornerRadius: CGFloat = 20) -> some View {
         overlay {
             if isOn {
@@ -79,13 +79,15 @@ extension View {
         }
     }
 
-    /// Adds a small airplane dot to an AI toolbar button when offline mode is on.
+    /// Adds a small no-connection dot to an AI toolbar button while offline.
     func offlineModeDot(_ isOn: Bool) -> some View {
         overlay(alignment: .topTrailing) {
             if isOn {
-                Image(systemName: "airplane.circle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white, Color.offlineMode)
+                Image(systemName: "wifi.slash")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(3)
+                    .background(Color.offlineMode, in: Circle())
                     .offset(x: 6, y: -6)
             }
         }

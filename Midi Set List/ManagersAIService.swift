@@ -5,6 +5,7 @@
 
 import Combine
 import Foundation
+import Network
 import Security
 
 // MARK: - ParsedMacro (common output for both on-device and external AI paths)
@@ -135,11 +136,11 @@ class AISettings: ObservableObject {
     // Triggers UI refresh when a key is saved or cleared
     @Published var keyVersion: Int = 0
 
-    // Offline mode — forces every AI task onto the on-device model, regardless of
-    // the routing or Anthropic model chosen. Nothing leaves the device while on.
-    @Published var offlineMode: Bool = UserDefaults.standard.bool(forKey: "ai_offline_mode") {
-        didSet { UserDefaults.standard.set(offlineMode, forKey: "ai_offline_mode") }
-    }
+    // Offline mode — set automatically when the device has no network connection.
+    // While offline, every AI task falls back to the on-device model regardless of
+    // the routing or Anthropic model chosen; normal routing resumes when back online.
+    @Published private(set) var offlineMode = false
+    private let pathMonitor = NWPathMonitor()
 
     var openAIKey: String? {
         get { AppKeychain.load(for: "openai_api_key") }
@@ -202,7 +203,7 @@ class AISettings: ObservableObject {
     }
 
     // Returns the configured provider, falling back to on-device if no key.
-    // Offline mode always wins and routes to on-device.
+    // No connection always wins and routes to on-device.
     func provider(for task: AITask) -> AIProviderType {
         if offlineMode { return .onDevice }
         let selected = routing[task, default: .onDevice]
@@ -242,6 +243,15 @@ class AISettings: ObservableObject {
             }
         }
         routing = loaded
+
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let offline = path.status != .satisfied
+            DispatchQueue.main.async {
+                guard let self, self.offlineMode != offline else { return }
+                self.offlineMode = offline
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "com.midisetlist.network-monitor"))
     }
 }
 
@@ -284,8 +294,8 @@ enum ExternalAIClient {
         anthropicModelID: String = "claude-sonnet-4-6",
         anthropicThinking: Bool = false
     ) async throws -> AIResponse {
-        // Hard stop: never make a network call while offline mode is on
-        guard !AISettings.shared.offlineMode else { throw ExternalAIError.offlineMode }
+        // Fail fast with no connection so callers can fall back to on-device
+        guard !AISettings.shared.offlineMode else { throw ExternalAIError.noConnection }
         switch provider {
         case .openAI:    return try await openAI(apiKey: apiKey, system: systemPrompt, messages: messages)
         case .anthropic: return try await anthropic(apiKey: apiKey, workspaceID: workspaceID, modelID: anthropicModelID, thinking: anthropicThinking, system: systemPrompt, messages: messages)
@@ -368,14 +378,27 @@ enum ExternalAIError: Error, LocalizedError {
     case notConfigured
     case apiError(String)
     case parseError
-    case offlineMode
+    case noConnection
 
     var errorDescription: String? {
         switch self {
         case .notConfigured: return "No external AI provider configured. Add an API key in Settings."
         case .apiError(let msg): return "API error: \(msg)"
         case .parseError:        return "Could not parse the AI response. Try again."
-        case .offlineMode:       return "Offline mode is on — external AI is disabled. Turn it off in Settings to use Claude or ChatGPT."
+        case .noConnection:      return "No internet connection — Claude and ChatGPT are unavailable."
         }
+    }
+
+    /// True for errors caused by a missing or dropped connection, where falling back
+    /// to the on-device model makes sense.
+    static func isConnectivity(_ error: Error) -> Bool {
+        if case ExternalAIError.noConnection = error { return true }
+        guard let urlError = error as? URLError else { return false }
+        let codes: [URLError.Code] = [
+            .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost,
+            .cannotFindHost, .dnsLookupFailed, .timedOut,
+            .internationalRoamingOff, .dataNotAllowed
+        ]
+        return codes.contains(urlError.code)
     }
 }
