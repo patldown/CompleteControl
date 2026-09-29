@@ -62,14 +62,15 @@ struct SettingsView: View {
 
     private var lyricsSection: some View {
         Section {
-            Picker("Show When a Song Has Both", selection: $prefs.performChartMode) {
+            Picker("View", selection: $prefs.chartModeOverride) {
+                Text("Remember Per Song").tag(PerformChartMode?.none)
                 ForEach(PerformChartMode.allCases) { mode in
-                    Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                    Text("Always \(mode.title)").tag(Optional(mode))
                 }
             }
 
-            speedStepper("Lyrics Scroll Speed", value: $prefs.lyricsScrollSpeed)
-            speedStepper("Sheet Music Scroll Speed", value: $prefs.sheetMusicScrollSpeed)
+            speedStepper("New Song Lyrics Speed", value: $prefs.lyricsScrollSpeed)
+            speedStepper("New Song Sheet Music Speed", value: $prefs.sheetMusicScrollSpeed)
 
             Stepper(value: $prefs.lyricsLeadInLines, in: UserPreferences.leadInLinesRange) {
                 LabeledContent("Blank Lines Before Lyrics") {
@@ -78,9 +79,11 @@ struct SettingsView: View {
                 }
             }
         } header: {
-            Text("Your Performance Defaults")
+            Text("Your Performance Settings")
         } footer: {
-            Text("These belong to you, not the songs: they follow your Apple ID to your other devices, so someone sharing your songs keeps their own. The view you last picked on Perform is remembered here. Blank lines start the lyrics lower so auto-scroll has a lead-in.")
+            Text(prefs.chartModeOverride == nil
+                 ? "For songs with both lyrics and sheet music, each song opens in the view you last used on it, at your last speed. These are yours alone and follow your Apple ID, so someone sharing your songs keeps their own. New songs start at the speeds above."
+                 : "Every song with \(prefs.chartModeOverride?.title.lowercased() ?? "") shows it. Your remembered view for each song is kept — switch back to Remember Per Song to use it again.")
         }
     }
 

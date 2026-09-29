@@ -202,8 +202,8 @@ struct AutoScrollingImagesView: UIViewRepresentable {
 
 // MARK: - Shared content
 
-/// Shows a song's lyrics or sheet music with the right auto-scroller. Speed comes from
-/// this person's preferences, kept separately for lyrics and sheet music.
+/// Shows a song's lyrics or sheet music with the right auto-scroller. Speed is this
+/// person's last speed on this song, kept separately for lyrics and sheet music.
 struct ChartContentView: View {
     @ObservedObject var song: Song
     let mode: PerformChartMode
@@ -215,8 +215,8 @@ struct ChartContentView: View {
     @ObservedObject private var prefs = UserPreferences.shared
 
     private var speed: Binding<Double> {
-        Binding(get: { prefs.scrollSpeed(for: mode) },
-                set: { prefs.setScrollSpeed($0, for: mode) })
+        Binding(get: { prefs.scrollSpeed(for: mode, song: song) },
+                set: { prefs.setScrollSpeed($0, for: mode, song: song) })
     }
 
     var body: some View {
@@ -244,9 +244,11 @@ struct ChartContentView: View {
     }
 }
 
-/// Lyrics / Sheet Music switch, shown when a song has both. Remembers the choice for this person.
+/// Lyrics / Sheet Music switch, shown when a song has both. Remembers the choice for this
+/// person on this song — or, while the Settings override is on, just for this visit.
 struct ChartModeMenu: View {
     @ObservedObject private var prefs = UserPreferences.shared
+    @ObservedObject var song: Song
     let current: PerformChartMode
     var onChange: () -> Void = {}
 
@@ -254,11 +256,14 @@ struct ChartModeMenu: View {
         Menu {
             Picker("Show", selection: Binding(
                 get: { current },
-                set: { prefs.performChartMode = $0; onChange() }
+                set: { prefs.setChartMode($0, for: song); onChange() }
             )) {
                 ForEach(PerformChartMode.allCases) { mode in
                     Label(mode.title, systemImage: mode.systemImage).tag(mode)
                 }
+            }
+            if prefs.isOverriding(song) {
+                Text("Settings is set to always show \(prefs.chartModeOverride?.title ?? ""). A change here lasts for this visit only.")
             }
         } label: {
             Label("Show \(current.title)", systemImage: current.systemImage)

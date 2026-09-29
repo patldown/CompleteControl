@@ -20,12 +20,12 @@ struct LyricsPerformanceView: View {
     @State private var showingEditLyrics = false
     @State private var resetTrigger = false
 
-    /// Lyrics or sheet music — this person's last choice when the song has both
-    private var mode: PerformChartMode { song.chartMode(preferred: prefs.performChartMode) ?? .lyrics }
+    /// Lyrics or sheet music — this person's last choice on this song when it has both
+    private var mode: PerformChartMode { prefs.chartMode(for: song) ?? .lyrics }
 
     private var scrollSpeed: Binding<Double> {
-        Binding(get: { prefs.scrollSpeed(for: mode) },
-                set: { prefs.setScrollSpeed($0, for: mode) })
+        Binding(get: { prefs.scrollSpeed(for: mode, song: song) },
+                set: { prefs.setScrollSpeed($0, for: mode, song: song) })
     }
 
     var body: some View {
@@ -38,7 +38,7 @@ struct LyricsPerformanceView: View {
             }
 
             Group {
-                if song.chartMode(preferred: prefs.performChartMode) == nil {
+                if prefs.chartMode(for: song) == nil {
                     Text("No lyrics or sheet music yet.\n\nTap Edit to add lyrics, a PDF or images.")
                         .font(.title3)
                         .foregroundStyle(.white.opacity(0.7))
@@ -57,7 +57,7 @@ struct LyricsPerformanceView: View {
                 }
             }
 
-            if showControls && song.chartMode(preferred: prefs.performChartMode) != nil {
+            if showControls && prefs.chartMode(for: song) != nil {
                 bottomControls
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -87,7 +87,7 @@ struct LyricsPerformanceView: View {
             if song.hasLyricsText && song.hasSheetMusic {
                 Picker("Show", selection: Binding(
                     get: { mode },
-                    set: { isAutoScrolling = false; prefs.performChartMode = $0 }
+                    set: { isAutoScrolling = false; prefs.setChartMode($0, for: song) }
                 )) {
                     ForEach(PerformChartMode.allCases) { mode in
                         Text(mode.title).tag(mode)

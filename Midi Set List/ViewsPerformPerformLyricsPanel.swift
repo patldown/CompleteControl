@@ -22,7 +22,7 @@ struct PerformLyricsPanel: View {
     @State private var resetTrigger = false
     @State private var showingEditLyrics = false
 
-    private var mode: PerformChartMode? { song.chartMode(preferred: prefs.performChartMode) }
+    private var mode: PerformChartMode? { prefs.chartMode(for: song) }
     private var cornerRadius: CGFloat { isExpanded ? 0 : 14 }
 
     var body: some View {
@@ -71,7 +71,7 @@ struct PerformLyricsPanel: View {
             Spacer(minLength: 0)
 
             if song.hasLyricsText && song.hasSheetMusic {
-                ChartModeMenu(current: mode) { isAutoScrolling = false }
+                ChartModeMenu(song: song, current: mode) { isAutoScrolling = false }
             }
 
             if mode == .lyrics {
@@ -114,11 +114,11 @@ struct PerformLyricsPanel: View {
     }
 
     private func speedControl(_ mode: PerformChartMode) -> some View {
-        let speed = prefs.scrollSpeed(for: mode)
+        let speed = prefs.scrollSpeed(for: mode, song: song)
         let range = UserPreferences.scrollSpeedRange
         return HStack(spacing: 6) {
             Button {
-                prefs.setScrollSpeed(speed - 5, for: mode)
+                prefs.setScrollSpeed(speed - 5, for: mode, song: song)
             } label: {
                 Label("Slower", systemImage: "minus")
             }
@@ -130,7 +130,7 @@ struct PerformLyricsPanel: View {
                 .accessibilityLabel("Scroll speed \(Int(speed))")
 
             Button {
-                prefs.setScrollSpeed(speed + 5, for: mode)
+                prefs.setScrollSpeed(speed + 5, for: mode, song: song)
             } label: {
                 Label("Faster", systemImage: "plus")
             }
