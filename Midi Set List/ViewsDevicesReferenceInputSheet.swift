@@ -2,10 +2,11 @@
 //  ReferenceInputSheet.swift
 //  Midi Set List
 //
-//  Two ways to add a reference file without attaching one from Files:
-//   • .paste    — paste text and save it as a Markdown reference file
-//   • .generate — give AI a source (pasted text, a file, or an attached file)
-//                 and it builds a structured reference file from it
+//  AI builds a structured reference file from a manual excerpt:
+//   • .paste    — straight to pasting text
+//   • .generate — pick a source: pasted text, a file, or an attached file
+//  Both can instead save the text as-is (no AI); that's the only option when
+//  no AI is available.
 //
 
 import SwiftUI
@@ -31,28 +32,25 @@ struct ReferenceInputSheet: View {
         var id: String { rawValue }
     }
 
-    @State private var name = ""
     @State private var text = ""
     @State private var source: Source = .paste
     @State private var showingFilePicker = false
     @State private var loadedFrom: String?
     @State private var isWorking = false
+    @State private var isGenerating = false
     @State private var errorMessage: String?
 
     private var trimmedText: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var canGenerate: Bool { ai.isAvailable(.specAnalysis) }
 
     var body: some View {
         NavigationStack {
             Form {
-                if ai.offlineMode && mode == .generate {
+                if ai.offlineMode && canGenerate {
                     OfflineModeBanner().listRowInsets(EdgeInsets())
                 }
 
-                if mode == .paste {
-                    Section("Name") {
-                        TextField("Reference name", text: $name)
-                    }
-                } else {
+                if mode == .generate {
                     Section {
                         Picker("Source", selection: $source) {
                             ForEach(availableSources) { Text($0.rawValue).tag($0) }
@@ -67,7 +65,7 @@ struct ReferenceInputSheet: View {
 
                 sourceSection
 
-                if mode == .generate {
+                if canGenerate {
                     Section {
                         Label(providerDescription, systemImage: ai.provider(for: .specAnalysis).icon)
                             .font(.subheadline)
@@ -78,6 +76,17 @@ struct ReferenceInputSheet: View {
                         }
                     } footer: {
                         Text("The result opens for review. Items marked (VERIFY) or NOT IN SPEC need checking against the manual.")
+                    }
+
+                    Section {
+                        Button {
+                            Task { await submit(generate: false) }
+                        } label: {
+                            Label("Save as-is (no AI)", systemImage: "square.and.arrow.down")
+                        }
+                        .disabled(trimmedText.isEmpty)
+                    } footer: {
+                        Text("For text that's already a clean reference — saves it exactly as it is.")
                     }
                 }
             }
@@ -90,8 +99,8 @@ struct ReferenceInputSheet: View {
                     Button("Cancel") { dismiss() }.disabled(isWorking)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(mode == .paste ? "Save" : "Generate") {
-                        Task { await submit() }
+                    Button(canGenerate ? "Generate" : "Save") {
+                        Task { await submit(generate: canGenerate) }
                     }
                     .fontWeight(.semibold)
                     .disabled(trimmedText.isEmpty || isWorking)
@@ -117,9 +126,6 @@ struct ReferenceInputSheet: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 if let errorMessage { Text(errorMessage) }
-            }
-            .onAppear {
-                if name.isEmpty { name = "\(device.name) Notes" }
             }
             .onChange(of: source) {
                 // Each source starts fresh so text from one never leaks into another
@@ -210,9 +216,9 @@ struct ReferenceInputSheet: View {
     private var workingOverlay: some View {
         VStack(spacing: 12) {
             ProgressView()
-            Text(mode == .paste ? "Saving…" : "Building reference file…")
+            Text(isGenerating ? "Building reference file…" : "Saving…")
                 .font(.subheadline.weight(.medium))
-            if mode == .generate {
+            if isGenerating {
                 Text("Long manuals can take a minute.").font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -248,15 +254,17 @@ struct ReferenceInputSheet: View {
     }
 
     @MainActor
-    private func submit() async {
+    private func submit(generate: Bool) async {
         isWorking = true
-        defer { isWorking = false }
+        isGenerating = generate
+        defer { isWorking = false; isGenerating = false }
         do {
-            switch mode {
-            case .paste:
-                let file = try attach(markdown: trimmedText, named: name)
+            if !generate {
+                // Save exactly as given — named after where it came from
+                let base = loadedFrom.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent }
+                let file = try attach(markdown: trimmedText, named: base ?? "\(device.name) Notes")
                 onSaved(file, nil)
-            case .generate:
+            } else {
                 let output = try await SpecGenerator.generate(deviceName: device.name, sourceText: trimmedText)
                 let file = try attach(markdown: output.markdown, named: "\(device.name) Reference")
                 let note = output.truncated
