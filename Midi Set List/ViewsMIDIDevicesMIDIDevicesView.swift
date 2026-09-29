@@ -83,6 +83,42 @@ struct MIDIDevicesView: View {
                     Text("Tap a device to connect or disconnect. Connected devices will receive MIDI commands.")
                 }
                 
+                Section {
+                    ForEach(midiManager.availableSources) { source in
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(source.displayName)
+                                if let manufacturer = source.manufacturer {
+                                    Text(manufacturer)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: "arrow.down.circle")
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    if midiManager.availableSources.isEmpty {
+                        Text("No MIDI inputs found")
+                            .foregroundStyle(.secondary)
+                    }
+                    NavigationLink {
+                        MIDIRemoteSettingsView()
+                    } label: {
+                        Label("MIDI Receive & Control", systemImage: "slider.horizontal.below.rectangle")
+                    }
+                } header: {
+                    HStack {
+                        Text("Inputs")
+                        Spacer()
+                        Text("\(midiManager.availableSources.count)")
+                            .foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("The app listens to every input — foot controllers, keyboards, Bluetooth MIDI. Pair Bluetooth gear with the wave button at the top.")
+                }
+
                 if !midiManager.connectedDevices.isEmpty {
                     Section {
                         Button {
@@ -213,4 +249,5 @@ struct BTMIDIConnectSheet: UIViewControllerRepresentable {
         MIDIDevicesView()
     }
     .environment(MIDIManager())
+    .environment(PerformanceSession())
 }

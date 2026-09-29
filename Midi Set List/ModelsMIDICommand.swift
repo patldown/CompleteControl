@@ -27,6 +27,8 @@ class MIDICommand: NSManagedObject, Identifiable {
     @NSManaged private var channelRaw: NSNumber?
     @NSManaged private var value2Raw: NSNumber?
     @NSManaged private var oscFloatArgRaw: NSNumber?
+    /// Which of the song's snapshots this command belongs to (0 = Snapshot 1).
+    @NSManaged private var snapshotIndexRaw: Int16
 
     // commandType stored as its rawValue string
     @NSManaged var commandTypeRaw: String
@@ -60,6 +62,11 @@ class MIDICommand: NSManagedObject, Identifiable {
     var oscFloatArg: Double? {
         get { oscFloatArgRaw?.doubleValue }
         set { oscFloatArgRaw = newValue.map { NSNumber(value: $0) } }
+    }
+
+    var snapshotIndex: Int {
+        get { Int(snapshotIndexRaw) }
+        set { snapshotIndexRaw = Int16(newValue) }
     }
 
     var commandType: MIDICommandType {
@@ -143,7 +150,7 @@ class MIDICommand: NSManagedObject, Identifiable {
     var deviatesFromMacro: Bool {
         guard let macro = sourceMacro, let song = song else { return false }
         let expected = macro.expectedSignatures
-        let block = song.sortedCommands.filter { $0.sourceMacro?.objectID == macro.objectID }
+        let block = song.commands(inSnapshot: snapshotIndex).filter { $0.sourceMacro?.objectID == macro.objectID }
         guard block.count == expected.count,
               let idx = block.firstIndex(where: { $0.objectID == objectID }),
               idx < expected.count else {

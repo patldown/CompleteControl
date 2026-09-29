@@ -10,6 +10,8 @@ struct AddMIDICommandView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
     let song: Song
+    /// Snapshot the new command is added to (0 = Snapshot 1)
+    var snapshotIndex: Int = 0
 
     @State private var commandType: MIDICommandType = .programChange
     @State private var useOmniChannel = true
@@ -187,7 +189,7 @@ struct AddMIDICommandView: View {
             command.value1Formula = v1f.isEmpty ? nil : v1f
             command.value2Formula = v2f.isEmpty ? nil : v2f
         }
-        song.addCommand(command)
+        song.addCommand(command, toSnapshot: snapshotIndex)
         try? viewContext.save()
         dismiss()
     }

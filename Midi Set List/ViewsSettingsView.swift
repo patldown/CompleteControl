@@ -7,10 +7,12 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject private var ai = AISettings.shared
+    @ObservedObject private var remote = MIDIRemoteSettings.shared
 
     var body: some View {
         NavigationStack {
             List {
+                midiSection
                 if ai.anyAIAvailable {
                     offlineModeSection
                     apiKeysSection
@@ -30,6 +32,26 @@ struct SettingsView: View {
             .animation(.default, value: ai.offlineMode)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
+        }
+    }
+
+    // MARK: - MIDI
+
+    private var midiSection: some View {
+        Section {
+            NavigationLink {
+                MIDIRemoteSettingsView()
+            } label: {
+                LabeledContent {
+                    Text(remote.isEnabled ? remote.receiveChannelLabel : "Off")
+                } label: {
+                    Label("MIDI Receive & Control", systemImage: "slider.horizontal.below.rectangle")
+                }
+            }
+        } header: {
+            Text("MIDI")
+        } footer: {
+            Text("Choose the receive channel and which messages recall snapshots or change songs — for foot controllers and other MIDI gear.")
         }
     }
 

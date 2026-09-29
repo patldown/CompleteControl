@@ -12,6 +12,8 @@ struct BatchEditCommandsView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     let song: Song
+    /// With nothing selected, edits every command in this snapshot
+    var snapshotIndex: Int = 0
     let selectedCommands: [MIDICommand]
 
     @State private var applyChannel = false
@@ -26,7 +28,7 @@ struct BatchEditCommandsView: View {
 
     var commandsToEdit: [MIDICommand] {
         if selectedCommands.isEmpty {
-            return song.sortedCommands
+            return song.commands(inSnapshot: snapshotIndex)
         }
         return selectedCommands
     }

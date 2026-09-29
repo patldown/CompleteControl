@@ -1,0 +1,434 @@
+//
+//  PerformView.swift
+//  Midi Set List
+//
+//  Pick a set list and press Play. The first song loads (its Snapshot 1 is sent),
+//  then step through songs with Previous / Next and recall snapshots — by touch
+//  or from a MIDI / Bluetooth foot controller.
+//
+
+import SwiftUI
+import CoreData
+import UIKit
+
+struct PerformView: View {
+    @Environment(PerformanceSession.self) private var performance
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if performance.isPlaying {
+                    PerformPlayingView()
+                } else {
+                    PerformSetListPicker()
+                }
+            }
+        }
+        // Keep the screen on while a set is playing
+        .onChange(of: performance.isPlaying, initial: true) { _, playing in
+            UIApplication.shared.isIdleTimerDisabled = playing
+        }
+    }
+}
+
+// MARK: - Choose a set list
+
+private struct PerformSetListPicker: View {
+    @Environment(PerformanceSession.self) private var performance
+    @FetchRequest(sortDescriptors: [SortDescriptor(\.dateModified, order: .reverse)])
+    private var setLists: FetchedResults<SetList>
+    @ObservedObject private var remote = MIDIRemoteSettings.shared
+
+    @State private var selectedID: NSManagedObjectID?
+    @State private var showingBTMIDI = false
+
+    private var selected: SetList? {
+        setLists.first { $0.objectID == selectedID }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(setLists) { setList in
+                    Button {
+                        selectedID = setList.objectID
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(setList.name)
+                                    .font(.headline)
+                                    .foregroundStyle(.primary)
+                                Text("\(setList.songs.count) song\(setList.songs.count == 1 ? "" : "s")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: selectedID == setList.objectID ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selectedID == setList.objectID ? Color.accentColor : .secondary)
+                                .imageScale(.large)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                Text("Choose a Set List")
+            }
+
+            Section {
+                NavigationLink {
+                    MIDIRemoteSettingsView()
+                } label: {
+                    LabeledContent {
+                        Text(remote.isEnabled ? remote.receiveChannelLabel : "Off")
+                    } label: {
+                        Label("MIDI Control", systemImage: "slider.horizontal.below.rectangle")
+                    }
+                }
+            } footer: {
+                if remote.isEnabled {
+                    Text("Snapshots on \(remote.snapshotRangeLabel). Previous / Next song on \(remote.binding(for: .previousSong)?.label ?? "—") / \(remote.binding(for: .nextSong)?.label ?? "—").")
+                }
+            }
+        }
+        .navigationTitle("Perform")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingBTMIDI = true
+                } label: {
+                    Label("Bluetooth MIDI", systemImage: "wave.3.right")
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            Button {
+                if let selected { performance.play(selected) }
+            } label: {
+                Label("Play", systemImage: "play.fill")
+                    .font(.title2.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+            .disabled(selected == nil || selected?.songs.isEmpty == true)
+            .padding()
+            .background(.bar)
+        }
+        .overlay {
+            if setLists.isEmpty {
+                ContentUnavailableView {
+                    Label("No Set Lists", systemImage: "list.bullet")
+                } description: {
+                    Text("Create a set list in the Set Lists tab, then come back here to play it.")
+                }
+            }
+        }
+        .sheet(isPresented: $showingBTMIDI) {
+            BTMIDIConnectSheet()
+        }
+        .onAppear {
+            if selectedID == nil { selectedID = setLists.first?.objectID }
+        }
+    }
+}
+
+// MARK: - Playing
+
+private struct PerformPlayingView: View {
+    @Environment(PerformanceSession.self) private var performance
+    @Environment(MIDIManager.self) private var midiManager
+    @ObservedObject private var remote = MIDIRemoteSettings.shared
+
+    @State private var showingLyrics = false
+    @State private var showingBTMIDI = false
+
+    var body: some View {
+        let songs = performance.songs
+        VStack(spacing: 0) {
+            if let song = performance.currentSong {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        PerformSongHeader(song: song, index: performance.songIndex, total: songs.count)
+
+                        if let error = performance.lastError {
+                            errorBanner(error)
+                        }
+
+                        PerformSnapshotGrid(song: song)
+
+                        if hasLyrics(song) {
+                            Button {
+                                showingLyrics = true
+                            } label: {
+                                Label("Lyrics / Chart", systemImage: "text.alignleft")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                        }
+
+                        remoteStatus
+                    }
+                    .padding()
+                }
+                .fullScreenCover(isPresented: $showingLyrics) {
+                    LyricsPerformanceView(song: song)
+                }
+            } else {
+                ContentUnavailableView("No Songs", systemImage: "music.note",
+                                       description: Text("This set list has no songs."))
+            }
+
+            navigationBar(songs: songs)
+        }
+        .navigationTitle(performance.setList?.name ?? "Perform")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button(role: .destructive) {
+                    performance.stop()
+                } label: {
+                    Label("End", systemImage: "stop.fill")
+                        .labelStyle(.titleAndIcon)
+                }
+                .tint(.red)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    ForEach(Array(songs.enumerated()), id: \.element.objectID) { index, song in
+                        Button {
+                            performance.goToSong(index)
+                        } label: {
+                            if index == performance.songIndex {
+                                Label("\(index + 1). \(song.name)", systemImage: "play.fill")
+                            } else {
+                                Text("\(index + 1). \(song.name)")
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Songs", systemImage: "list.number")
+                }
+            }
+            ToolbarItem(placement: .secondaryAction) {
+                Button {
+                    showingBTMIDI = true
+                } label: {
+                    Label("Bluetooth MIDI", systemImage: "wave.3.right")
+                }
+            }
+        }
+        .sheet(isPresented: $showingBTMIDI) {
+            BTMIDIConnectSheet()
+        }
+    }
+
+    private func hasLyrics(_ song: Song) -> Bool {
+        song.pdfFileURL != nil || !(song.lyrics ?? "").isEmpty
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.subheadline)
+            Spacer()
+            Button {
+                performance.clearError()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder
+    private var remoteStatus: some View {
+        HStack(spacing: 8) {
+            Image(systemName: remote.isEnabled ? "dot.radiowaves.left.and.right" : "slash.circle")
+                .foregroundStyle(remote.isEnabled ? .green : .secondary)
+            if remote.isEnabled {
+                if let event = performance.lastRemoteEvent {
+                    Text("\(event.message.description) → \(event.outcome)")
+                        .lineLimit(1)
+                } else {
+                    Text("MIDI control on \(remote.receiveChannelLabel) · \(midiManager.availableSources.count) input\(midiManager.availableSources.count == 1 ? "" : "s")")
+                }
+            } else {
+                Text("MIDI control is off")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func navigationBar(songs: [Song]) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                performance.previousSong()
+            } label: {
+                navLabel(title: "Previous", icon: "backward.fill",
+                         detail: performance.hasPreviousSong ? name(in: songs, at: performance.songIndex - 1) : nil,
+                         iconFirst: true)
+            }
+            .disabled(!performance.hasPreviousSong)
+            // The first song only moves forward
+            .opacity(performance.hasPreviousSong ? 1 : 0)
+
+            Button {
+                performance.nextSong()
+            } label: {
+                navLabel(title: performance.hasNextSong ? "Next" : "End of Set", icon: "forward.fill",
+                         detail: performance.hasNextSong ? name(in: songs, at: performance.songIndex + 1) : nil,
+                         iconFirst: false)
+            }
+            .disabled(!performance.hasNextSong)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .padding()
+        .background(.bar)
+    }
+
+    private func name(in songs: [Song], at index: Int) -> String? {
+        songs.indices.contains(index) ? songs[index].name : nil
+    }
+
+    private func navLabel(title: String, icon: String, detail: String?, iconFirst: Bool) -> some View {
+        HStack(spacing: 8) {
+            if iconFirst { Image(systemName: icon) }
+            VStack(spacing: 2) {
+                Text(title).font(.headline)
+                if let detail {
+                    Text(detail).font(.caption).lineLimit(1).opacity(0.85)
+                }
+            }
+            if !iconFirst { Image(systemName: icon) }
+        }
+        .frame(maxWidth: .infinity, minHeight: 44)
+    }
+}
+
+// MARK: - Song header
+
+private struct PerformSongHeader: View {
+    @ObservedObject var song: Song
+    let index: Int
+    let total: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Song \(index + 1) of \(total)")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(song.name)
+                .font(.largeTitle.bold())
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
+            if let artist = song.artist, !artist.isEmpty {
+                Text(artist)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            if let bpm = song.bpm {
+                let signature = song.timeSignature.map { " · " + $0 } ?? ""
+                Label("\(bpm) BPM\(signature)", systemImage: "metronome")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            if let notes = song.notes, !notes.isEmpty {
+                Text(notes)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Snapshot grid
+
+private struct PerformSnapshotGrid: View {
+    @Environment(PerformanceSession.self) private var performance
+    @ObservedObject var song: Song
+    @ObservedObject private var remote = MIDIRemoteSettings.shared
+
+    private let columns = [GridItem(.adaptive(minimum: 150), spacing: 12)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Snapshots")
+                .font(.headline)
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(0..<song.snapshotCount, id: \.self) { index in
+                    snapshotButton(index)
+                }
+            }
+        }
+    }
+
+    private func snapshotButton(_ index: Int) -> some View {
+        let isActive = performance.isActive(snapshot: index, of: song)
+        let count = song.commands(inSnapshot: index).count
+        return Button {
+            performance.selectSnapshot(index)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("\(index + 1)")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(isActive ? Color.white.opacity(0.25) : Color.secondary.opacity(0.15),
+                                    in: Capsule())
+                    Spacer()
+                    if isActive && performance.isSending {
+                        ProgressView().controlSize(.small).tint(.white)
+                    } else if remote.isEnabled, let binding = remote.snapshotBinding(for: index) {
+                        Text(binding.label)
+                            .font(.caption2.monospacedDigit())
+                            .opacity(0.8)
+                    }
+                }
+                Text(song.snapshotName(index))
+                    .font(.headline)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Text(count == 0 ? "Empty" : "\(count) command\(count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .opacity(0.8)
+            }
+            .foregroundStyle(isActive ? Color.white : Color.primary)
+            .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
+            .padding(12)
+            .background(isActive ? Color.accentColor : Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(isActive ? Color.clear : Color.secondary.opacity(0.2))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+}
+
+#Preview {
+    let ctx = PersistenceController.preview.viewContext
+    let s1 = Song.create(name: "Sweet Home Alabama", artist: "Lynyrd Skynyrd", bpm: 98, in: ctx)
+    let s2 = Song.create(name: "Wonderwall", artist: "Oasis", in: ctx)
+    let sl = SetList.create(name: "Friday Night Gig", in: ctx)
+    sl.addSong(s1); sl.addSong(s2)
+    try? ctx.save()
+    return PerformView()
+        .environment(\.managedObjectContext, ctx)
+        .environment(MIDIManager())
+        .environment(PerformanceSession())
+}

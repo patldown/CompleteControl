@@ -13,6 +13,10 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
+            Tab("Perform", systemImage: "play.circle") {
+                PerformView()
+            }
+
             Tab("Set Lists", systemImage: "list.bullet") {
                 SetListsView()
             }
@@ -50,5 +54,6 @@ struct ContentView: View {
         .environment(MIDIManager())
         .environment(OSCManager())
         .environment(ActivityLog())
+        .environment(PerformanceSession())
         .environment(\.managedObjectContext, PersistenceController.preview.viewContext)
 }
