@@ -97,6 +97,13 @@ class SetList: NSManagedObject, Identifiable {
         dateModified = Date()
     }
 
+    /// Replaces the display order with `ordered`; caller must save the context.
+    /// Every song must already belong to this set list.
+    func setSongOrder(_ ordered: [Song]) {
+        songOrderData = encode(ordered.map { $0.id.uuidString })
+        dateModified = Date()
+    }
+
     // ── Private order helpers ──────────────────────────────────────────
 
     private var decodedOrderIDs: [String] {

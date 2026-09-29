@@ -12,7 +12,9 @@ struct SetListsView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @FetchRequest(sortDescriptors: [SortDescriptor(\.dateModified, order: .reverse)]) private var setLists: FetchedResults<SetList>
     
+    @ObservedObject private var ai = AISettings.shared
     @State private var showingAddSetList = false
+    @State private var showingAssistant = false
     @State private var searchText = ""
     
     var filteredSetLists: [SetList] {
@@ -47,12 +49,26 @@ struct SetListsView: View {
                     }
                 }
                 
+                // Hidden when no AI is available
+                if ai.isAvailable(.setListAssistant) {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { showingAssistant = true } label: {
+                            Label("New Set List with AI", systemImage: "sparkles")
+                                .foregroundStyle(ai.offlineMode ? Color.offlineMode : .accentColor)
+                                .offlineModeDot(ai.offlineMode)
+                        }
+                    }
+                }
+
                 ToolbarItem(placement: .secondaryAction) {
                     EditButton()
                 }
             }
             .sheet(isPresented: $showingAddSetList) {
                 AddSetListView()
+            }
+            .sheet(isPresented: $showingAssistant) {
+                SetListAssistantView(setList: nil)
             }
             .overlay {
                 if setLists.isEmpty {

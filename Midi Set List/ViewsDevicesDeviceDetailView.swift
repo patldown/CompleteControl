@@ -6,10 +6,12 @@
 import SwiftUI
 import CoreData
 import UniformTypeIdentifiers
+import FoundationModels
 
 struct DeviceDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @ObservedObject var device: InstrumentDevice
+    @ObservedObject private var ai = AISettings.shared
 
     @State private var showingAddCategory = false
     @State private var showingEditDevice = false
@@ -18,6 +20,11 @@ struct DeviceDetailView: View {
     @State private var importError: String?
     @State private var showingImportError = false
     @State private var viewingSpecFile: DeviceSpecFile?
+    @State private var referenceInputMode: ReferenceInputSheet.Mode?
+    /// A file just added from the paste/generate sheet, opened once that sheet closes
+    @State private var pendingReview: (file: DeviceSpecFile, note: String?)?
+    /// Review note shown on the viewer for a freshly AI-generated file
+    @State private var reviewNotes: [String: String] = [:]
     @State private var showingMemory = false
     @State private var showingClearMemoryConfirm = false
     @State private var memoryExists = false
@@ -54,83 +61,111 @@ struct DeviceDetailView: View {
                 }
             }
 
-            Section {
-                if device.specFiles.isEmpty {
-                    Text("No spec files attached")
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline)
-                } else {
-                    ForEach(device.specFiles) { file in
-                        Button { viewingSpecFile = file } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: file.filename.lowercased().hasSuffix(".pdf")
-                                      ? "doc.richtext.fill" : "doc.text.fill")
-                                    .foregroundStyle(.blue)
-                                    .frame(width: 24)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(file.displayName)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.primary)
-                                    Text(file.filename.lowercased().hasSuffix(".pdf") ? "PDF" : "Text")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
+            // AI-only sections: hidden (never deleted) when no AI can use them
+            if ai.isAvailable(.macroChat) {
+                Section {
+                    if device.specFiles.isEmpty {
+                        Text("No spec files attached")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+                    } else {
+                        ForEach(device.specFiles) { file in
+                            Button { viewingSpecFile = file } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: file.filename.lowercased().hasSuffix(".pdf")
+                                          ? "doc.richtext.fill" : "doc.text.fill")
+                                        .foregroundStyle(.blue)
+                                        .frame(width: 24)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(file.displayName)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.primary)
+                                        Text(file.filename.lowercased().hasSuffix(".pdf") ? "PDF" : "Text")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
                                 }
+                                .padding(.vertical, 2)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .onDelete(perform: deleteSpecFiles)
+                    }
+
+                    Button {
+                        showingFilePicker = true
+                    } label: {
+                        Label("Attach Spec File", systemImage: "doc.badge.plus")
+                    }
+
+                    Button {
+                        referenceInputMode = .paste
+                    } label: {
+                        Label("Paste Reference Text", systemImage: "doc.on.clipboard")
+                    }
+
+                    if ai.isAvailable(.specAnalysis) {
+                        Button {
+                            referenceInputMode = .generate
+                        } label: {
+                            Label("Generate Reference with AI", systemImage: "sparkles")
+                                .foregroundStyle(ai.offlineMode ? Color.offlineMode : .accentColor)
+                        }
+                    }
+                } header: {
+                    Text("Reference Files")
+                } footer: {
+                    Text("Attach or paste MIDI/OSC specifications, or have AI turn a manual excerpt into a structured reference. The AI macro generator automatically uses these as context for this device.")
+                }
+
+                Section {
+                    if ai.offlineMode {
+                        OfflineModeBanner(detail: "AI features for this device run on-device")
+                            .listRowInsets(EdgeInsets())
+                    }
+                    if memoryExists {
+                        Button { showingMemory = true } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "brain.head.profile")
+                                    .foregroundStyle(.purple)
+                                    .frame(width: 24)
+                                Text("View Device Memory")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                    .font(.caption).foregroundStyle(.tertiary)
                             }
                             .padding(.vertical, 2)
                         }
                         .buttonStyle(.plain)
-                    }
-                    .onDelete(perform: deleteSpecFiles)
-                }
 
-                Button {
-                    showingFilePicker = true
-                } label: {
-                    Label("Attach Spec File", systemImage: "doc.badge.plus")
-                }
-            } header: {
-                Text("Reference Files")
-            } footer: {
-                Text("Attach PDF or text MIDI/OSC specifications. The AI macro generator will automatically use these as context when generating macros for this device.")
-            }
-
-            Section {
-                if memoryExists {
-                    Button { showingMemory = true } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "brain.head.profile")
-                                .foregroundStyle(.purple)
-                                .frame(width: 24)
-                            Text("View Device Memory")
+                        Button(role: .destructive) {
+                            showingClearMemoryConfirm = true
+                        } label: {
+                            Label("Clear Device Memory", systemImage: "trash")
                                 .font(.subheadline)
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption).foregroundStyle(.tertiary)
                         }
-                        .padding(.vertical, 2)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(role: .destructive) {
-                        showingClearMemoryConfirm = true
-                    } label: {
-                        Label("Clear Device Memory", systemImage: "trash")
+                    } else {
+                        Text("No memory yet — use \"Save to Memory\" in the macro chat to record corrections.")
+                            .foregroundStyle(.secondary)
                             .font(.subheadline)
                     }
-                } else {
-                    Text("No memory yet — use \"Save to Memory\" in the macro chat to record corrections.")
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline)
+                } header: {
+                    HStack {
+                        Text("AI Memory")
+                        if ai.offlineMode {
+                            Spacer()
+                            OfflineModeBadge()
+                        }
+                    }
+                } footer: {
+                    Text("Corrections saved from the macro chat are always injected into future AI sessions for this device.")
                 }
-            } header: {
-                Text("AI Memory")
-            } footer: {
-                Text("Corrections saved from the macro chat are always injected into future AI sessions for this device.")
             }
         }
         .onAppear { memoryExists = DeviceSpecManager.hasMemory(for: device) }
@@ -144,6 +179,9 @@ struct DeviceDetailView: View {
             }
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("Edit") { showingEditDevice = true }
+            }
+            ToolbarItem(placement: .secondaryAction) {
+                ShareItemButton(object: device, kindName: "Instrument", itemName: device.name)
             }
         }
         .alert("New Category", isPresented: $showingAddCategory) {
@@ -162,7 +200,28 @@ struct DeviceDetailView: View {
             AddEditDeviceView(device: device)
         }
         .sheet(item: $viewingSpecFile) { file in
-            SpecFileViewerSheet(file: file)
+            SpecFileViewerSheet(
+                file: file,
+                reviewNote: reviewNotes[file.id],
+                onDiscard: {
+                    DeviceSpecManager.delete(file)
+                    device.removeSpecFile(file)
+                    try? viewContext.save()
+                    reviewNotes[file.id] = nil
+                },
+                onReviewed: { reviewNotes[file.id] = nil }
+            )
+        }
+        .sheet(item: $referenceInputMode, onDismiss: {
+            // Open the new file for review once the input sheet has closed
+            guard let pending = pendingReview else { return }
+            pendingReview = nil
+            if let note = pending.note { reviewNotes[pending.file.id] = note }
+            viewingSpecFile = pending.file
+        }) { mode in
+            ReferenceInputSheet(device: device, mode: mode) { file, note in
+                pendingReview = (file, note)
+            }
         }
         .sheet(isPresented: $showingMemory, onDismiss: { memoryExists = DeviceSpecManager.hasMemory(for: device) }) {
             DeviceMemorySheet(device: device)
@@ -236,11 +295,16 @@ struct DeviceDetailView: View {
 private struct DeviceMemorySheet: View {
     let device: InstrumentDevice
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var ai = AISettings.shared
     @State private var content: String = ""
     @State private var copied = false
     @State private var isEditing = false
     @State private var isCompacting = false
     @State private var compactError: String? = nil
+    /// Set while reviewing a compaction result; the saved file is untouched until "Keep"
+    @State private var originalBeforeCompact: String? = nil
+
+    private var isReviewing: Bool { originalBeforeCompact != nil }
 
     var body: some View {
         NavigationStack {
@@ -266,6 +330,7 @@ private struct DeviceMemorySheet: View {
                         if isEditing { saveEdits() }
                         dismiss()
                     }
+                    .disabled(isReviewing)  // choose Keep or Discard first
                 }
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 16) {
@@ -288,27 +353,36 @@ private struct DeviceMemorySheet: View {
                             Label(isEditing ? "Lock" : "Edit", systemImage: isEditing ? "lock.fill" : "pencil")
                                 .foregroundStyle(isEditing ? .orange : .accentColor)
                         }
+                        .disabled(isReviewing)
                     }
                 }
             }
+            .interactiveDismissDisabled(isReviewing)
+            .safeAreaInset(edge: .top) {
+                if ai.offlineMode { OfflineModeBanner() }
+            }
             .safeAreaInset(edge: .bottom) {
-                if !isEditing && !content.isEmpty {
+                if isReviewing {
+                    reviewBar
+                } else if !isEditing && !content.isEmpty && canCompact {
                     Button {
                         Task { await compactMemory() }
                     } label: {
                         HStack(spacing: 8) {
                             if isCompacting {
                                 ProgressView().scaleEffect(0.8)
-                                Text("Compacting…")
+                                Text("Working out lessons…")
                             } else {
-                                Image(systemName: "sparkles")
-                                Text("Compact with AI")
+                                Image(systemName: ai.offlineMode ? "wifi.slash" : "lightbulb")
+                                Text(ai.offlineMode ? "Turn into Lessons (On-Device)" : "Turn into Lessons Learned")
                             }
                         }
                         .font(.subheadline.weight(.medium))
+                        .foregroundStyle(ai.offlineMode ? Color.offlineMode : .primary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                        .offlineModeOutline(ai.offlineMode, cornerRadius: 12)
                         .padding(.horizontal)
                         .padding(.bottom, 4)
                     }
@@ -332,13 +406,60 @@ private struct DeviceMemorySheet: View {
         try? content.write(to: DeviceSpecManager.memoryFileURL(for: device), atomically: true, encoding: .utf8)
     }
 
+    private var reviewBar: some View {
+        VStack(spacing: 8) {
+            Text("Review the lessons — edit if needed. Your original memory is kept until you tap Keep.")
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 12) {
+                Button(role: .destructive) {
+                    if let original = originalBeforeCompact { content = original }
+                    originalBeforeCompact = nil
+                    isEditing = false
+                } label: {
+                    Label("Discard", systemImage: "arrow.uturn.backward")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    saveEdits()
+                    originalBeforeCompact = nil
+                    isEditing = false
+                } label: {
+                    Label("Keep", systemImage: "checkmark")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.large)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private func compactOnDevice(systemPrompt: String) async throws -> String {
+        let session = LanguageModelSession(instructions: systemPrompt)
+        return try await session.respond(to: content).content
+    }
+
+    /// Compact runs on Claude/ChatGPT when online, or on-device when offline.
+    /// The button is hidden when neither can run it.
+    private var canCompact: Bool {
+        ai.offlineMode ? ai.onDeviceAvailable : ai.provider(for: .macroChat) != .onDevice
+    }
+
     @MainActor
     private func compactMemory() async {
-        let ai = AISettings.shared
         let provider = ai.provider(for: .macroChat)
-        guard provider != .onDevice,
-              let apiKey = provider == .openAI ? ai.openAIKey : ai.anthropicKey
-        else {
+        let apiKey = provider == .openAI ? ai.openAIKey : ai.anthropicKey
+        if ai.offlineMode {
+            guard SystemLanguageModel.default.isAvailable else {
+                compactError = "No internet connection, and on-device AI needs Apple Intelligence on this device. Reconnect to compact with Claude or ChatGPT."
+                return
+            }
+        } else if provider == .onDevice || apiKey == nil {
             compactError = "Compact requires an external AI provider. Configure Claude or ChatGPT in Settings → Task Routing → Macro Chat."
             return
         }
@@ -346,52 +467,94 @@ private struct DeviceMemorySheet: View {
         isCompacting = true
         defer { isCompacting = false }
 
-        let specContext = DeviceSpecManager.specContext(for: device)
-        var systemPrompt = """
-            You are a memory file optimizer for a MIDI device assistant app called "Midi Set List."
-            The memory file holds user-confirmed corrections and learned values for a specific MIDI device.
-            """
-        if !specContext.isEmpty {
-            systemPrompt += """
-
-                The device's reference spec is provided below. You know what is already documented there.
-                Use it to decide what to KEEP vs. DROP from the memory file:
-                - KEEP entries that correct or add to the spec (these are the user's ground truth)
-                - DROP entries that merely restate what the spec already says correctly
-                - DROP entries that are superseded by a later correction in the memory file
-
-                DEVICE SPEC:
-                \(specContext)
-                """
-        }
-        systemPrompt += """
-
-            Condense the memory file into a minimal, non-redundant set of bullet facts.
-            Rules:
-            - One fact per line, starting with "- "
-            - Remove duplicate or near-duplicate entries (keep the most specific/recent one)
-            - Strip out conversational context — keep only the factual conclusion
-            - Aim for under 20 lines
-            - No headers, no markdown fences, no explanation
-            Output ONLY the compacted memory content.
-            """
-
         do {
-            let response = try await ExternalAIClient.chat(
-                provider: provider,
-                apiKey: apiKey,
-                systemPrompt: systemPrompt,
-                messages: [ExternalAIMessage(role: "user", content: content)],
-                workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
-                anthropicModelID: ai.anthropicModel(for: .macroChat),
-                anthropicThinking: false
-            )
-            content = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            saveEdits()
-            isEditing = true  // drop into edit mode so user can review the result
+            let text: String
+            if ai.offlineMode {
+                text = try await compactOnDevice(systemPrompt: lessonsPrompt(onDevice: true))
+            } else {
+                do {
+                    text = try await ExternalAIClient.chat(
+                        provider: provider,
+                        apiKey: apiKey ?? "",
+                        systemPrompt: lessonsPrompt(onDevice: false),
+                        messages: [ExternalAIMessage(role: "user", content: content)],
+                        workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
+                        anthropicModelID: ai.anthropicModel(for: .macroChat),
+                        anthropicThinking: ai.thinkingEnabled(for: .macroChat)
+                    ).text
+                } catch let error where ExternalAIError.isConnectivity(error) && SystemLanguageModel.default.isAvailable {
+                    // Connection dropped mid-request — fall back to on-device
+                    text = try await compactOnDevice(systemPrompt: lessonsPrompt(onDevice: true))
+                }
+            }
+            // Nothing is saved yet — the user reviews, then keeps or discards
+            originalBeforeCompact = content
+            content = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            isEditing = true
         } catch {
             compactError = error.localizedDescription
         }
+    }
+
+    /// Turns raw chat corrections into lessons learned: a rule the assistant can
+    /// apply to new requests, the reason behind it, and a concrete example.
+    private func lessonsPrompt(onDevice: Bool) -> String {
+        var spec = DeviceSpecManager.specFilesContext(for: device)
+        // The on-device model has a small context window — keep the spec excerpt short
+        if onDevice && spec.count > 4000 { spec = String(spec.prefix(4000)) + "\n[spec truncated]" }
+
+        var prompt = """
+            You maintain the AI memory for "\(device.name)" (MIDI channel \(device.midiChannel)) \
+            in the app "Midi Set List". The memory is read by an AI assistant before it builds \
+            MIDI/OSC macros for this device.
+
+            The raw memory is a log of chat moments the user saved: what they asked ("You:"), \
+            what the AI got wrong ("Previous:"), and the values they confirmed ("Confirmed:").
+
+            Turn it into LESSONS LEARNED the assistant can apply to NEW requests — not a shorter log. \
+            For each lesson, work out the underlying rule from the evidence: why was the first answer \
+            wrong, and what pattern does the correction reveal (e.g. an off-by-one numbering scheme, \
+            a bank that needs LSB instead of MSB, a naming convention the user prefers)?
+            """
+        if !spec.isEmpty {
+            prompt += """
+
+
+                Compare against the device reference spec below. When the memory contradicts the spec, \
+                say so explicitly ("The spec says X, but on this unit it is Y"). Drop entries that only \
+                repeat what the spec already states correctly.
+
+                DEVICE SPEC:
+                \(spec)
+                """
+        }
+        prompt += """
+
+
+            Output format (Markdown, nothing else — no fences, no preamble):
+
+            # \(device.name) — Lessons Learned
+
+            ## <Topic, e.g. Bank select, Program numbers, Effects CCs, Naming>
+            - **Lesson:** <a general rule, phrased as an instruction for next time>
+              **Why:** <what went wrong and what the user confirmed — the evidence>
+              **Example:** "<the user's wording>" → <confirmed values, e.g. MSB 0, LSB 2, PC 12>
+
+            ## Confirmed values
+            - <macro name> → <values>   (quick reference, one line each)
+
+            Rules:
+            - Every lesson must make sense on its own, without the original chat.
+            - Never drop a confirmed value — if it doesn't fit a lesson, keep it under Confirmed values.
+            - Merge duplicates. If a later correction overrides an earlier one, keep only the latest.
+            - Don't invent reasons. If the cause isn't clear from the evidence, write \
+            "**Why:** Not stated — confirmed by the user." rather than guessing.
+            - Group related lessons under the same topic. Skip empty sections.
+            - The memory may already contain an earlier "Lessons Learned" section followed by new \
+            raw entries. Keep the existing lessons and fold the new evidence into them — update, \
+            strengthen or correct a lesson rather than duplicating it.
+            """
+        return prompt
     }
 }
 
@@ -399,14 +562,23 @@ private struct DeviceMemorySheet: View {
 
 private struct SpecFileViewerSheet: View {
     let file: DeviceSpecFile
+    /// Set for a freshly AI-generated file: shows a review banner
+    var reviewNote: String? = nil
+    var onDiscard: (() -> Void)? = nil
+    var onReviewed: (() -> Void)? = nil
+
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
     @State private var isEditing = false
     @State private var editedContent: String = ""
+    @State private var reviewed = false
 
     private var savedContent: String {
         DeviceSpecManager.extractText(file) ?? "(Unable to read file)"
     }
+
+    /// PDFs are shown as extracted text; saving that text back would corrupt the PDF
+    private var isEditable: Bool { !file.filename.lowercased().hasSuffix(".pdf") }
 
     var body: some View {
         NavigationStack {
@@ -450,21 +622,56 @@ private struct SpecFileViewerSheet: View {
                         }
                         .disabled(copied || isEditing)
 
-                        Button {
-                            if isEditing { saveEdits() }
-                            isEditing.toggle()
-                        } label: {
-                            Label(
-                                isEditing ? "Lock" : "Edit",
-                                systemImage: isEditing ? "lock.fill" : "pencil"
-                            )
-                            .foregroundStyle(isEditing ? .orange : .accentColor)
+                        if isEditable {
+                            Button {
+                                if isEditing { saveEdits() }
+                                isEditing.toggle()
+                            } label: {
+                                Label(
+                                    isEditing ? "Lock" : "Edit",
+                                    systemImage: isEditing ? "lock.fill" : "pencil"
+                                )
+                                .foregroundStyle(isEditing ? .orange : .accentColor)
+                            }
                         }
                     }
                 }
             }
+            .safeAreaInset(edge: .top) {
+                if let reviewNote, !reviewed { reviewBanner(reviewNote) }
+            }
         }
         .onAppear { editedContent = savedContent }
+    }
+
+    private func reviewBanner(_ note: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(note, systemImage: "sparkles")
+                .font(.caption)
+            HStack(spacing: 10) {
+                Button {
+                    if isEditing { saveEdits(); isEditing = false }
+                    reviewed = true
+                    onReviewed?()
+                } label: {
+                    Label("Looks Good", systemImage: "checkmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent).tint(.indigo)
+
+                Button(role: .destructive) {
+                    onDiscard?()
+                    dismiss()
+                } label: {
+                    Label("Discard", systemImage: "trash")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.indigo.opacity(0.1))
     }
 
     private func saveEdits() {

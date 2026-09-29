@@ -33,13 +33,23 @@ struct GeneratedSingleMacro {
 // MARK: - Message model
 
 struct MacroChatMessage: Identifiable {
-    let id = UUID()
-    let kind: Kind
+    let id: UUID
+    var kind: Kind
+    /// Set on bulk results, e.g. "Action 2 of 3"
+    var bulkLabel: String?
+
+    init(id: UUID = UUID(), kind: Kind, bulkLabel: String? = nil) {
+        self.id = id; self.kind = kind; self.bulkLabel = bulkLabel
+    }
 
     enum Kind {
         case user(String)
         case result(ParsedMacro, prompt: String)
         case error(String)
+        /// "Would you like to split this into X actions?"
+        case splitProposal(original: String, actions: [String])
+        /// Placeholder slot for one bulk action, replaced in place by its result
+        case pending(String)
     }
 }
 
@@ -52,14 +62,24 @@ class MacroChatSession: ObservableObject {
     @Published var memorySavedIDs: Set<UUID> = []
     @Published var sessionCost: Double = 0
     @Published var sessionModelID: String = ""
+    @Published var statusText = "Thinking…"
+    /// Split proposals the user has answered: true = split, false = sent as one
+    @Published var splitChoices: [UUID: Bool] = [:]
 
     var externalHistory: [ExternalAIMessage] = []
     var languageModelSession: LanguageModelSession?
     var isSetup = false
 
+    var hasOpenSplitProposal: Bool {
+        messages.contains {
+            if case .splitProposal = $0.kind { return splitChoices[$0.id] == nil }
+            return false
+        }
+    }
+
     func clear() {
         messages = []; isGenerating = false
-        savedIDs = []; memorySavedIDs = []
+        savedIDs = []; memorySavedIDs = []; splitChoices = [:]
         externalHistory = []; sessionCost = 0; sessionModelID = ""
         languageModelSession = nil; isSetup = false
     }
@@ -89,15 +109,21 @@ struct MacroChatView: View {
     private var onDeviceAvailable: Bool { SystemLanguageModel.default.isAvailable }
     private var activeProvider: AIProviderType { aiSettings.provider(for: .macroChat) }
     private var canUseAI: Bool { activeProvider != .onDevice || onDeviceAvailable }
+    private var isOffline: Bool { aiSettings.offlineMode }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                if isOffline {
+                    OfflineModeBanner()
+                }
                 if !canUseAI {
                     ContentUnavailableView(
                         "AI Not Available",
-                        systemImage: "brain.head.profile",
-                        description: Text("Requires Apple Intelligence (iPhone 15 Pro / iPhone 16+, iOS 18.1+) or an external AI key configured in Settings.")
+                        systemImage: isOffline ? "wifi.slash" : "brain.head.profile",
+                        description: Text(isOffline
+                            ? "No internet connection, and on-device AI needs Apple Intelligence (iPhone 15 Pro / iPhone 16+, iOS 18.1+). Reconnect to use Claude or ChatGPT."
+                            : "Requires Apple Intelligence (iPhone 15 Pro / iPhone 16+, iOS 18.1+) or an external AI key configured in Settings.")
                     )
                 } else {
                     messageList
@@ -146,12 +172,13 @@ struct MacroChatView: View {
                             Image(systemName: activeProvider.icon).font(.caption2)
                             Text("\(device.name)  ·  \(category.name)  ·  \(activeProvider.displayName)")
                                 .font(.caption)
+                            if isOffline { OfflineModeBadge() }
                         }
-                        if !chatSession.sessionModelID.isEmpty {
+                        if !chatSession.sessionModelID.isEmpty && !isOffline {
                             Text(chatSession.sessionModelID).font(.caption2).foregroundStyle(.tertiary)
                         }
                         if chatSession.sessionCost > 0 {
-                            Text(String(format: "Session cost: $%.4f", chatSession.sessionCost))
+                            Text(String(format: "Est. session cost ≈ $%.4f", chatSession.sessionCost))
                                 .font(.caption2).foregroundStyle(.orange)
                         }
                     }
@@ -170,7 +197,7 @@ struct MacroChatView: View {
                     if chatSession.isGenerating {
                         HStack(spacing: 8) {
                             ProgressView().scaleEffect(0.8)
-                            Text("Thinking…").font(.caption).foregroundStyle(.secondary)
+                            Text(chatSession.statusText).font(.caption).foregroundStyle(.secondary)
                         }
                         .padding(.horizontal)
                     }
@@ -227,8 +254,11 @@ struct MacroChatView: View {
                     .foregroundStyle(.white).font(.body)
             }
 
-        case .result(let macro, _):
+        case .result(let macro, let prompt):
             VStack(alignment: .leading, spacing: 10) {
+                if let label = msg.bulkLabel {
+                    bulkHeader(label, action: prompt)
+                }
                 HStack(spacing: 8) {
                     Image(systemName: macro.oscAddress != nil ? "network" : "waveform")
                         .foregroundStyle(.blue)
@@ -269,26 +299,111 @@ struct MacroChatView: View {
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
 
         case .error(let text):
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                Text(text).font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                if let label = msg.bulkLabel {
+                    bulkHeader(label, action: nil)
+                }
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(text).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+        case .pending(let action):
+            VStack(alignment: .leading, spacing: 8) {
+                bulkHeader(msg.bulkLabel ?? "Action", action: action)
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.8)
+                    Text("Waiting…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemBackground).opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
+
+        case .splitProposal(let original, let actions):
+            splitProposalBubble(id: msg.id, original: original, actions: actions)
+        }
+    }
+
+    private func bulkHeader(_ label: String, action: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label.uppercased())
+                .font(.caption2.weight(.bold)).tracking(0.8)
+                .foregroundStyle(.indigo)
+            if let action {
+                Text(action).font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func splitProposalBubble(id: UUID, original: String, actions: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("This looks like \(actions.count) actions", systemImage: "arrow.triangle.branch")
+                .font(.headline).foregroundStyle(.indigo)
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(actions.enumerated()), id: \.offset) { index, action in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("\(index + 1)")
+                            .font(.caption.weight(.bold)).monospacedDigit()
+                            .foregroundStyle(.white)
+                            .frame(width: 20, height: 20)
+                            .background(Color.indigo, in: Circle())
+                        Text(action).font(.subheadline)
+                    }
+                }
+            }
+
+            switch chatSession.splitChoices[id] {
+            case .some(true):
+                Label("Split into \(actions.count) actions", systemImage: "checkmark.circle.fill")
+                    .font(.subheadline).foregroundStyle(.green)
+            case .some(false):
+                Label("Sent as one request", systemImage: "arrow.up.circle")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            case .none:
+                Text("Would you like to split this into \(actions.count) actions?")
+                    .font(.subheadline.weight(.medium))
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await resolveSplit(id: id, original: original, actions: actions, split: true) }
+                    } label: {
+                        Label("Split into \(actions.count)", systemImage: "square.split.1x2")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent).tint(.indigo)
+
+                    Button {
+                        Task { await resolveSplit(id: id, original: original, actions: actions, split: false) }
+                    } label: {
+                        Text("Send as One").font(.subheadline)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .disabled(chatSession.isGenerating)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.indigo.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.indigo.opacity(0.35), lineWidth: 1))
     }
 
     // MARK: - Input bar
 
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("Describe a macro…", text: $input, axis: .vertical)
+            TextField(inputPlaceholder, text: $input, axis: .vertical)
                 .lineLimit(1...4).textFieldStyle(.plain)
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
+                .offlineModeOutline(isOffline)
 
             Button { Task { await generate() } } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 32))
-                    .foregroundStyle(canSend ? .blue : Color(.tertiaryLabel))
+                    .foregroundStyle(canSend ? (isOffline ? Color.offlineMode : .blue) : Color(.tertiaryLabel))
             }
             .disabled(!canSend)
         }
@@ -297,8 +412,15 @@ struct MacroChatView: View {
 
     // MARK: - Logic
 
+    private var inputPlaceholder: String {
+        if chatSession.hasOpenSplitProposal { return "Choose split or send as one above…" }
+        return isOffline ? "Describe a macro (on-device)…" : "Describe a macro…"
+    }
+
     private var canSend: Bool {
-        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !chatSession.isGenerating
+        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !chatSession.isGenerating
+            && !chatSession.hasOpenSplitProposal
     }
 
     private var examplePrompts: [String] {
@@ -327,7 +449,10 @@ struct MacroChatView: View {
         guard !chatSession.isSetup else { return }
         chatSession.isSetup = true
         guard activeProvider == .onDevice, onDeviceAvailable else { return }
+        chatSession.languageModelSession = makeOnDeviceSession()
+    }
 
+    private func makeOnDeviceSession() -> LanguageModelSession {
         let specContext = DeviceSpecManager.specContext(for: device)
         var instructions = """
             You are a MIDI macro assistant for the app "Midi Set List."
@@ -354,7 +479,11 @@ struct MacroChatView: View {
                 When refining a previous result, adjust only what changed.
                 """
         }
-        chatSession.languageModelSession = LanguageModelSession(instructions: instructions)
+        return LanguageModelSession(instructions: instructions)
+    }
+
+    private var plannerContext: BulkRequestPlanner.Context {
+        BulkRequestPlanner.Context(deviceName: device.name, midiChannel: device.midiChannel, categoryName: category.name)
     }
 
     @MainActor
@@ -365,46 +494,166 @@ struct MacroChatView: View {
         input = ""
         chatSession.messages.append(MacroChatMessage(kind: .user(text)))
         chatSession.isGenerating = true
+        defer { chatSession.isGenerating = false }
 
-        do {
-            let macro: ParsedMacro
-            if activeProvider == .onDevice {
-                guard let session = chatSession.languageModelSession else { chatSession.isGenerating = false; return }
-                let response = try await session.respond(to: text, generating: GeneratedSingleMacro.self)
-                macro = ParsedMacro(response.content)
-                // No cost for on-device processing
-            } else {
-                let aiResponse = try await generateExternal(userText: text)
-                macro = aiResponse.macro
-                chatSession.sessionCost += aiResponse.response.cost()
-                if chatSession.sessionModelID.isEmpty { chatSession.sessionModelID = aiResponse.response.modelID }
+        // Bulk check: local yes/no first, then the orchestrator lists the actions
+        chatSession.statusText = "Checking request…"
+        if await BulkRequestPlanner.isMultiAction(text, context: plannerContext) {
+            chatSession.statusText = "Listing actions…"
+            if let actions = try? await BulkRequestPlanner.splitActions(text, context: plannerContext),
+               actions.count > 1 {
+                chatSession.messages.append(MacroChatMessage(kind: .splitProposal(original: text, actions: actions)))
+                return
             }
+            // Orchestrator failed or found one action — send it as a single request
+        }
+
+        chatSession.statusText = "Thinking…"
+        await sendSingle(text)
+    }
+
+    @MainActor
+    private func resolveSplit(id: UUID, original: String, actions: [String], split: Bool) async {
+        chatSession.splitChoices[id] = split
+        chatSession.isGenerating = true
+        defer { chatSession.isGenerating = false }
+
+        if split {
+            await runBulk(actions)
+        } else {
+            chatSession.statusText = "Thinking…"
+            await sendSingle(original)
+        }
+    }
+
+    @MainActor
+    private func sendSingle(_ text: String) async {
+        do {
+            let macro = try await generateMacro(for: text)
             chatSession.messages.append(MacroChatMessage(kind: .result(macro, prompt: text)))
         } catch {
             chatSession.messages.append(MacroChatMessage(kind: .error(error.localizedDescription)))
         }
-
-        chatSession.isGenerating = false
     }
 
-    private func generateExternal(userText: String) async throws -> (macro: ParsedMacro, response: AIResponse) {
+    /// Sends each action as its own single-action request. Every action gets a numbered
+    /// placeholder up front, so results always appear in the original order even when
+    /// external calls finish out of order.
+    @MainActor
+    private func runBulk(_ actions: [String]) async {
+        let total = actions.count
+        let slotIDs: [UUID] = actions.enumerated().map { index, action in
+            let slot = MacroChatMessage(kind: .pending(action), bulkLabel: "Action \(index + 1) of \(total)")
+            chatSession.messages.append(slot)
+            return slot.id
+        }
+
+        func fill(_ index: Int, with kind: MacroChatMessage.Kind) {
+            guard let i = chatSession.messages.firstIndex(where: { $0.id == slotIDs[index] }) else { return }
+            chatSession.messages[i].kind = kind
+        }
+
+        chatSession.statusText = "Running \(total) actions…"
+
+        if activeProvider == .onDevice {
+            // One on-device session handles one request at a time — run in order
+            for (index, action) in actions.enumerated() {
+                do {
+                    fill(index, with: .result(try await generateOnDevice(userText: action), prompt: action))
+                } catch {
+                    fill(index, with: .error(error.localizedDescription))
+                }
+            }
+            return
+        }
+
+        // External: independent calls in parallel, all sharing the history from before the split
+        let history = chatSession.externalHistory
+        var responses: [Int: AIResponse] = [:]
+        var offlineRetries: [Int] = []
+
+        await withTaskGroup(of: (Int, Result<(macro: ParsedMacro, response: AIResponse), Error>).self) { group in
+            for (index, action) in actions.enumerated() {
+                group.addTask {
+                    do { return (index, .success(try await requestExternal(userText: action, history: history))) }
+                    catch { return (index, .failure(error)) }
+                }
+            }
+            for await (index, result) in group {
+                switch result {
+                case .success(let output):
+                    responses[index] = output.response
+                    chatSession.sessionCost += output.response.cost()
+                    if chatSession.sessionModelID.isEmpty { chatSession.sessionModelID = output.response.modelID }
+                    fill(index, with: .result(output.macro, prompt: actions[index]))
+                case .failure(let error) where ExternalAIError.isConnectivity(error) && onDeviceAvailable:
+                    offlineRetries.append(index)
+                case .failure(let error):
+                    fill(index, with: .error(error.localizedDescription))
+                }
+            }
+        }
+
+        // Keep the conversation history in the original order
+        for (index, action) in actions.enumerated() {
+            guard let response = responses[index] else { continue }
+            chatSession.externalHistory.append(ExternalAIMessage(role: "user", content: action))
+            chatSession.externalHistory.append(ExternalAIMessage(role: "assistant", content: response.text))
+        }
+
+        // Connection dropped mid-batch — finish those actions on-device, in order
+        for index in offlineRetries.sorted() {
+            do {
+                fill(index, with: .result(try await generateOnDevice(userText: actions[index]), prompt: actions[index]))
+            } catch {
+                fill(index, with: .error(error.localizedDescription))
+            }
+        }
+    }
+
+    /// One single-action request on the routed provider, falling back to on-device if the connection drops.
+    @MainActor
+    private func generateMacro(for text: String) async throws -> ParsedMacro {
+        if activeProvider == .onDevice {
+            return try await generateOnDevice(userText: text)
+        }
+        do {
+            let output = try await requestExternal(userText: text, history: chatSession.externalHistory)
+            chatSession.externalHistory.append(ExternalAIMessage(role: "user", content: text))
+            chatSession.externalHistory.append(ExternalAIMessage(role: "assistant", content: output.response.text))
+            chatSession.sessionCost += output.response.cost()
+            if chatSession.sessionModelID.isEmpty { chatSession.sessionModelID = output.response.modelID }
+            return output.macro
+        } catch let error where ExternalAIError.isConnectivity(error) && onDeviceAvailable {
+            // Connection dropped mid-request — answer locally
+            return try await generateOnDevice(userText: text)
+        }
+    }
+
+    private func generateOnDevice(userText: String) async throws -> ParsedMacro {
+        guard onDeviceAvailable else { throw ExternalAIError.apiError("On-device AI is not available.") }
+        // Created on demand in case the connection dropped after the chat opened
+        let session = chatSession.languageModelSession ?? makeOnDeviceSession()
+        chatSession.languageModelSession = session
+        let response = try await session.respond(to: userText, generating: GeneratedSingleMacro.self)
+        return ParsedMacro(response.content)  // No cost for on-device processing
+    }
+
+    /// Calls the external provider without touching chat state, so several can run at once.
+    private func requestExternal(userText: String, history: [ExternalAIMessage]) async throws -> (macro: ParsedMacro, response: AIResponse) {
         let provider = activeProvider
         guard let apiKey = provider == .openAI ? AISettings.shared.openAIKey : AISettings.shared.anthropicKey
         else { throw ExternalAIError.notConfigured }
-
-        chatSession.externalHistory.append(ExternalAIMessage(role: "user", content: userText))
 
         let aiResponse = try await ExternalAIClient.chat(
             provider: provider,
             apiKey: apiKey,
             systemPrompt: externalSystemPrompt,
-            messages: chatSession.externalHistory,
+            messages: history + [ExternalAIMessage(role: "user", content: userText)],
             workspaceID: provider == .anthropic ? AISettings.shared.anthropicWorkspaceID : nil,
             anthropicModelID: AISettings.shared.anthropicModel(for: .macroChat),
             anthropicThinking: AISettings.shared.thinkingEnabled(for: .macroChat)
         )
-
-        chatSession.externalHistory.append(ExternalAIMessage(role: "assistant", content: aiResponse.text))
 
         let jsonString = extractJSON(from: aiResponse.text)
         guard let data = jsonString.data(using: .utf8) else {
@@ -519,8 +768,10 @@ private struct MemorySaveSheet: View {
         guard let idx = targetIndex else { return [] }
         let start = max(0, idx - 4)
         return allMessages[start...idx].filter {
-            if case .error = $0.kind { return false }
-            return true
+            switch $0.kind {
+            case .user, .result: return true
+            case .error, .splitProposal, .pending: return false
+            }
         }
     }
 
@@ -560,7 +811,7 @@ private struct MemorySaveSheet: View {
                                             .font(.subheadline).foregroundStyle(.primary)
                                         Text(macroValues(macro))
                                             .font(.caption).foregroundStyle(.secondary).fontDesign(.monospaced)
-                                    case .error:
+                                    case .error, .splitProposal, .pending:
                                         EmptyView()
                                     }
                                 }
@@ -604,7 +855,7 @@ private struct MemorySaveSheet: View {
             case .result(let macro, _):
                 let tag = msg.id == targetMessageID ? "Confirmed" : "Previous"
                 lines.append("- \(tag): \(macro.name) → \(macroValues(macro))")
-            case .error:
+            case .error, .splitProposal, .pending:
                 break
             }
         }

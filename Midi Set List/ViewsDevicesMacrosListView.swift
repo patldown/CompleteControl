@@ -14,6 +14,7 @@ struct MacrosListView: View {
     let device: InstrumentDevice
 
     @StateObject private var chatSession = MacroChatSession()
+    @ObservedObject private var ai = AISettings.shared
     @State private var showingAddMacro = false
     @State private var macroToEdit: DeviceMacro?
     @State private var macroToSync: DeviceMacro?
@@ -25,7 +26,9 @@ struct MacrosListView: View {
                 ContentUnavailableView(
                     "No Macros",
                     systemImage: "waveform.badge.plus",
-                    description: Text("Tap + to define your first macro for this category.")
+                    description: Text(ai.isAvailable(.macroChat)
+                        ? "Tap + to define your first macro, or the wand to describe one to AI."
+                        : "Tap + to define your first macro for this category.")
                 )
             } else {
                 List {
@@ -43,11 +46,22 @@ struct MacrosListView: View {
             ToolbarItem(placement: .primaryAction) {
                 Button { showingAddMacro = true } label: { Image(systemName: "plus") }
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button { showingChatView = true } label: { Image(systemName: "wand.and.stars") }
+            // Hidden when no AI can run Macro Chat (no Apple Intelligence, no ChatGPT/Claude key)
+            if ai.isAvailable(.macroChat) {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showingChatView = true } label: {
+                        Image(systemName: "wand.and.stars")
+                            .foregroundStyle(ai.offlineMode ? Color.offlineMode : .accentColor)
+                            .offlineModeDot(ai.offlineMode)
+                    }
+                    .accessibilityLabel(ai.offlineMode ? "Generate macros (offline, on-device)" : "Generate macros")
+                }
             }
             if !category.macros.isEmpty {
                 ToolbarItem(placement: .navigationBarLeading) { EditButton() }
+                ToolbarItem(placement: .secondaryAction) {
+                    ShareItemButton(object: category, kindName: "Macro Group", itemName: category.name)
+                }
             }
         }
         .sheet(isPresented: $showingAddMacro) {
@@ -118,6 +132,10 @@ struct MacroRow: View {
                 : "\(macro.name) is up to date")
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            // Shares the macro with its group and instrument (not the group's other macros)
+            ShareItemButton(object: macro, kindName: "Macro", itemName: macro.name)
+        }
     }
 }
 

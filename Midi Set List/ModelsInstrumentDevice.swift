@@ -51,12 +51,20 @@ enum DeviceSpecManager {
     }
 
     /// Concatenates all attached spec file text + memory, labelled by filename, ready for an AI prompt.
-    static func specContext(for device: InstrumentDevice) -> String {
-        var parts = device.specFiles.compactMap { file -> String? in
+    /// Reference files only, without the device memory
+    static func specFilesContext(for device: InstrumentDevice) -> String {
+        device.specFiles.compactMap { file -> String? in
             guard let text = extractText(file),
                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return "=== \(file.displayName) ===\n\(text)"
         }
+        .joined(separator: "\n\n")
+    }
+
+    static func specContext(for device: InstrumentDevice) -> String {
+        var parts: [String] = []
+        let specs = specFilesContext(for: device)
+        if !specs.isEmpty { parts.append(specs) }
         let memory = memoryContent(for: device)
         if !memory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             parts.append("=== Device Memory (corrections & confirmed values — trust these over spec) ===\n\(memory)")

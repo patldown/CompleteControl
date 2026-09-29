@@ -5,6 +5,8 @@
 
 import Combine
 import Foundation
+import FoundationModels
+import Network
 import Security
 
 // MARK: - ParsedMacro (common output for both on-device and external AI paths)
@@ -74,12 +76,18 @@ enum AITask: String, CaseIterable {
     case macroChat       = "task_macro_chat"
     case specAnalysis    = "task_spec_analysis"
     case macroGeneration = "task_macro_generation"
+    case bulkCheck       = "task_bulk_check"
+    case bulkSplit       = "task_bulk_split"
+    case setListAssistant = "task_set_list_assistant"
 
     var displayName: String {
         switch self {
         case .macroChat:       return "Macro Chat (wand)"
         case .specAnalysis:    return "Build Reference File"
         case .macroGeneration: return "Generate Macros"
+        case .bulkCheck:       return "Detect Bulk Requests"
+        case .bulkSplit:       return "Split Bulk Requests"
+        case .setListAssistant: return "Set List Assistant"
         }
     }
 }
@@ -135,6 +143,12 @@ class AISettings: ObservableObject {
     // Triggers UI refresh when a key is saved or cleared
     @Published var keyVersion: Int = 0
 
+    // Offline mode — set automatically when the device has no network connection.
+    // While offline, every AI task falls back to the on-device model regardless of
+    // the routing or Anthropic model chosen; normal routing resumes when back online.
+    @Published private(set) var offlineMode = false
+    private let pathMonitor = NWPathMonitor()
+
     var openAIKey: String? {
         get { AppKeychain.load(for: "openai_api_key") }
         set { updateKey(newValue, for: "openai_api_key") }
@@ -178,7 +192,7 @@ class AISettings: ObservableObject {
     @Published var availableAnthropicModels: [AnthropicModelInfo] = AnthropicModelInfo.fallbacks
 
     func fetchAnthropicModels() async {
-        guard let key = anthropicKey else { return }
+        guard !offlineMode, let key = anthropicKey else { return }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models")!)
         req.setValue(key, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
@@ -195,14 +209,35 @@ class AISettings: ObservableObject {
         await MainActor.run { self.availableAnthropicModels = models }
     }
 
-    // Returns the configured provider, falling back to on-device if no key
+    // Returns the configured provider, falling back to on-device if no key.
+    // Without Apple Intelligence, falls back to whichever external provider has a key.
+    // No connection always wins and routes to on-device.
     func provider(for task: AITask) -> AIProviderType {
+        if offlineMode { return .onDevice }
         let selected = routing[task, default: .onDevice]
         switch selected {
         case .openAI    where hasOpenAIKey:    return .openAI
         case .anthropic where hasAnthropicKey: return .anthropic
-        default: return .onDevice
+        default:
+            if !onDeviceAvailable {
+                if hasAnthropicKey { return .anthropic }
+                if hasOpenAIKey    { return .openAI }
+            }
+            return .onDevice
         }
+    }
+
+    // MARK: Availability — AI surfaces are hidden when nothing can run them
+
+    /// Apple Intelligence is supported and enabled on this device
+    var onDeviceAvailable: Bool { SystemLanguageModel.default.isAvailable }
+
+    /// Some AI could run here: Apple Intelligence, or a ChatGPT / Claude key
+    var anyAIAvailable: Bool { onDeviceAvailable || hasOpenAIKey || hasAnthropicKey }
+
+    /// The provider this task resolves to can actually run right now
+    func isAvailable(_ task: AITask) -> Bool {
+        provider(for: task) != .onDevice || onDeviceAvailable
     }
 
     func setProvider(_ provider: AIProviderType, for task: AITask) {
@@ -234,6 +269,15 @@ class AISettings: ObservableObject {
             }
         }
         routing = loaded
+
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let offline = path.status != .satisfied
+            DispatchQueue.main.async {
+                guard let self, self.offlineMode != offline else { return }
+                self.offlineMode = offline
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "com.midisetlist.network-monitor"))
     }
 }
 
@@ -251,15 +295,43 @@ struct AIResponse {
     let inputTokens: Int
     let outputTokens: Int
     let modelID: String
+    /// True when the model stopped because it hit the output limit (the text is cut off)
+    var truncated = false
 
     func cost() -> Double {
-        // Approximate pricing per million tokens; best-effort by model family
+        let rates = AIPricing.rates(for: modelID)
+        return (Double(inputTokens) * rates.input + Double(outputTokens) * rates.output) / 1_000_000
+    }
+}
+
+// MARK: - Pricing (USD per million tokens, standard API rates)
+
+enum AIPricing {
+    /// Checked in order — more specific model IDs first.
+    /// Estimates only: excludes prompt caching and batch discounts.
+    private static let table: [(match: String, input: Double, output: Double)] = [
+        ("fable",       10.00, 50.00),
+        ("mythos",      10.00, 50.00),
+        ("opus-5-5",     4.00, 20.00),
+        ("opus-5",       5.00, 25.00),
+        ("opus-4-8",     5.00, 25.00),
+        ("opus-4-7",     5.00, 25.00),
+        ("opus-4-6",     5.00, 25.00),
+        ("opus-4-5",     5.00, 25.00),
+        ("opus",        15.00, 75.00),   // Opus 4 / 4.1 and older
+        ("sonnet-5",     2.00, 10.00),   // Sonnet 5 and 5.5
+        ("sonnet",       3.00, 15.00),   // Sonnet 4.x
+        ("haiku-4-5",    1.00,  5.00),
+        ("haiku-3-5",    0.80,  4.00),
+        ("haiku",        0.25,  1.25),
+        ("gpt-4o-mini",  0.15,  0.60),
+        ("gpt-4o",       2.50, 10.00),
+    ]
+
+    static func rates(for modelID: String) -> (input: Double, output: Double) {
         let id = modelID.lowercased()
-        let (inRate, outRate): (Double, Double)
-        if id.contains("opus")   { inRate = 15.0;  outRate = 75.0  }
-        else if id.contains("sonnet") { inRate = 3.0;   outRate = 15.0  }
-        else                     { inRate = 0.80;  outRate = 4.0   } // haiku / unknown
-        return (Double(inputTokens) * inRate + Double(outputTokens) * outRate) / 1_000_000
+        if let row = table.first(where: { id.contains($0.match) }) { return (row.input, row.output) }
+        return (3.00, 15.00)   // unknown model — mid-range estimate
     }
 }
 
@@ -274,21 +346,33 @@ enum ExternalAIClient {
         messages: [ExternalAIMessage],
         workspaceID: String? = nil,
         anthropicModelID: String = "claude-sonnet-4-6",
-        anthropicThinking: Bool = false
+        anthropicThinking: Bool = false,
+        maxOutputTokens: Int? = nil
     ) async throws -> AIResponse {
+        // Fail fast with no connection so callers can fall back to on-device
+        guard !AISettings.shared.offlineMode else { throw ExternalAIError.noConnection }
+        let response: AIResponse
         switch provider {
-        case .openAI:    return try await openAI(apiKey: apiKey, system: systemPrompt, messages: messages)
-        case .anthropic: return try await anthropic(apiKey: apiKey, workspaceID: workspaceID, modelID: anthropicModelID, thinking: anthropicThinking, system: systemPrompt, messages: messages)
+        case .openAI:    response = try await openAI(apiKey: apiKey, system: systemPrompt, messages: messages, maxTokens: maxOutputTokens)
+        case .anthropic: response = try await anthropic(apiKey: apiKey, workspaceID: workspaceID, modelID: anthropicModelID, thinking: anthropicThinking, system: systemPrompt, messages: messages, maxTokens: maxOutputTokens)
         case .onDevice:  throw ExternalAIError.notConfigured
         }
+        // Every paid request, from every feature, goes through here
+        AICostLedger.shared.record(response)
+        return response
     }
 
-    private static func openAI(apiKey: String, system: String, messages: [ExternalAIMessage]) async throws -> AIResponse {
+    /// Long outputs (e.g. a full reference file) can take well over the 60s default
+    private static let requestTimeout: TimeInterval = 300
+
+    private static func openAI(apiKey: String, system: String, messages: [ExternalAIMessage], maxTokens: Int?) async throws -> AIResponse {
         var msgs: [[String: String]] = [["role": "system", "content": system]]
         msgs += messages.map { ["role": $0.role, "content": $0.content] }
         let modelID = "gpt-4o-mini"
-        let body: [String: Any] = ["model": modelID, "messages": msgs]
+        var body: [String: Any] = ["model": modelID, "messages": msgs]
+        if let maxTokens { body["max_tokens"] = maxTokens }
         var req = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
+        req.timeoutInterval = requestTimeout
         req.httpMethod = "POST"
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -296,21 +380,25 @@ enum ExternalAIClient {
         let (data, response) = try await URLSession.shared.data(for: req)
         try validate(response, data: data)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = ((json["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any])?["content"] as? String
+              let choice = (json["choices"] as? [[String: Any]])?.first,
+              let content = (choice["message"] as? [String: Any])?["content"] as? String
         else { throw ExternalAIError.parseError }
         let usage = json["usage"] as? [String: Any]
         return AIResponse(
             text: content,
             inputTokens: usage?["prompt_tokens"] as? Int ?? 0,
             outputTokens: usage?["completion_tokens"] as? Int ?? 0,
-            modelID: modelID
+            modelID: modelID,
+            truncated: choice["finish_reason"] as? String == "length"
         )
     }
 
-    private static func anthropic(apiKey: String, workspaceID: String?, modelID: String, thinking: Bool, system: String, messages: [ExternalAIMessage]) async throws -> AIResponse {
+    private static func anthropic(apiKey: String, workspaceID: String?, modelID: String, thinking: Bool, system: String, messages: [ExternalAIMessage], maxTokens: Int?) async throws -> AIResponse {
+        // Thinking shares the output budget, so it always gets at least 16k
+        let limit = thinking ? max(16000, maxTokens ?? 0) : (maxTokens ?? 2048)
         var body: [String: Any] = [
             "model": modelID,
-            "max_tokens": thinking ? 16000 : 2048,
+            "max_tokens": limit,
             "system": system,
             "messages": messages.map { ["role": $0.role, "content": $0.content] }
         ]
@@ -319,6 +407,7 @@ enum ExternalAIClient {
             body["output_config"] = ["effort": "high"]
         }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        req.timeoutInterval = requestTimeout
         req.httpMethod = "POST"
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
@@ -337,7 +426,8 @@ enum ExternalAIClient {
             text: text,
             inputTokens: usage?["input_tokens"] as? Int ?? 0,
             outputTokens: usage?["output_tokens"] as? Int ?? 0,
-            modelID: modelID
+            modelID: modelID,
+            truncated: json["stop_reason"] as? String == "max_tokens"
         )
     }
 
@@ -358,12 +448,27 @@ enum ExternalAIError: Error, LocalizedError {
     case notConfigured
     case apiError(String)
     case parseError
+    case noConnection
 
     var errorDescription: String? {
         switch self {
         case .notConfigured: return "No external AI provider configured. Add an API key in Settings."
         case .apiError(let msg): return "API error: \(msg)"
         case .parseError:        return "Could not parse the AI response. Try again."
+        case .noConnection:      return "No internet connection — Claude and ChatGPT are unavailable."
         }
+    }
+
+    /// True for errors caused by a missing or dropped connection, where falling back
+    /// to the on-device model makes sense.
+    static func isConnectivity(_ error: Error) -> Bool {
+        if case ExternalAIError.noConnection = error { return true }
+        guard let urlError = error as? URLError else { return false }
+        let codes: [URLError.Code] = [
+            .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost,
+            .cannotFindHost, .dnsLookupFailed, .timedOut,
+            .internationalRoamingOff, .dataNotAllowed
+        ]
+        return codes.contains(urlError.code)
     }
 }
