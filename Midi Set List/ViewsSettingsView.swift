@@ -166,6 +166,12 @@ private struct TaskRoutingRow: View {
                 .labelsHidden()
             }
 
+            if task == .bulkSplit {
+                Text("Rewrites a multi-action chat request into a list of single actions. The quick \"is this more than one action?\" check always runs on-device.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             if selectedProvider == .anthropic {
                 HStack {
                     Text("Model").font(.caption).foregroundStyle(.secondary)

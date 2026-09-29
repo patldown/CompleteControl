@@ -7,7 +7,8 @@
 //
 //  1. isMultiAction — yes/no check, always on the local (on-device) model.
 //  2. splitActions  — orchestrator that rewrites the request into the full,
-//                     ordered action list, using the provider routed for Macro Chat.
+//                     ordered action list, using the provider routed for
+//                     "Split Bulk Requests" in Settings.
 //
 
 import Foundation
@@ -63,11 +64,9 @@ enum BulkRequestPlanner {
     }
 
     /// Orchestrator: rewrites a multi-action request into standalone single-macro requests.
-    static func splitActions(
-        _ request: String,
-        context: Context,
-        provider: AIProviderType
-    ) async throws -> [String] {
+    static func splitActions(_ request: String, context: Context) async throws -> [String] {
+        let ai = AISettings.shared
+        let provider = ai.provider(for: .bulkSplit)
         let instructions = """
             You split a request sent to a MIDI/OSC macro assistant into separate requests, one per macro.
             Device: \(context.deviceName), MIDI channel \(context.midiChannel). Category: \(context.categoryName).
@@ -78,28 +77,36 @@ enum BulkRequestPlanner {
             - Do not add, drop, or invent actions. Keep each request short, in the user's wording.
             """
 
+        func splitOnDevice() async throws -> [String] {
+            let session = LanguageModelSession(instructions: instructions)
+            return try await session.respond(to: request, generating: SplitActionList.self).content.actions
+        }
+
         let actions: [String]
         if provider == .onDevice {
-            let session = LanguageModelSession(instructions: instructions)
-            actions = try await session.respond(to: request, generating: SplitActionList.self).content.actions
+            actions = try await splitOnDevice()
         } else {
-            let ai = AISettings.shared
             guard let apiKey = provider == .openAI ? ai.openAIKey : ai.anthropicKey
             else { throw ExternalAIError.notConfigured }
-            let response = try await ExternalAIClient.chat(
-                provider: provider,
-                apiKey: apiKey,
-                systemPrompt: instructions + """
+            do {
+                let response = try await ExternalAIClient.chat(
+                    provider: provider,
+                    apiKey: apiKey,
+                    systemPrompt: instructions + """
 
-                    Respond ONLY with a JSON object — no markdown fences, no explanation:
-                    {"actions": ["first request", "second request"]}
-                    """,
-                messages: [ExternalAIMessage(role: "user", content: request)],
-                workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
-                anthropicModelID: ai.anthropicModel(for: .macroChat),
-                anthropicThinking: false
-            )
-            actions = try decodeActions(from: response.text)
+                        Respond ONLY with a JSON object — no markdown fences, no explanation:
+                        {"actions": ["first request", "second request"]}
+                        """,
+                    messages: [ExternalAIMessage(role: "user", content: request)],
+                    workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
+                    anthropicModelID: ai.anthropicModel(for: .bulkSplit),
+                    anthropicThinking: ai.thinkingEnabled(for: .bulkSplit)
+                )
+                actions = try decodeActions(from: response.text)
+            } catch let error where ExternalAIError.isConnectivity(error) && SystemLanguageModel.default.isAvailable {
+                // Connection dropped mid-request — split on-device instead
+                actions = try await splitOnDevice()
+            }
         }
 
         return actions

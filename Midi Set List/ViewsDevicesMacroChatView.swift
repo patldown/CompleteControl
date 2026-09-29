@@ -500,7 +500,7 @@ struct MacroChatView: View {
         chatSession.statusText = "Checking request…"
         if await BulkRequestPlanner.isMultiAction(text, context: plannerContext) {
             chatSession.statusText = "Listing actions…"
-            if let actions = try? await BulkRequestPlanner.splitActions(text, context: plannerContext, provider: activeProvider),
+            if let actions = try? await BulkRequestPlanner.splitActions(text, context: plannerContext),
                actions.count > 1 {
                 chatSession.messages.append(MacroChatMessage(kind: .splitProposal(original: text, actions: actions)))
                 return

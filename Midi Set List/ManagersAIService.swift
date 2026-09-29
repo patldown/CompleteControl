@@ -75,12 +75,14 @@ enum AITask: String, CaseIterable {
     case macroChat       = "task_macro_chat"
     case specAnalysis    = "task_spec_analysis"
     case macroGeneration = "task_macro_generation"
+    case bulkSplit       = "task_bulk_split"
 
     var displayName: String {
         switch self {
         case .macroChat:       return "Macro Chat (wand)"
         case .specAnalysis:    return "Build Reference File"
         case .macroGeneration: return "Generate Macros"
+        case .bulkSplit:       return "Split Bulk Requests"
         }
     }
 }
