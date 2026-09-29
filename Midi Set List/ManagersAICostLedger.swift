@@ -145,6 +145,8 @@ final class AICostLedger: ObservableObject {
         for row in rows(for: range, now: now) {
             lines.append(Self.csvLine(row.key, row.usage))
         }
+        lines.append("")
+        lines.append("\"Note: costs are estimates based on token counts at standard API rates — a gauge, not an actual bill. Check your Anthropic or OpenAI billing for exact amounts.\"")
         return lines.joined(separator: "\n") + "\n"
     }
 

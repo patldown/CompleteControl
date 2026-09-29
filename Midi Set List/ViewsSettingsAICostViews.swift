@@ -9,11 +9,14 @@
 import SwiftUI
 
 enum CostFormat {
-    /// Small amounts keep 4 decimals so a few cents of usage doesn't read as $0.00
+    /// "≈" marks every amount as an estimate. Small amounts keep 4 decimals
+    /// so a few cents of usage doesn't read as $0.00.
     static func string(_ cost: Double) -> String {
         if cost == 0 { return "$0.00" }
-        return cost < 1 ? String(format: "$%.4f", cost) : String(format: "$%.2f", cost)
+        return cost < 1 ? String(format: "≈ $%.4f", cost) : String(format: "≈ $%.2f", cost)
     }
+
+    static let disclaimer = "Estimates based on token counts at standard API rates — a gauge, not your actual bill."
 }
 
 // MARK: - Settings section
@@ -45,9 +48,9 @@ struct AICostSection: View {
                 Label("Export Costs (CSV)", systemImage: "square.and.arrow.up")
             }
         } header: {
-            Text("AI Spending")
+            Text("AI Spending (Estimated)")
         } footer: {
-            Text("Estimated from token usage at standard API rates — your Anthropic or OpenAI bill is the source of truth. On-device AI is free and isn't counted. Each export starts with a total row, then one row per day.")
+            Text("\(CostFormat.disclaimer) Your Anthropic or OpenAI bill is the source of truth. On-device AI is free and isn't counted. Each export starts with a total row, then one row per day.")
         }
     }
 
@@ -103,6 +106,8 @@ struct AICostHistoryView: View {
                         Text(CostFormat.string(ledger.total(for: .allTime).cost))
                             .font(.body.weight(.semibold)).monospacedDigit()
                     }
+                } footer: {
+                    Label(CostFormat.disclaimer, systemImage: "info.circle")
                 }
                 ForEach(months) { month in
                     Section {
@@ -127,7 +132,7 @@ struct AICostHistoryView: View {
                 }
             }
         }
-        .navigationTitle("Daily AI Costs")
+        .navigationTitle("Estimated Daily Costs")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if !months.isEmpty {

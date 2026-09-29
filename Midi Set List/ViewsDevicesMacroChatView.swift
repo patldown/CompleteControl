@@ -178,7 +178,7 @@ struct MacroChatView: View {
                             Text(chatSession.sessionModelID).font(.caption2).foregroundStyle(.tertiary)
                         }
                         if chatSession.sessionCost > 0 {
-                            Text(String(format: "Session cost: $%.4f", chatSession.sessionCost))
+                            Text(String(format: "Est. session cost ≈ $%.4f", chatSession.sessionCost))
                                 .font(.caption2).foregroundStyle(.orange)
                         }
                     }
