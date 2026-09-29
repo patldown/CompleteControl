@@ -7,6 +7,7 @@
 //  Incoming MIDI (see MIDIRemoteSettings) is routed here.
 //
 
+import CoreData
 import Foundation
 import Observation
 
