@@ -132,6 +132,7 @@ final class PersistenceController {
             attr("pdfFileName",   .stringAttributeType,    optional: true),
             attr("bpmRaw",        .integer32AttributeType, optional: true),
             attr("timeSignature", .stringAttributeType,    optional: true),
+            attr("snapshotNamesData", .stringAttributeType, optional: true),
             attr("dateCreated",   .dateAttributeType),
             attr("dateModified",  .dateAttributeType),
         ]
@@ -150,6 +151,7 @@ final class PersistenceController {
             attr("oscFormula",           .stringAttributeType,    optional: true),
             attr("value1Formula",        .stringAttributeType,    optional: true),
             attr("value2Formula",        .stringAttributeType,    optional: true),
+            attr("snapshotIndexRaw",     .integer16AttributeType, defaultValue: Int16(0)),
         ]
 
         setListE.properties = [

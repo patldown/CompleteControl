@@ -11,8 +11,12 @@ import CoreData
 struct SongDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(MIDIManager.self) private var midiManager
+    @Environment(PerformanceSession.self) private var performance
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var song: Song
+
+    /// The snapshot whose commands are listed and edited below.
+    @State private var selectedSnapshot = 0
     
     @State private var showingGenrePicker = false
     @State private var selectedGenres: Set<String> = []
@@ -214,8 +218,10 @@ struct SongDetailView: View {
                 }
             }
             
-            // Send Section — shown whenever there are commands
-            if !song.commands.isEmpty {
+            SongSnapshotsSection(song: song, selected: $selectedSnapshot)
+
+            // Send Section — shown whenever the selected snapshot has commands
+            if !snapshotCommands.isEmpty {
                 Section {
                     Button {
                         Task { await sendAllCommands() }
@@ -226,7 +232,7 @@ struct SongDetailView: View {
                             } else {
                                 Image(systemName: "paperplane.fill")
                             }
-                            Text("Send All Commands")
+                            Text("Send \(song.snapshotName(selectedSnapshot))")
                             Spacer()
                             if !midiManager.connectedDevices.isEmpty {
                                 Text("\(midiManager.connectedDevices.count) MIDI")
@@ -240,7 +246,7 @@ struct SongDetailView: View {
                     Text("MIDI / OSC")
                 } footer: {
                     if canSendAny {
-                        Text("Sends all \(song.commands.count) command(s) in sequence.")
+                        Text("Sends this snapshot's \(snapshotCommands.count) command(s) in sequence.")
                     } else {
                         Text("Connect a MIDI device or an OSC target to send commands.")
                     }
@@ -248,7 +254,7 @@ struct SongDetailView: View {
             }
             
             Section {
-                ForEach(song.sortedCommands) { command in
+                ForEach(snapshotCommands) { command in
                     Button {
                         if isSelectMode {
                             toggleSelection(command)
@@ -329,20 +335,22 @@ struct SongDetailView: View {
                 }
             } header: {
                 HStack {
-                    Text("Commands")
+                    Text("\(song.snapshotName(selectedSnapshot)) Commands")
                     Spacer()
                     if isSelectMode {
                         Text("\(selectedCommands.count) selected")
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("\(song.commands.count)")
+                        Text("\(snapshotCommands.count)")
                             .foregroundStyle(.secondary)
                     }
                 }
             } footer: {
                 if isSelectMode {
                     Text("Select commands for batch operations.")
-                } else if !song.commands.isEmpty {
+                } else if snapshotCommands.isEmpty {
+                    Text("Add macros, macro groups or commands to this snapshot with Add Command.")
+                } else {
                     Text("Commands are sent in order from top to bottom. Tap to edit, swipe left to delete, swipe right to send/duplicate. Long-press and drag to reorder.")
                 }
             }
@@ -386,7 +394,7 @@ struct SongDetailView: View {
                               systemImage: "checkmark.circle")
                     }
                     
-                    if !song.commands.isEmpty {
+                    if !snapshotCommands.isEmpty {
                         Divider()
                         
                         // Copy/Paste
@@ -433,7 +441,7 @@ struct SongDetailView: View {
                         Button(role: .destructive) {
                             showingDeleteConfirmation = true
                         } label: {
-                            Label("Clear All Commands", systemImage: "trash")
+                            Label("Clear \(song.snapshotName(selectedSnapshot))", systemImage: "trash")
                         }
                     }
                 } label: {
@@ -442,39 +450,40 @@ struct SongDetailView: View {
             }
         }
         .sheet(isPresented: $showingAddCommand) {
-            AddMIDICommandView(song: song)
+            AddMIDICommandView(song: song, snapshotIndex: selectedSnapshot)
         }
         .sheet(item: $editingCommand) { command in
             EditMIDICommandView(command: command)
         }
         .sheet(isPresented: $showingQuickCommands) {
-            QuickCommandsView(song: song)
+            QuickCommandsView(song: song, snapshotIndex: selectedSnapshot)
         }
         .sheet(isPresented: $showingBatchEdit) {
             BatchEditCommandsView(
                 song: song,
+                snapshotIndex: selectedSnapshot,
                 selectedCommands: Array(selectedCommands.compactMap { id in
                     song.commands.first(where: { $0.id == id })
                 })
             )
         }
         .sheet(isPresented: $showingExportMenu) {
-            ExportCommandsView(commands: song.sortedCommands)
+            ExportCommandsView(commands: snapshotCommands)
         }
         .sheet(isPresented: $showingImport) {
-            ImportCommandsView(song: song)
+            ImportCommandsView(song: song, snapshotIndex: selectedSnapshot)
         }
         .confirmationDialog(
-            "Delete All Commands?",
+            "Clear \(song.snapshotName(selectedSnapshot))?",
             isPresented: $showingDeleteConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Delete All", role: .destructive) {
+            Button("Delete Commands", role: .destructive) {
                 clearAllCommands()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will permanently delete all \(song.commands.count) MIDI commands from this song.")
+            Text("This will permanently delete the \(snapshotCommands.count) command(s) in \(song.snapshotName(selectedSnapshot)). The snapshot itself stays.")
         }
         .alert("MIDI Error", isPresented: $showingSendError) {
             Button("OK", role: .cancel) {}
@@ -489,7 +498,13 @@ struct SongDetailView: View {
         .sheet(isPresented: $showingEditLyrics) {
             EditLyricsView(song: song)
         }
-        .onAppear { selectedGenres = Set(song.genres) }
+        .onAppear {
+            selectedGenres = Set(song.genres)
+            // MIDI snapshot recalls act on the open song when no set list is playing
+            performance.focus(song)
+        }
+        .onDisappear { performance.unfocus(song) }
+        .onChange(of: selectedSnapshot) { _, _ in selectedCommands.removeAll() }
         .onChange(of: selectedGenres) { _, newValue in
             song.setGenres(Array(newValue))
             song.dateModified = Date()
@@ -505,6 +520,10 @@ struct SongDetailView: View {
         .onChange(of: song.bpm)    { _, _ in song.dateModified = Date(); try? viewContext.save() }
     }
     
+    private var snapshotCommands: [MIDICommand] {
+        song.commands(inSnapshot: selectedSnapshot)
+    }
+
     // A command can be sent if it's OSC (no MIDI device needed) or if a MIDI device is connected
     private func canSend(_ command: MIDICommand) -> Bool {
         command.commandType == .oscMessage || !midiManager.connectedDevices.isEmpty
@@ -512,7 +531,7 @@ struct SongDetailView: View {
 
     // The "Send All" button is enabled if any command in the song can be sent
     private var canSendAny: Bool {
-        !isSendingCommands && song.commands.contains { canSend($0) }
+        !isSendingCommands && snapshotCommands.contains { canSend($0) }
     }
 
     private func toggleSelection(_ command: MIDICommand) {
@@ -533,7 +552,7 @@ struct SongDetailView: View {
             notes: command.notes.map { $0 + " (Copy)" },
             context: viewContext
         )
-        song.addCommand(duplicate)
+        song.addCommand(duplicate, toSnapshot: command.snapshotIndex)
         try? viewContext.save()
     }
     
@@ -544,7 +563,7 @@ struct SongDetailView: View {
     }
 
     private func deleteCommands(at offsets: IndexSet) {
-        let sortedCommands = song.sortedCommands
+        let sortedCommands = snapshotCommands
         for index in offsets {
             let command = sortedCommands[index]
             song.removeCommand(command)
@@ -554,14 +573,18 @@ struct SongDetailView: View {
     }
 
     private func clearAllCommands() {
-        for command in song.commands { viewContext.delete(command) }
+        for command in snapshotCommands {
+            song.removeCommand(command)
+            viewContext.delete(command)
+        }
         song.dateModified = Date()
         try? viewContext.save()
     }
     
     private func moveCommands(from source: IndexSet, to destination: Int) {
         guard let sourceIndex = source.first else { return }
-        song.moveCommand(from: sourceIndex, to: destination)
+        song.moveCommand(from: sourceIndex, to: destination, inSnapshot: selectedSnapshot)
+        try? viewContext.save()
     }
     
     private func copySelectedCommands() {
@@ -572,7 +595,7 @@ struct SongDetailView: View {
     }
     
     private func pasteCommands() {
-        clipboard.paste(to: song, in: viewContext)
+        clipboard.paste(to: song, snapshot: selectedSnapshot, in: viewContext)
     }
     
     private func sendSingleCommand(_ command: MIDICommand) async {
@@ -588,7 +611,7 @@ struct SongDetailView: View {
     private func sendAllCommands() async {
         isSendingCommands = true
         do {
-            try await midiManager.sendSong(song)
+            try await midiManager.sendSnapshot(selectedSnapshot, of: song)
         } catch {
             sendError = error.localizedDescription
             showingSendError = true
@@ -678,4 +701,5 @@ struct MIDICommandRowView: View {
     return NavigationStack { SongDetailView(song: song) }
         .environment(\.managedObjectContext, ctx)
         .environment(MIDIManager())
+        .environment(PerformanceSession())
 }

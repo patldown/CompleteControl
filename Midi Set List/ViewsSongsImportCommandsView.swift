@@ -17,6 +17,8 @@ struct ImportCommandsView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     let song: Song
+    /// Snapshot the imported commands are added to (0 = Snapshot 1)
+    var snapshotIndex: Int = 0
 
     @State private var importText = ""
     @State private var importedCommands: [MIDICommand] = []
@@ -135,7 +137,7 @@ struct ImportCommandsView: View {
 
     private func importCommands() {
         for command in importedCommands {
-            song.addCommand(command)
+            song.addCommand(command, toSnapshot: snapshotIndex)
         }
         try? viewContext.save()
         dismiss()

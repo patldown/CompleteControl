@@ -10,6 +10,8 @@ import CoreData
 
 struct QuickCommandsView: View {
     let song: Song
+    /// Snapshot new commands and macros are added to (0 = Snapshot 1)
+    var snapshotIndex: Int = 0
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     @FetchRequest(sortDescriptors: [SortDescriptor(\.name)]) private var devices: FetchedResults<InstrumentDevice>
@@ -26,7 +28,7 @@ struct QuickCommandsView: View {
                         HStack {
                             Image(systemName: "info.circle.fill")
                                 .foregroundStyle(.blue)
-                            Text("\(song.commands.count) command(s) in this song")
+                            Text("\(song.commands(inSnapshot: snapshotIndex).count) command(s) in \(song.snapshotName(snapshotIndex))")
                                 .font(.subheadline)
                         }
                     }
@@ -37,6 +39,7 @@ struct QuickCommandsView: View {
                                 NavigationLink(
                                     destination: QuickDeviceCategoriesView(
                                         song: song,
+                                        snapshotIndex: snapshotIndex,
                                         device: device,
                                         onAdded: handleAdded
                                     )
@@ -148,43 +151,43 @@ struct QuickCommandsView: View {
 
     private func addBeatBuddyFolder() {
         let cmd = MIDICommand(commandType: .bankSelectLSB, channel: 1, value1: 0, delayMilliseconds: 50, notes: "BeatBuddy folder", context: viewContext)
-        song.addCommand(cmd)
+        song.addCommand(cmd, toSnapshot: snapshotIndex)
         try? viewContext.save()
         showSuccess(for: "BeatBuddy Folder", id: "beatbuddy_folder")
     }
     private func addBeatBuddySong() {
         let cmd = MIDICommand(commandType: .programChange, channel: 1, value1: 0, delayMilliseconds: 100, notes: "BeatBuddy song", context: viewContext)
-        song.addCommand(cmd)
+        song.addCommand(cmd, toSnapshot: snapshotIndex)
         try? viewContext.save()
         showSuccess(for: "BeatBuddy Song", id: "beatbuddy_song")
     }
     private func addHXStompPreset() {
         let cmd = MIDICommand(commandType: .programChange, channel: 1, value1: 0, delayMilliseconds: 150, notes: "HX Stomp preset", context: viewContext)
-        song.addCommand(cmd)
+        song.addCommand(cmd, toSnapshot: snapshotIndex)
         try? viewContext.save()
         showSuccess(for: "HX Stomp Preset", id: "hx_preset")
     }
     private func addHXStompSnapshot() {
         let cmd = MIDICommand(commandType: .controlChange, channel: 1, value1: 69, value2: 0, delayMilliseconds: 50, notes: "HX Stomp snapshot (0-7)", context: viewContext)
-        song.addCommand(cmd)
+        song.addCommand(cmd, toSnapshot: snapshotIndex)
         try? viewContext.save()
         showSuccess(for: "HX Stomp Snapshot", id: "hx_snapshot")
     }
     private func addProgramChange() {
         let cmd = MIDICommand(commandType: .programChange, channel: 1, value1: 0, delayMilliseconds: 50, context: viewContext)
-        song.addCommand(cmd)
+        song.addCommand(cmd, toSnapshot: snapshotIndex)
         try? viewContext.save()
         showSuccess(for: "Program Change", id: "generic_pc")
     }
     private func addControlChange() {
         let cmd = MIDICommand(commandType: .controlChange, channel: 1, value1: 0, value2: 0, delayMilliseconds: 50, context: viewContext)
-        song.addCommand(cmd)
+        song.addCommand(cmd, toSnapshot: snapshotIndex)
         try? viewContext.save()
         showSuccess(for: "Control Change", id: "generic_cc")
     }
     private func addDelay() {
         let cmd = MIDICommand(commandType: .programChange, channel: nil, value1: 0, delayMilliseconds: 200, notes: "Delay only (no MIDI sent)", context: viewContext)
-        song.addCommand(cmd)
+        song.addCommand(cmd, toSnapshot: snapshotIndex)
         try? viewContext.save()
         showSuccess(for: "Delay", id: "delay")
     }
@@ -194,6 +197,7 @@ struct QuickCommandsView: View {
 
 struct QuickDeviceCategoriesView: View {
     let song: Song
+    var snapshotIndex: Int = 0
     let device: InstrumentDevice
     let onAdded: (String) -> Void
 
@@ -208,7 +212,7 @@ struct QuickDeviceCategoriesView: View {
             } else {
                 ForEach(device.sortedCategories) { category in
                     NavigationLink(
-                        destination: QuickMacrosPickerView(song: song, category: category, onAdded: onAdded)
+                        destination: QuickMacrosPickerView(song: song, snapshotIndex: snapshotIndex, category: category, onAdded: onAdded)
                     ) {
                         HStack {
                             Image(systemName: "folder.fill").foregroundStyle(.orange)
@@ -230,6 +234,7 @@ struct QuickDeviceCategoriesView: View {
 struct QuickMacrosPickerView: View {
     @Environment(\.managedObjectContext) private var viewContext
     let song: Song
+    var snapshotIndex: Int = 0
     let category: MacroCategory
     let onAdded: (String) -> Void
 
@@ -278,7 +283,7 @@ struct QuickMacrosPickerView: View {
         let commands = macro.toMIDICommands(in: viewContext)
         for command in commands {
             command.sourceMacro = macro
-            song.addCommand(command)
+            song.addCommand(command, toSnapshot: snapshotIndex)
         }
         try? viewContext.save()
         addedMacroIDs.insert(macro.id)

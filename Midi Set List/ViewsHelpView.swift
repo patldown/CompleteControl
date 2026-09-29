@@ -76,6 +76,7 @@ struct HelpTopic: Identifiable {
     let sections: [HelpSection]
 
     static let all: [HelpTopic] = [
+        performTopic,
         midiClockTopic,
         bluetoothMIDITopic,
         oscXR18Topic,
@@ -103,6 +104,49 @@ struct HelpItem: Identifiable {
 }
 
 // MARK: - Topics
+
+private let performTopic = HelpTopic(
+    title: "Perform, Snapshots & Foot Controllers",
+    subtitle: "Play a set list and control it from MIDI",
+    icon: "play.circle",
+    color: .green,
+    sections: [
+        HelpSection(title: "Snapshots", icon: "square.stack.3d.up", items: [
+            HelpItem("What they are",
+                     "Each song has up to 12 snapshots. A snapshot is a group of macros, macro groups and commands — think of them like presets on a guitar pedal: one button, many changes at once."),
+            HelpItem("Snapshot 1",
+                     "Every song starts with Snapshot 1. It's sent when the song loads. Once Snapshot 1 has at least one command, tap + Add to create more."),
+            HelpItem("Managing them",
+                     "Tap a snapshot in the song to edit its commands. Long-press it to rename, duplicate, send or delete."),
+        ]),
+        HelpSection(title: "Perform tab", icon: "play.fill", items: [
+            HelpItem("Playing a set",
+                     "Pick a set list and press Play. The first song loads and its Snapshot 1 is sent. Use Next / Previous to move through the set, and tap a snapshot to recall it."),
+            HelpItem("Jumping around",
+                     "The Songs menu (top right) jumps straight to any song in the set. The screen stays awake until you press End."),
+        ]),
+        HelpSection(title: "MIDI control", icon: "slider.horizontal.below.rectangle", items: [
+            HelpItem("Receive channel",
+                     "Settings → MIDI Receive & Control. The app only reacts to messages on this channel (or everything, with Omni). Set your controller to match."),
+            HelpItem("Snapshot numbers",
+                     "Snapshots use 12 numbers in a row. By default Snapshot 1 is CC 20, Snapshot 2 is CC 21, up to Snapshot 12 on CC 31. You can switch to Program Change or Note, and pick any starting number."),
+            HelpItem("One pedal, one snapshot",
+                     "Pedals not in a row? Long-press a snapshot in a song → Learn MIDI Trigger, then press the pedal. That snapshot now answers to that pedal in every song. You can also do this under Settings → MIDI Receive & Control → Individual Snapshots."),
+            HelpItem("Previous / Next",
+                     "By default CC 102 / 103 change song and CC 104 / 105 step through snapshots. Tap ⋯ → Learn next to any of them, then press the pedal to assign it."),
+            HelpItem("Which song?",
+                     "MIDI acts on the song playing in Perform. When nothing is playing, it acts on the song you have open in Songs."),
+        ]),
+        HelpSection(title: "Bluetooth foot controllers", icon: "wave.3.right", items: [
+            HelpItem("Pairing",
+                     "Tap the wave button in Perform or MIDI Devices and pair the controller there. Bluetooth MIDI gear won't work if you only pair it in the iOS Bluetooth settings."),
+            HelpItem("Pedal fires twice",
+                     "Momentary footswitches send a value on press and 0 on release. Keep \"Ignore Value 0\" on so only the press counts."),
+            HelpItem("Nothing happens",
+                     "Open Settings → MIDI Receive & Control and press the pedal. \"Last Received\" shows exactly what arrived and why it was used or ignored — usually a channel mismatch."),
+        ]),
+    ]
+)
 
 private let midiClockTopic = HelpTopic(
     title: "MIDI Clock",

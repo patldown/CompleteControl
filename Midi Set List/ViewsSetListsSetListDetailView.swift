@@ -75,7 +75,7 @@ struct SetListDetailView: View {
                     if midiManager.connectedDevices.isEmpty {
                         Text("Connect a MIDI device to send commands")
                     } else {
-                        Text("Sends all commands from all songs in order")
+                        Text("Sends Snapshot 1 of every song, in order. To step through songs live, use the Perform tab.")
                     }
                 }
             }
@@ -476,4 +476,5 @@ struct QuickCreateSongView: View {
     return NavigationStack { SetListDetailView(setList: sl) }
         .environment(\.managedObjectContext, ctx)
         .environment(MIDIManager())
+        .environment(PerformanceSession())
 }

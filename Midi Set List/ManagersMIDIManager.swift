@@ -20,6 +20,14 @@ class MIDIManager {
     // Discovered devices
     private(set) var availableDevices: [MIDIDevice] = []
     private(set) var connectedDevices: Set<MIDIUniqueID> = []
+
+    /// MIDI inputs (controllers, foot pedals…) the app is listening to.
+    private(set) var availableSources: [MIDIDevice] = []
+    private var connectedSourceRefs: Set<MIDIEndpointRef> = []
+
+    /// Called on the main thread for every incoming CC, Program Change and Note On,
+    /// whatever its channel. Set by the app to drive snapshots and set list navigation.
+    var onRemoteMessage: ((MIDIRemoteMessage) -> Void)?
     
     // Status
     private(set) var isInitialized = false
@@ -100,48 +108,101 @@ class MIDIManager {
         }
     }
 
+    /// Splits a packet into channel messages. A packet can hold several messages
+    /// (common over Bluetooth) and may use running status.
     private func handleIncomingMIDI(bytes: [UInt8]) {
-        guard !bytes.isEmpty else { return }
-        let status = bytes[0]
-        guard status < 0xF8 else { return }   // ignore realtime messages (clock, etc.)
+        var i = 0
+        var runningStatus: UInt8 = 0
+        while i < bytes.count {
+            var status = bytes[i]
+            if status >= 0xF8 { i += 1; continue }          // realtime (clock etc.) — ignore
+            if status >= 0xF0 {                              // SysEx / system common — skip its data
+                i += 1
+                while i < bytes.count && bytes[i] < 0x80 { i += 1 }
+                if i < bytes.count && bytes[i] == 0xF7 { i += 1 }
+                runningStatus = 0
+                continue
+            }
+            if status & 0x80 != 0 {
+                runningStatus = status
+                i += 1
+            } else if runningStatus != 0 {
+                status = runningStatus
+            } else {
+                i += 1                                       // stray data byte
+                continue
+            }
+            let type = status & 0xF0
+            let dataLength = (type == 0xC0 || type == 0xD0) ? 1 : 2
+            guard i + dataLength <= bytes.count else { break }
+            handleChannelMessage(status: status, data1: bytes[i], data2: dataLength == 2 ? bytes[i + 1] : 0)
+            i += dataLength
+        }
+    }
 
+    private func handleChannelMessage(status: UInt8, data1: UInt8, data2: UInt8) {
         let messageType = status & 0xF0
         let ch = Int(status & 0x0F) + 1
+        var remote: MIDIRemoteMessage?
 
         switch messageType {
         case 0x90:
-            guard bytes.count >= 3 else { return }
-            let note = Int(bytes[1]), vel = Int(bytes[2])
+            let note = Int(data1), vel = Int(data2)
             let label = vel == 0 ? "Note Off \(note) [Ch \(ch)]" : "Note On \(note) vel \(vel) [Ch \(ch)]"
             activityLog?.log(label, direction: .in, proto: .midi)
+            if vel > 0 { remote = MIDIRemoteMessage(kind: .note, channel: ch, number: note, value: vel) }
         case 0x80:
-            guard bytes.count >= 2 else { return }
-            activityLog?.log("Note Off \(Int(bytes[1])) [Ch \(ch)]", direction: .in, proto: .midi)
+            activityLog?.log("Note Off \(Int(data1)) [Ch \(ch)]", direction: .in, proto: .midi)
         case 0xB0:
-            guard bytes.count >= 3 else { return }
-            let ccNum = Int(bytes[1]), ccVal = Int(bytes[2])
+            let ccNum = Int(data1), ccVal = Int(data2)
             let kind: ActivityLog.Entry.MIDIPayload.Kind = ccNum == 0 ? .bankSelectMSB
                                                          : ccNum == 32 ? .bankSelectLSB
                                                          : .controlChange
             let payload = ActivityLog.Entry.MIDIPayload(kind: kind, channel: ch, value1: ccNum, value2: ccVal)
             activityLog?.log("CC \(ccNum) = \(ccVal) [Ch \(ch)]", direction: .in, proto: .midi, midiPayload: payload)
+            remote = MIDIRemoteMessage(kind: .controlChange, channel: ch, number: ccNum, value: ccVal)
         case 0xC0:
-            guard bytes.count >= 2 else { return }
-            let prog = Int(bytes[1])
+            let prog = Int(data1)
             let payload = ActivityLog.Entry.MIDIPayload(kind: .programChange, channel: ch, value1: prog, value2: nil)
             activityLog?.log("PC \(prog) [Ch \(ch)]", direction: .in, proto: .midi, midiPayload: payload)
+            remote = MIDIRemoteMessage(kind: .programChange, channel: ch, number: prog, value: 127)
         default:
             break
         }
+
+        if let remote {
+            DispatchQueue.main.async { [weak self] in self?.onRemoteMessage?(remote) }
+        }
     }
 
+    /// Listens to every MIDI source once. Safe to call repeatedly (e.g. whenever
+    /// a Bluetooth controller connects or disconnects).
     private func connectAllSources() {
         guard inputPort != 0 else { return }
+        var current: Set<MIDIEndpointRef> = []
+        var sources: [MIDIDevice] = []
         let count = MIDIGetNumberOfSources()
         for i in 0..<count {
             let source = MIDIGetSource(i)
-            if source != 0 { MIDIPortConnectSource(inputPort, source, nil) }
+            guard source != 0 else { continue }
+            current.insert(source)
+            if !connectedSourceRefs.contains(source) {
+                MIDIPortConnectSource(inputPort, source, nil)
+            }
+
+            var uniqueID: MIDIUniqueID = 0
+            var name: Unmanaged<CFString>?
+            var manufacturer: Unmanaged<CFString>?
+            MIDIObjectGetIntegerProperty(source, kMIDIPropertyUniqueID, &uniqueID)
+            MIDIObjectGetStringProperty(source, kMIDIPropertyDisplayName, &name)
+            MIDIObjectGetStringProperty(source, kMIDIPropertyManufacturer, &manufacturer)
+            sources.append(MIDIDevice(id: uniqueID,
+                                      name: name?.takeRetainedValue() as String? ?? "Unknown Source",
+                                      manufacturer: manufacturer?.takeRetainedValue() as String?,
+                                      endpoint: source))
         }
+        connectedSourceRefs = current
+        availableSources = sources
     }
 
     private func cleanup() {
@@ -313,10 +374,15 @@ class MIDIManager {
         }
     }
 
-    /// Send all commands for a song, providing BPM as a formula variable.
+    /// Loads a song: sends its Snapshot 1, providing BPM as a formula variable.
     func sendSong(_ song: Song) async throws {
+        try await sendSnapshot(0, of: song)
+    }
+
+    /// Sends one snapshot's commands in order.
+    func sendSnapshot(_ index: Int, of song: Song) async throws {
         let ctx = FormulaEvaluator.Context.forSong(bpm: song.bpm)
-        try await sendCommandSequence(song.sortedCommands, formulaContext: ctx)
+        try await sendCommandSequence(song.commands(inSnapshot: index), formulaContext: ctx)
     }
     
     // MARK: - MIDI Packet Building

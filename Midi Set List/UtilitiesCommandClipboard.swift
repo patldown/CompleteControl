@@ -46,7 +46,7 @@ class CommandClipboard {
         }
     }
     
-    func paste(to song: Song, in context: NSManagedObjectContext) {
+    func paste(to song: Song, snapshot: Int = 0, in context: NSManagedObjectContext) {
         for commandData in copiedCommands {
             let newCommand = MIDICommand(
                 commandType: commandData.commandType,
@@ -57,7 +57,7 @@ class CommandClipboard {
                 notes: commandData.notes,
                 context: context
             )
-            song.addCommand(newCommand)
+            song.addCommand(newCommand, toSnapshot: snapshot)
         }
     }
     

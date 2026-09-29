@@ -301,17 +301,21 @@ class DeviceMacro: NSManagedObject, Identifiable {
             .values
             .compactMap(\.first)
             .filter { song in
-                let cmds = song.sortedCommands.filter { $0.sourceMacro?.objectID == objectID }
-                guard cmds.count == expected.count else { return true }
-                return zip(cmds, expected).contains { cmd, sig in
-                    cmd.commandType    != sig.type         ||
-                    cmd.channel        != sig.channel      ||
-                    cmd.value1         != sig.value1       ||
-                    cmd.value2         != sig.value2       ||
-                    trimmed(cmd.value1Formula) != sig.value1Formula ||
-                    trimmed(cmd.value2Formula) != sig.value2Formula ||
-                    cmd.oscAddress     != sig.oscAddress   ||
-                    trimmed(cmd.oscFormula)    != sig.oscFormula
+                // Each snapshot holding this macro is its own block
+                let snapshots = Set(song.commands.filter { $0.sourceMacro?.objectID == objectID }.map(\.snapshotIndex))
+                return snapshots.contains { snapshot in
+                    let cmds = song.commands(inSnapshot: snapshot).filter { $0.sourceMacro?.objectID == objectID }
+                    guard cmds.count == expected.count else { return true }
+                    return zip(cmds, expected).contains { cmd, sig in
+                        cmd.commandType    != sig.type         ||
+                        cmd.channel        != sig.channel      ||
+                        cmd.value1         != sig.value1       ||
+                        cmd.value2         != sig.value2       ||
+                        trimmed(cmd.value1Formula) != sig.value1Formula ||
+                        trimmed(cmd.value2Formula) != sig.value2Formula ||
+                        cmd.oscAddress     != sig.oscAddress   ||
+                        trimmed(cmd.oscFormula)    != sig.oscFormula
+                    }
                 }
             }
             .sorted { $0.name < $1.name }
