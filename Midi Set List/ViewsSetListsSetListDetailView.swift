@@ -124,6 +124,9 @@ struct SetListDetailView: View {
             ToolbarItem(placement: .primaryAction) {
                 EditButton()
             }
+            ToolbarItem(placement: .secondaryAction) {
+                ShareItemButton(object: setList, kindName: "Set List", itemName: setList.name)
+            }
             // Hidden when no AI is available
             if ai.isAvailable(.setListAssistant) {
                 ToolbarItem(placement: .primaryAction) {

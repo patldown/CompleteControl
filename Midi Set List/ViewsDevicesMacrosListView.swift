@@ -59,6 +59,9 @@ struct MacrosListView: View {
             }
             if !category.macros.isEmpty {
                 ToolbarItem(placement: .navigationBarLeading) { EditButton() }
+                ToolbarItem(placement: .secondaryAction) {
+                    ShareItemButton(object: category, kindName: "Macro Group", itemName: category.name)
+                }
             }
         }
         .sheet(isPresented: $showingAddMacro) {
@@ -129,6 +132,10 @@ struct MacroRow: View {
                 : "\(macro.name) is up to date")
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            // Shares the macro with its group and instrument (not the group's other macros)
+            ShareItemButton(object: macro, kindName: "Macro", itemName: macro.name)
+        }
     }
 }
 

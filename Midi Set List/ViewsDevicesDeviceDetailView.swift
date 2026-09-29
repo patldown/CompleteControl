@@ -180,6 +180,9 @@ struct DeviceDetailView: View {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("Edit") { showingEditDevice = true }
             }
+            ToolbarItem(placement: .secondaryAction) {
+                ShareItemButton(object: device, kindName: "Instrument", itemName: device.name)
+            }
         }
         .alert("New Category", isPresented: $showingAddCategory) {
             TextField("Category name", text: $newCategoryName)

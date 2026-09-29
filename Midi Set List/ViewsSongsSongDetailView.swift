@@ -373,6 +373,9 @@ struct SongDetailView: View {
             
             ToolbarItem(placement: .secondaryAction) {
                 Menu {
+                    ShareItemButton(object: song, kindName: "Song", itemName: song.name)
+                    Divider()
+
                     Button {
                         isSelectMode.toggle()
                         if !isSelectMode {

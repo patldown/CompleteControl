@@ -25,6 +25,7 @@ struct SettingsView: View {
                     aiUnavailableSection
                     apiKeysSection
                 }
+                BackupSection()
             }
             .animation(.default, value: ai.offlineMode)
             .navigationTitle("Settings")
