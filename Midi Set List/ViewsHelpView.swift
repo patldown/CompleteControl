@@ -125,6 +125,8 @@ private let performTopic = HelpTopic(
                      "Pick a set list and press Play. The first song loads and its Snapshot 1 is sent. Use Next / Previous to move through the set, and tap a snapshot to recall it."),
             HelpItem("Jumping around",
                      "The Songs menu (top right) jumps straight to any song in the set. The screen stays awake until you press End."),
+            HelpItem("Lyrics & charts",
+                     "A song's lyrics or chart show below its snapshots. Press play to auto-scroll, and use − / + to set the speed. The expand button fills the screen with lyrics while the snapshot row stays on top, so you can still recall snapshots."),
         ]),
         HelpSection(title: "MIDI control", icon: "slider.horizontal.below.rectangle", items: [
             HelpItem("Receive channel",

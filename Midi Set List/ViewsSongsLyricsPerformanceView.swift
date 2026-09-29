@@ -139,6 +139,8 @@ struct AutoScrollingTextView: UIViewRepresentable {
     @Binding var isScrolling: Bool
     @Binding var scrollSpeed: Double
     @Binding var resetTrigger: Bool
+    var fontSize: CGFloat = 24
+    var insets = UIEdgeInsets(top: 100, left: 32, bottom: 500, right: 32)
 
     func makeUIView(context: Context) -> UIScrollView {
         let scrollView = UIScrollView()
@@ -148,13 +150,13 @@ struct AutoScrollingTextView: UIViewRepresentable {
 
         let textView = UITextView()
         textView.text = text
-        textView.font = UIFont.monospacedSystemFont(ofSize: 24, weight: .regular)
+        textView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         textView.textColor = .white
         textView.backgroundColor = .clear
         textView.isEditable = false
         textView.isSelectable = false
         textView.isScrollEnabled = false
-        textView.textContainerInset = UIEdgeInsets(top: 100, left: 32, bottom: 500, right: 32)
+        textView.textContainerInset = insets
         textView.textContainer.lineBreakMode = .byWordWrapping
         textView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -177,8 +179,10 @@ struct AutoScrollingTextView: UIViewRepresentable {
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
 
-        if textView.text != text {
+        if textView.text != text || textView.font?.pointSize != fontSize || textView.textContainerInset != insets {
             textView.text = text
+            textView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            textView.textContainerInset = insets
             scrollView.setNeedsLayout()
             scrollView.layoutIfNeeded()
         }

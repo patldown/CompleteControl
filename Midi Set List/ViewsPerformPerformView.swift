@@ -142,48 +142,51 @@ private struct PerformPlayingView: View {
     @Environment(MIDIManager.self) private var midiManager
     @ObservedObject private var remote = MIDIRemoteSettings.shared
 
-    @State private var showingLyrics = false
     @State private var showingBTMIDI = false
+    /// Lyrics fill the window; the snapshot strip stays above them
+    @State private var lyricsExpanded = false
 
     var body: some View {
         let songs = performance.songs
         VStack(spacing: 0) {
             if let song = performance.currentSong {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 12) {
+                    if !lyricsExpanded {
                         PerformSongHeader(song: song, index: performance.songIndex, total: songs.count)
-
-                        if let error = performance.lastError {
-                            errorBanner(error)
-                        }
-
-                        PerformSnapshotGrid(song: song)
-
-                        if hasLyrics(song) {
-                            Button {
-                                showingLyrics = true
-                            } label: {
-                                Label("Lyrics / Chart", systemImage: "text.alignleft")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-                        }
-
-                        remoteStatus
                     }
-                    .padding()
+                    if let error = performance.lastError {
+                        errorBanner(error)
+                    }
                 }
-                .fullScreenCover(isPresented: $showingLyrics) {
-                    LyricsPerformanceView(song: song)
+                .padding(.horizontal)
+                .padding(.top, lyricsExpanded ? 8 : 12)
+
+                PerformSnapshotStrip(song: song)
+                    .id(song.objectID)
+                    .padding(.vertical, 10)
+
+                PerformLyricsPanel(song: song, isExpanded: $lyricsExpanded,
+                                   title: "\(performance.songIndex + 1)/\(songs.count) · \(song.name)")
+                    .id(song.objectID)  // new song, fresh scroll position
+                    .padding(.horizontal, lyricsExpanded ? 0 : 16)
+
+                if !lyricsExpanded {
+                    remoteStatus
+                        .padding(.horizontal)
+                        .padding(.top, 8)
                 }
             } else {
                 ContentUnavailableView("No Songs", systemImage: "music.note",
                                        description: Text("This set list has no songs."))
             }
 
-            navigationBar(songs: songs)
+            if !lyricsExpanded {
+                navigationBar(songs: songs)
+            }
         }
+        .animation(.default, value: lyricsExpanded)
+        .toolbar(lyricsExpanded ? .hidden : .visible, for: .navigationBar)
+        .toolbar(lyricsExpanded ? .hidden : .visible, for: .tabBar)
         .navigationTitle(performance.setList?.name ?? "Perform")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -224,10 +227,6 @@ private struct PerformPlayingView: View {
         .sheet(isPresented: $showingBTMIDI) {
             BTMIDIConnectSheet()
         }
-    }
-
-    private func hasLyrics(_ song: Song) -> Bool {
-        song.pdfFileURL != nil || !(song.lyrics ?? "").isEmpty
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -330,7 +329,7 @@ private struct PerformSongHeader: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(song.name)
-                .font(.largeTitle.bold())
+                .font(.title.bold())
                 .lineLimit(2)
                 .minimumScaleFactor(0.6)
             if let artist = song.artist, !artist.isEmpty {
@@ -354,65 +353,89 @@ private struct PerformSongHeader: View {
     }
 }
 
-// MARK: - Snapshot grid
+// MARK: - Snapshot strip
 
-private struct PerformSnapshotGrid: View {
+/// One scrolling row of compact snapshot cards. Selecting a snapshot — by tap or MIDI
+/// pedal — scrolls so the next card is in view too, so you can see what's coming.
+private struct PerformSnapshotStrip: View {
     @Environment(PerformanceSession.self) private var performance
     @ObservedObject var song: Song
     @ObservedObject private var remote = MIDIRemoteSettings.shared
 
-    private let columns = [GridItem(.adaptive(minimum: 150), spacing: 12)]
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Snapshots")
-                .font(.headline)
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(0..<song.snapshotCount, id: \.self) { index in
-                    snapshotButton(index)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(0..<song.snapshotCount, id: \.self) { index in
+                        snapshotButton(index, proxy: proxy)
+                            .id(index)
+                    }
                 }
+                .padding(.horizontal, 16)
+            }
+            .onChange(of: performance.activeSnapshot) { old, new in
+                reveal(new, movingForward: new >= old, proxy: proxy)
+            }
+            .onAppear {
+                reveal(performance.activeSnapshot, movingForward: true, proxy: proxy, animated: false)
             }
         }
     }
 
-    private func snapshotButton(_ index: Int) -> some View {
+    /// Scrolls just enough to show the selected card and, moving forward, the one after it.
+    /// Moving back, the selected card lands at the leading edge with the next one beside it.
+    private func reveal(_ index: Int, movingForward: Bool, proxy: ScrollViewProxy, animated: Bool = true) {
+        let last = song.snapshotCount - 1
+        guard last >= 0 else { return }
+        let target = movingForward ? min(index + 1, last) : min(index, last)
+        if animated {
+            withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(target) }
+        } else {
+            proxy.scrollTo(target)
+        }
+    }
+
+    private func snapshotButton(_ index: Int, proxy: ScrollViewProxy) -> some View {
         let isActive = performance.isActive(snapshot: index, of: song)
         let count = song.commands(inSnapshot: index).count
         return Button {
+            let previous = performance.activeSnapshot
             performance.selectSnapshot(index)
+            reveal(index, movingForward: index >= previous, proxy: proxy)
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
                     Text("\(index + 1)")
-                        .font(.caption.weight(.bold))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
                         .background(isActive ? Color.white.opacity(0.25) : Color.secondary.opacity(0.15),
                                     in: Capsule())
-                    Spacer()
+                    Spacer(minLength: 0)
                     if isActive && performance.isSending {
-                        ProgressView().controlSize(.small).tint(.white)
+                        ProgressView().controlSize(.mini).tint(.white)
                     } else if remote.isEnabled, let binding = remote.snapshotBinding(for: index) {
                         Text(binding.label)
                             .font(.caption2.monospacedDigit())
+                            .lineLimit(1)
                             .opacity(0.8)
                     }
                 }
                 Text(song.snapshotName(index))
-                    .font(.headline)
-                    .lineLimit(2)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.leading)
                 Text(count == 0 ? "Empty" : "\(count) command\(count == 1 ? "" : "s")")
-                    .font(.caption)
+                    .font(.caption2)
                     .opacity(0.8)
             }
             .foregroundStyle(isActive ? Color.white : Color.primary)
-            .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
-            .padding(12)
+            .frame(width: 128, alignment: .topLeading)
+            .padding(8)
             .background(isActive ? Color.accentColor : Color(.secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 14))
+                        in: RoundedRectangle(cornerRadius: 10))
             .overlay(
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(isActive ? Color.clear : Color.secondary.opacity(0.2))
             )
         }
