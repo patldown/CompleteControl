@@ -104,8 +104,11 @@ struct SongSnapshotsSection: View {
         let isLive = performance.isActive(snapshot: index, of: song)
         let count = song.commands(inSnapshot: index).count
 
-        return Button {
-            selected = index
+        // A Menu with a primary action, not a Button with .contextMenu: the whole strip is one
+        // List row, and a context menu inside a row lifts the entire row and can open the
+        // first chip's menu instead of the pressed one. Each Menu owns its own long-press.
+        return Menu {
+            chipMenu(index, count: count)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
@@ -133,54 +136,61 @@ struct SongSnapshotsSection: View {
             .frame(minWidth: 96, alignment: .leading)
             .background(isSelected ? Color.accentColor : Color(.tertiarySystemFill),
                         in: RoundedRectangle(cornerRadius: 10))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        } primaryAction: {
+            selected = index
         }
+        .menuStyle(.button)
         .buttonStyle(.plain)
-        .contextMenu {
+        .menuIndicator(.hidden)
+    }
+
+    @ViewBuilder
+    private func chipMenu(_ index: Int, count: Int) -> some View {
+        Button {
+            renameText = song.snapshotName(index)
+            renamingIndex = index
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        if song.canAddSnapshot {
             Button {
-                renameText = song.snapshotName(index)
-                renamingIndex = index
+                if let newIndex = song.duplicateSnapshot(index, in: viewContext) {
+                    try? viewContext.save()
+                    selected = newIndex
+                }
             } label: {
-                Label("Rename", systemImage: "pencil")
+                Label("Duplicate", systemImage: "plus.square.on.square")
             }
-            if song.canAddSnapshot {
+        }
+        if remote.isEnabled {
+            Button {
+                performance.learnTarget = .snapshot(index)
+            } label: {
+                Label("Learn MIDI Trigger", systemImage: "ear")
+            }
+            if remote.hasOverride(forSnapshot: index) {
                 Button {
-                    if let newIndex = song.duplicateSnapshot(index, in: viewContext) {
-                        try? viewContext.save()
-                        selected = newIndex
-                    }
+                    remote.setBinding(nil, for: .snapshot(index))
                 } label: {
-                    Label("Duplicate", systemImage: "plus.square.on.square")
+                    Label("Use Counted MIDI Number", systemImage: "arrow.uturn.backward")
                 }
             }
-            if remote.isEnabled {
-                Button {
-                    performance.learnTarget = .snapshot(index)
-                } label: {
-                    Label("Learn MIDI Trigger", systemImage: "ear")
-                }
-                if remote.hasOverride(forSnapshot: index) {
-                    Button {
-                        remote.setBinding(nil, for: .snapshot(index))
-                    } label: {
-                        Label("Use Counted MIDI Number", systemImage: "arrow.uturn.backward")
-                    }
-                }
+        }
+        if count > 0 {
+            Button {
+                performance.focus(song)
+                performance.selectSnapshot(index)
+            } label: {
+                Label("Send Now", systemImage: "paperplane")
             }
-            if count > 0 {
-                Button {
-                    performance.focus(song)
-                    performance.selectSnapshot(index)
-                } label: {
-                    Label("Send Now", systemImage: "paperplane")
-                }
-            }
-            if song.snapshotCount > 1 {
-                Divider()
-                Button(role: .destructive) {
-                    deletingIndex = index
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
+        }
+        if song.snapshotCount > 1 {
+            Divider()
+            Button(role: .destructive) {
+                deletingIndex = index
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
     }
