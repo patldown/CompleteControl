@@ -6,10 +6,12 @@
 import SwiftUI
 import CoreData
 import UniformTypeIdentifiers
+import FoundationModels
 
 struct DeviceDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @ObservedObject var device: InstrumentDevice
+    @ObservedObject private var ai = AISettings.shared
 
     @State private var showingAddCategory = false
     @State private var showingEditDevice = false
@@ -99,6 +101,10 @@ struct DeviceDetailView: View {
             }
 
             Section {
+                if ai.offlineMode {
+                    OfflineModeBanner(detail: "AI features for this device run on-device")
+                        .listRowInsets(EdgeInsets())
+                }
                 if memoryExists {
                     Button { showingMemory = true } label: {
                         HStack(spacing: 12) {
@@ -128,7 +134,13 @@ struct DeviceDetailView: View {
                         .font(.subheadline)
                 }
             } header: {
-                Text("AI Memory")
+                HStack {
+                    Text("AI Memory")
+                    if ai.offlineMode {
+                        Spacer()
+                        OfflineModeBadge()
+                    }
+                }
             } footer: {
                 Text("Corrections saved from the macro chat are always injected into future AI sessions for this device.")
             }
@@ -236,6 +248,7 @@ struct DeviceDetailView: View {
 private struct DeviceMemorySheet: View {
     let device: InstrumentDevice
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var ai = AISettings.shared
     @State private var content: String = ""
     @State private var copied = false
     @State private var isEditing = false
@@ -291,6 +304,9 @@ private struct DeviceMemorySheet: View {
                     }
                 }
             }
+            .safeAreaInset(edge: .top) {
+                if ai.offlineMode { OfflineModeBanner() }
+            }
             .safeAreaInset(edge: .bottom) {
                 if !isEditing && !content.isEmpty {
                     Button {
@@ -301,14 +317,16 @@ private struct DeviceMemorySheet: View {
                                 ProgressView().scaleEffect(0.8)
                                 Text("Compacting…")
                             } else {
-                                Image(systemName: "sparkles")
-                                Text("Compact with AI")
+                                Image(systemName: ai.offlineMode ? "airplane" : "sparkles")
+                                Text(ai.offlineMode ? "Compact with On-Device AI" : "Compact with AI")
                             }
                         }
                         .font(.subheadline.weight(.medium))
+                        .foregroundStyle(ai.offlineMode ? Color.offlineMode : .primary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                        .offlineModeOutline(ai.offlineMode, cornerRadius: 12)
                         .padding(.horizontal)
                         .padding(.bottom, 4)
                     }
@@ -334,11 +352,14 @@ private struct DeviceMemorySheet: View {
 
     @MainActor
     private func compactMemory() async {
-        let ai = AISettings.shared
         let provider = ai.provider(for: .macroChat)
-        guard provider != .onDevice,
-              let apiKey = provider == .openAI ? ai.openAIKey : ai.anthropicKey
-        else {
+        let apiKey = provider == .openAI ? ai.openAIKey : ai.anthropicKey
+        if ai.offlineMode {
+            guard SystemLanguageModel.default.isAvailable else {
+                compactError = "Offline mode uses on-device AI, which needs Apple Intelligence on this device. Turn off Offline Mode in Settings to compact with Claude or ChatGPT."
+                return
+            }
+        } else if provider == .onDevice || apiKey == nil {
             compactError = "Compact requires an external AI provider. Configure Claude or ChatGPT in Settings → Task Routing → Macro Chat."
             return
         }
@@ -377,16 +398,22 @@ private struct DeviceMemorySheet: View {
             """
 
         do {
-            let response = try await ExternalAIClient.chat(
-                provider: provider,
-                apiKey: apiKey,
-                systemPrompt: systemPrompt,
-                messages: [ExternalAIMessage(role: "user", content: content)],
-                workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
-                anthropicModelID: ai.anthropicModel(for: .macroChat),
-                anthropicThinking: false
-            )
-            content = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text: String
+            if ai.offlineMode {
+                let session = LanguageModelSession(instructions: systemPrompt)
+                text = try await session.respond(to: content).content
+            } else {
+                text = try await ExternalAIClient.chat(
+                    provider: provider,
+                    apiKey: apiKey ?? "",
+                    systemPrompt: systemPrompt,
+                    messages: [ExternalAIMessage(role: "user", content: content)],
+                    workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
+                    anthropicModelID: ai.anthropicModel(for: .macroChat),
+                    anthropicThinking: false
+                ).text
+            }
+            content = text.trimmingCharacters(in: .whitespacesAndNewlines)
             saveEdits()
             isEditing = true  // drop into edit mode so user can review the result
         } catch {

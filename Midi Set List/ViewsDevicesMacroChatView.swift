@@ -89,15 +89,21 @@ struct MacroChatView: View {
     private var onDeviceAvailable: Bool { SystemLanguageModel.default.isAvailable }
     private var activeProvider: AIProviderType { aiSettings.provider(for: .macroChat) }
     private var canUseAI: Bool { activeProvider != .onDevice || onDeviceAvailable }
+    private var isOffline: Bool { aiSettings.offlineMode }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                if isOffline {
+                    OfflineModeBanner()
+                }
                 if !canUseAI {
                     ContentUnavailableView(
                         "AI Not Available",
-                        systemImage: "brain.head.profile",
-                        description: Text("Requires Apple Intelligence (iPhone 15 Pro / iPhone 16+, iOS 18.1+) or an external AI key configured in Settings.")
+                        systemImage: isOffline ? "airplane" : "brain.head.profile",
+                        description: Text(isOffline
+                            ? "Offline mode needs Apple Intelligence (iPhone 15 Pro / iPhone 16+, iOS 18.1+). Turn off Offline Mode in Settings to use an external AI."
+                            : "Requires Apple Intelligence (iPhone 15 Pro / iPhone 16+, iOS 18.1+) or an external AI key configured in Settings.")
                     )
                 } else {
                     messageList
@@ -146,8 +152,9 @@ struct MacroChatView: View {
                             Image(systemName: activeProvider.icon).font(.caption2)
                             Text("\(device.name)  ·  \(category.name)  ·  \(activeProvider.displayName)")
                                 .font(.caption)
+                            if isOffline { OfflineModeBadge() }
                         }
-                        if !chatSession.sessionModelID.isEmpty {
+                        if !chatSession.sessionModelID.isEmpty && !isOffline {
                             Text(chatSession.sessionModelID).font(.caption2).foregroundStyle(.tertiary)
                         }
                         if chatSession.sessionCost > 0 {
@@ -280,15 +287,16 @@ struct MacroChatView: View {
 
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("Describe a macro…", text: $input, axis: .vertical)
+            TextField(isOffline ? "Describe a macro (on-device)…" : "Describe a macro…", text: $input, axis: .vertical)
                 .lineLimit(1...4).textFieldStyle(.plain)
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
+                .offlineModeOutline(isOffline)
 
             Button { Task { await generate() } } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 32))
-                    .foregroundStyle(canSend ? .blue : Color(.tertiaryLabel))
+                    .foregroundStyle(canSend ? (isOffline ? Color.offlineMode : .blue) : Color(.tertiaryLabel))
             }
             .disabled(!canSend)
         }
@@ -327,7 +335,10 @@ struct MacroChatView: View {
         guard !chatSession.isSetup else { return }
         chatSession.isSetup = true
         guard activeProvider == .onDevice, onDeviceAvailable else { return }
+        chatSession.languageModelSession = makeOnDeviceSession()
+    }
 
+    private func makeOnDeviceSession() -> LanguageModelSession {
         let specContext = DeviceSpecManager.specContext(for: device)
         var instructions = """
             You are a MIDI macro assistant for the app "Midi Set List."
@@ -354,7 +365,7 @@ struct MacroChatView: View {
                 When refining a previous result, adjust only what changed.
                 """
         }
-        chatSession.languageModelSession = LanguageModelSession(instructions: instructions)
+        return LanguageModelSession(instructions: instructions)
     }
 
     @MainActor
@@ -369,7 +380,10 @@ struct MacroChatView: View {
         do {
             let macro: ParsedMacro
             if activeProvider == .onDevice {
-                guard let session = chatSession.languageModelSession else { chatSession.isGenerating = false; return }
+                // Offline mode may have been switched on mid-chat — create the local session on demand
+                guard onDeviceAvailable else { throw ExternalAIError.apiError("On-device AI is not available.") }
+                let session = chatSession.languageModelSession ?? makeOnDeviceSession()
+                chatSession.languageModelSession = session
                 let response = try await session.respond(to: text, generating: GeneratedSingleMacro.self)
                 macro = ParsedMacro(response.content)
                 // No cost for on-device processing

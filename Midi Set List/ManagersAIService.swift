@@ -135,6 +135,12 @@ class AISettings: ObservableObject {
     // Triggers UI refresh when a key is saved or cleared
     @Published var keyVersion: Int = 0
 
+    // Offline mode — forces every AI task onto the on-device model, regardless of
+    // the routing or Anthropic model chosen. Nothing leaves the device while on.
+    @Published var offlineMode: Bool = UserDefaults.standard.bool(forKey: "ai_offline_mode") {
+        didSet { UserDefaults.standard.set(offlineMode, forKey: "ai_offline_mode") }
+    }
+
     var openAIKey: String? {
         get { AppKeychain.load(for: "openai_api_key") }
         set { updateKey(newValue, for: "openai_api_key") }
@@ -178,7 +184,7 @@ class AISettings: ObservableObject {
     @Published var availableAnthropicModels: [AnthropicModelInfo] = AnthropicModelInfo.fallbacks
 
     func fetchAnthropicModels() async {
-        guard let key = anthropicKey else { return }
+        guard !offlineMode, let key = anthropicKey else { return }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models")!)
         req.setValue(key, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
@@ -195,8 +201,10 @@ class AISettings: ObservableObject {
         await MainActor.run { self.availableAnthropicModels = models }
     }
 
-    // Returns the configured provider, falling back to on-device if no key
+    // Returns the configured provider, falling back to on-device if no key.
+    // Offline mode always wins and routes to on-device.
     func provider(for task: AITask) -> AIProviderType {
+        if offlineMode { return .onDevice }
         let selected = routing[task, default: .onDevice]
         switch selected {
         case .openAI    where hasOpenAIKey:    return .openAI
@@ -276,6 +284,8 @@ enum ExternalAIClient {
         anthropicModelID: String = "claude-sonnet-4-6",
         anthropicThinking: Bool = false
     ) async throws -> AIResponse {
+        // Hard stop: never make a network call while offline mode is on
+        guard !AISettings.shared.offlineMode else { throw ExternalAIError.offlineMode }
         switch provider {
         case .openAI:    return try await openAI(apiKey: apiKey, system: systemPrompt, messages: messages)
         case .anthropic: return try await anthropic(apiKey: apiKey, workspaceID: workspaceID, modelID: anthropicModelID, thinking: anthropicThinking, system: systemPrompt, messages: messages)
@@ -358,12 +368,14 @@ enum ExternalAIError: Error, LocalizedError {
     case notConfigured
     case apiError(String)
     case parseError
+    case offlineMode
 
     var errorDescription: String? {
         switch self {
         case .notConfigured: return "No external AI provider configured. Add an API key in Settings."
         case .apiError(let msg): return "API error: \(msg)"
         case .parseError:        return "Could not parse the AI response. Try again."
+        case .offlineMode:       return "Offline mode is on — external AI is disabled. Turn it off in Settings to use Claude or ChatGPT."
         }
     }
 }

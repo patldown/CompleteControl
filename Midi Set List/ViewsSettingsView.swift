@@ -11,12 +11,40 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                offlineModeSection
                 apiKeysSection
                 taskRoutingSection
                 activeProvidersSection
             }
+            .animation(.default, value: ai.offlineMode)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
+        }
+    }
+
+    // MARK: - Offline Mode
+
+    private var offlineModeSection: some View {
+        Section {
+            if ai.offlineMode {
+                OfflineModeBanner()
+                    .listRowInsets(EdgeInsets())
+            }
+            Toggle(isOn: $ai.offlineMode) {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Offline Mode").font(.body.weight(.semibold))
+                        Text("Force on-device AI for every task")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "airplane")
+                        .foregroundStyle(ai.offlineMode ? Color.offlineMode : .secondary)
+                }
+            }
+            .tint(.offlineMode)
+        } footer: {
+            Text("When on, every AI feature uses the on-device model — whatever provider or model is picked below. No requests are sent to Claude or ChatGPT. Your routing choices come back when you turn it off.")
         }
     }
 
@@ -67,9 +95,16 @@ struct SettingsView: View {
         } header: {
             Text("Task Routing")
         } footer: {
-            Text("Choose which AI handles each task. External providers give higher quality but require a network connection and incur API costs.")
+            if ai.offlineMode {
+                Label("Overridden by Offline Mode — all tasks use On-Device.", systemImage: "airplane")
+                    .foregroundStyle(Color.offlineMode)
+            } else {
+                Text("Choose which AI handles each task. External providers give higher quality but require a network connection and incur API costs.")
+            }
         }
-        .task { await ai.fetchAnthropicModels() }
+        .disabled(ai.offlineMode)
+        .opacity(ai.offlineMode ? 0.5 : 1)
+        .task(id: ai.offlineMode) { await ai.fetchAnthropicModels() }
     }
 
     // MARK: - Active providers summary
@@ -79,10 +114,10 @@ struct SettingsView: View {
             ForEach(AITask.allCases, id: \.rawValue) { task in
                 let resolved = ai.provider(for: task)
                 let configured = ai.routing[task, default: .onDevice]
-                let mismatch = configured != .onDevice && resolved == .onDevice
+                let mismatch = !ai.offlineMode && configured != .onDevice && resolved == .onDevice
                 HStack(spacing: 10) {
                     Image(systemName: resolved.icon)
-                        .foregroundStyle(mismatch ? .orange : .secondary)
+                        .foregroundStyle(ai.offlineMode ? Color.offlineMode : mismatch ? .orange : .secondary)
                         .frame(width: 20)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(task.displayName)
@@ -95,6 +130,10 @@ struct SettingsView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.orange)
                         }
+                    }
+                    if ai.offlineMode {
+                        Spacer()
+                        OfflineModeBadge()
                     }
                 }
                 .padding(.vertical, 2)

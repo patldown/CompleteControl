@@ -9,6 +9,8 @@ import SwiftUI
 import CoreData
 
 struct ContentView: View {
+    @ObservedObject private var ai = AISettings.shared
+
     var body: some View {
         TabView {
             Tab("Set Lists", systemImage: "list.bullet") {
@@ -38,6 +40,7 @@ struct ContentView: View {
             Tab("Settings", systemImage: "gear") {
                 SettingsView()
             }
+            .badge(ai.offlineMode ? Text("Offline") : nil)
         }
     }
 }

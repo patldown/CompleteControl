@@ -14,6 +14,7 @@ struct MacrosListView: View {
     let device: InstrumentDevice
 
     @StateObject private var chatSession = MacroChatSession()
+    @ObservedObject private var ai = AISettings.shared
     @State private var showingAddMacro = false
     @State private var macroToEdit: DeviceMacro?
     @State private var macroToSync: DeviceMacro?
@@ -44,7 +45,12 @@ struct MacrosListView: View {
                 Button { showingAddMacro = true } label: { Image(systemName: "plus") }
             }
             ToolbarItem(placement: .primaryAction) {
-                Button { showingChatView = true } label: { Image(systemName: "wand.and.stars") }
+                Button { showingChatView = true } label: {
+                    Image(systemName: "wand.and.stars")
+                        .foregroundStyle(ai.offlineMode ? Color.offlineMode : .accentColor)
+                        .offlineModeDot(ai.offlineMode)
+                }
+                .accessibilityLabel(ai.offlineMode ? "Generate macros (offline, on-device)" : "Generate macros")
             }
             if !category.macros.isEmpty {
                 ToolbarItem(placement: .navigationBarLeading) { EditButton() }
