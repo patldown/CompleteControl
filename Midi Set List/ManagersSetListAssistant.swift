@@ -95,6 +95,7 @@ enum SetListAssistant {
                 var parts = ["\(id) | \(song.name)"]
                 if let artist = song.artist, !artist.isEmpty { parts[0] += " — \(artist)" }
                 if let bpm = song.bpm { parts.append("\(bpm) BPM") }
+                if let key = song.currentKey { parts.append("Key \(key.root) \(key.scale.rawValue)") }
                 if !song.genres.isEmpty { parts.append(song.genres.joined(separator: "/")) }
                 if let ts = song.timeSignature, !ts.isEmpty { parts.append(ts) }
                 lines.append(parts.joined(separator: " | "))

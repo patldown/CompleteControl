@@ -23,12 +23,61 @@ class Song: NSManagedObject, Identifiable {
     @NSManaged var dateCreated: Date
     @NSManaged var dateModified: Date
 
+    /// Key root spelling ("A", "F#", "Bb"), nil = no key set
+    @NSManaged var keyRoot: String?
+    /// MusicalScale raw value
+    @NSManaged var keyScaleRaw: String?
+    @NSManaged private var transposeRaw: Int16
+    @NSManaged var capoEnabled: Bool
+    @NSManaged private var capoRaw: Int16
+
     // bpm is stored as NSNumber? so nil means "no clock"
     @NSManaged private var bpmRaw: NSNumber?
     var bpm: Int? {
         get { bpmRaw?.intValue }
         set { bpmRaw = newValue.map { NSNumber(value: $0) } }
     }
+
+    // ── Key, transpose & capo ──────────────────────────────────────────
+    static let transposeRange = -6...6
+    static let capoRange = 0...11
+
+    /// The key the song is written in (before transposing)
+    var originalKey: MusicalKey? {
+        get {
+            guard let keyRoot, NoteName.pitchClass(keyRoot) != nil else { return nil }
+            return MusicalKey(root: keyRoot, scale: keyScaleRaw.flatMap(MusicalScale.init(rawValue:)) ?? .major)
+        }
+        set {
+            keyRoot = newValue?.root
+            keyScaleRaw = newValue?.scale.rawValue
+        }
+    }
+
+    /// Semitones the chords and key are shown shifted by, -6…+6. Lyrics are never rewritten.
+    var transpose: Int {
+        get { Int(transposeRaw) }
+        set { transposeRaw = Int16(min(max(newValue, Self.transposeRange.lowerBound), Self.transposeRange.upperBound)) }
+    }
+
+    /// The key after transposing
+    var currentKey: MusicalKey? { originalKey?.transposed(by: transpose) }
+
+    /// Capo fret the original chart is written for
+    var capo: Int {
+        get { Int(capoRaw) }
+        set { capoRaw = Int16(min(max(newValue, Self.capoRange.lowerBound), Self.capoRange.upperBound)) }
+    }
+
+    /// Capo fret after transposing: shifting up a semitone moves the capo up one fret.
+    /// Nil when that would need a capo below the nut.
+    var effectiveCapo: Int? {
+        let fret = capo + transpose
+        return fret >= 0 ? fret : nil
+    }
+
+    /// Chord spelling for lyrics: from the key when set, otherwise decided per chord
+    var chordsPreferFlats: Bool? { currentKey?.prefersFlats }
 
     // ── Relationships (raw Core Data storage) ──────────────────────────
     @NSManaged private var commandsRaw: NSSet

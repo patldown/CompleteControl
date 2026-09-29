@@ -376,11 +376,14 @@ private struct PerformSongHeader: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
-            if let bpm = song.bpm {
-                let signature = song.timeSignature.map { " · " + $0 } ?? ""
-                Label("\(bpm) BPM\(signature)", systemImage: "metronome")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            if song.bpm != nil || song.currentKey != nil || song.capoEnabled {
+                // Wraps onto a second line on narrow screens rather than truncating
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) { musicDetails }
+                    VStack(alignment: .leading, spacing: 4) { musicDetails }
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             }
             if let notes = song.notes, !notes.isEmpty {
                 Text(notes)
@@ -389,6 +392,30 @@ private struct PerformSongHeader: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var musicDetails: some View {
+        if let bpm = song.bpm {
+            let signature = song.timeSignature.map { " · " + $0 } ?? ""
+            Label("\(bpm) BPM\(signature)", systemImage: "metronome")
+        }
+        if let key = song.currentKey {
+            HStack(spacing: 4) {
+                Label(key.displayName, systemImage: "music.note")
+                if song.transpose != 0 {
+                    Text("(\(TransposeMenu.offsetLabel(song.transpose)))")
+                        .monospacedDigit()
+                }
+            }
+        }
+        if song.capoEnabled {
+            if let fret = song.effectiveCapo {
+                Label(fret == 0 ? "No Capo" : "Capo \(fret)", systemImage: "guitars")
+            } else {
+                Label("Capo: below nut", systemImage: "guitars")
+            }
+        }
     }
 }
 

@@ -183,6 +183,14 @@ struct SongRowView: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
+
+                if let key = song.currentKey {
+                    Text("·").foregroundStyle(.tertiary).font(.caption)
+                    Text(key.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(.vertical, 4)

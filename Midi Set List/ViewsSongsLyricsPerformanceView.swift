@@ -40,7 +40,9 @@ struct LyricsPerformanceView: View {
                         isScrolling: $isAutoScrolling,
                         scrollSpeed: $scrollSpeed,
                         resetTrigger: $resetTrigger,
-                        insets: UIEdgeInsets(top: 24, left: 32, bottom: 500, right: 32)
+                        insets: UIEdgeInsets(top: 24, left: 32, bottom: 500, right: 32),
+                        transpose: song.transpose,
+                        chordsPreferFlats: song.chordsPreferFlats
                     )
                 }
             }
@@ -156,11 +158,36 @@ struct AutoScrollingTextView: UIViewRepresentable {
     @Binding var resetTrigger: Bool
     var fontSize: CGFloat = 24
     var insets = UIEdgeInsets(top: 100, left: 32, bottom: 500, right: 32)
+    /// Semitones to shift recognised chords by
+    var transpose: Int = 0
+    /// Chord spelling from the song's key; nil lets each chord decide
+    var chordsPreferFlats: Bool? = nil
     @AppStorage(AutoScrollingTextView.leadInLinesKey) private var leadInLines = AutoScrollingTextView.defaultLeadInLines
 
     /// Blank lines first, so the opening lyrics start lower and auto-scroll eases into them
     private var displayText: String {
         String(repeating: "\n", count: min(max(leadInLines, 0), 10)) + text
+    }
+
+    /// Recognised chords are tinted and bold, so it's clear which ones will transpose
+    static let chordColor = UIColor.systemYellow
+
+    private var renderKey: String {
+        "\(displayText.hashValue)|\(fontSize)|\(insets)|\(transpose)|\(String(describing: chordsPreferFlats))"
+    }
+
+    private func applyText(to textView: UITextView) {
+        let rendered = ChordEngine.render(displayText, transpose: transpose, flats: chordsPreferFlats)
+        let attributed = NSMutableAttributedString(string: rendered.text, attributes: [
+            .font: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
+            .foregroundColor: UIColor.white,
+        ])
+        let chordFont = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+        for range in rendered.chordRanges {
+            attributed.addAttributes([.foregroundColor: Self.chordColor, .font: chordFont], range: range)
+        }
+        textView.attributedText = attributed
+        textView.textContainerInset = insets
     }
 
     func makeUIView(context: Context) -> UIScrollView {
@@ -170,14 +197,12 @@ struct AutoScrollingTextView: UIViewRepresentable {
         scrollView.showsHorizontalScrollIndicator = false
 
         let textView = UITextView()
-        textView.text = displayText
-        textView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        textView.textColor = .white
         textView.backgroundColor = .clear
         textView.isEditable = false
         textView.isSelectable = false
         textView.isScrollEnabled = false
-        textView.textContainerInset = insets
+        applyText(to: textView)
+        context.coordinator.lastRenderKey = renderKey
         textView.textContainer.lineBreakMode = .byWordWrapping
         textView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -200,10 +225,9 @@ struct AutoScrollingTextView: UIViewRepresentable {
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
 
-        if textView.text != displayText || textView.font?.pointSize != fontSize || textView.textContainerInset != insets {
-            textView.text = displayText
-            textView.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-            textView.textContainerInset = insets
+        if context.coordinator.lastRenderKey != renderKey {
+            context.coordinator.lastRenderKey = renderKey
+            applyText(to: textView)
             scrollView.setNeedsLayout()
             scrollView.layoutIfNeeded()
         }
@@ -230,6 +254,7 @@ struct AutoScrollingTextView: UIViewRepresentable {
         private var displayLink: CADisplayLink?
         private var currentSpeed: Double = 0
         var lastResetTrigger: Bool = false
+        var lastRenderKey = ""
 
         func startScrolling(speed: Double) {
             currentSpeed = speed

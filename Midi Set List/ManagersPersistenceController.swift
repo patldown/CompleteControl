@@ -133,6 +133,11 @@ final class PersistenceController {
             attr("bpmRaw",        .integer32AttributeType, optional: true),
             attr("timeSignature", .stringAttributeType,    optional: true),
             attr("snapshotNamesData", .stringAttributeType, optional: true),
+            attr("keyRoot",       .stringAttributeType,    optional: true),
+            attr("keyScaleRaw",   .stringAttributeType,    optional: true),
+            attr("transposeRaw",  .integer16AttributeType, defaultValue: Int16(0)),
+            attr("capoEnabled",   .booleanAttributeType,   defaultValue: false),
+            attr("capoRaw",       .integer16AttributeType, defaultValue: Int16(0)),
             attr("dateCreated",   .dateAttributeType),
             attr("dateModified",  .dateAttributeType),
         ]

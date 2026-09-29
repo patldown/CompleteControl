@@ -127,6 +127,10 @@ private let performTopic = HelpTopic(
                      "The Songs menu (top right) jumps straight to any song in the set. The screen stays awake until you press End."),
             HelpItem("Lyrics & charts",
                      "A song's lyrics or chart show below its snapshots. Press play to auto-scroll, and use − / + to set the speed. The expand button fills the screen with lyrics while the snapshot row stays on top, so you can still recall snapshots."),
+            HelpItem("Chords, key & transpose",
+                     "Chords in lyrics show in yellow when they're recognised — either a line of just chords above the words (G  D/F♯  Em7) or inline in brackets ([G]). The ± button on the lyrics bar moves them up or down, up to 6 semitones, and the song's key moves with them. Your saved lyrics aren't changed."),
+            HelpItem("Capo",
+                     "Turn on Capo in a song's Key & Capo section and set the fret the chart uses. On the Perform screen it shows next to the BPM and key, and moves one fret per semitone when you transpose."),
         ]),
         HelpSection(title: "MIDI control", icon: "slider.horizontal.below.rectangle", items: [
             HelpItem("Receive channel",

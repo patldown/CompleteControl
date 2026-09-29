@@ -85,6 +85,8 @@ struct SongDetailView: View {
                 }
             }
             
+            keySection
+
             // MIDI Clock Section
             Section {
                 Toggle("Enable MIDI Clock", isOn: Binding(
@@ -520,6 +522,90 @@ struct SongDetailView: View {
         .onChange(of: song.bpm)    { _, _ in song.dateModified = Date(); try? viewContext.save() }
     }
     
+    // MARK: - Key, transpose & capo
+
+    private func saveSong() {
+        song.dateModified = Date()
+        try? viewContext.save()
+    }
+
+    private var keySection: some View {
+        Section {
+            Picker("Key", selection: Binding(
+                get: { song.keyRoot ?? "" },
+                set: { root in
+                    if root.isEmpty {
+                        song.originalKey = nil
+                    } else {
+                        song.originalKey = MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
+                    }
+                    saveSong()
+                }
+            )) {
+                Text("None").tag("")
+                ForEach(NoteName.pickerRoots, id: \.self) { root in
+                    Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
+                        .tag(root)
+                }
+            }
+
+            if let key = song.originalKey {
+                Picker("Scale", selection: Binding(
+                    get: { key.scale },
+                    set: { song.originalKey = MusicalKey(root: key.root, scale: $0); saveSong() }
+                )) {
+                    ForEach(MusicalScale.allCases) { scale in
+                        Text(scale.rawValue).tag(scale)
+                    }
+                }
+            }
+
+            Stepper(value: Binding(
+                get: { song.transpose },
+                set: { song.transpose = $0; saveSong() }
+            ), in: Song.transposeRange) {
+                LabeledContent("Transpose") {
+                    Text(song.transpose == 0 ? "Original" : "\(TransposeMenu.offsetLabel(song.transpose)) semitones")
+                        .monospacedDigit()
+                }
+            }
+
+            if song.transpose != 0, let key = song.currentKey {
+                LabeledContent("Now Playing In", value: key.displayName)
+            }
+
+            Toggle("Capo", isOn: Binding(
+                get: { song.capoEnabled },
+                set: { song.capoEnabled = $0; saveSong() }
+            ))
+
+            if song.capoEnabled {
+                Stepper(value: Binding(
+                    get: { song.capo },
+                    set: { song.capo = $0; saveSong() }
+                ), in: Song.capoRange) {
+                    LabeledContent("Chart Capo Fret") {
+                        Text(song.capo == 0 ? "None" : "\(song.capo)")
+                            .monospacedDigit()
+                    }
+                }
+                if song.transpose != 0 {
+                    LabeledContent("Capo After Transpose") {
+                        if let fret = song.effectiveCapo {
+                            Text(fret == 0 ? "None" : "\(fret)")
+                        } else {
+                            Text("Below nut")
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Key & Capo")
+        } footer: {
+            Text("Transpose moves the key and the chords in the lyrics up or down, without changing the saved lyrics. With Capo on, the capo moves with it — one fret per semitone — and shows on the Perform screen.")
+        }
+    }
+
     private var snapshotCommands: [MIDICommand] {
         song.commands(inSnapshot: selectedSnapshot)
     }

@@ -11,6 +11,7 @@ import SwiftUI
 import CoreData
 
 struct PerformLyricsPanel: View {
+    @Environment(\.managedObjectContext) private var viewContext
     @ObservedObject var song: Song
     @Binding var isExpanded: Bool
     /// Shown in the control bar while expanded, since the song header is hidden then
@@ -56,7 +57,9 @@ struct PerformLyricsPanel: View {
                 fontSize: isExpanded ? 24 : 19,
                 insets: isExpanded
                     ? UIEdgeInsets(top: 24, left: 32, bottom: 400, right: 32)
-                    : UIEdgeInsets(top: 12, left: 16, bottom: 200, right: 16)
+                    : UIEdgeInsets(top: 12, left: 16, bottom: 200, right: 16),
+                transpose: song.transpose,
+                chordsPreferFlats: song.chordsPreferFlats
             )
         }
     }
@@ -64,7 +67,7 @@ struct PerformLyricsPanel: View {
     // MARK: Controls
 
     private var controlBar: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Button {
                 isAutoScrolling = false
                 showingEditLyrics = true
@@ -81,6 +84,8 @@ struct PerformLyricsPanel: View {
             Spacer(minLength: 0)
 
             if song.pdfFileURL == nil {
+                TransposeMenu(song: song) { try? viewContext.save() }
+
                 Button {
                     isAutoScrolling = false
                     resetTrigger.toggle()
@@ -158,5 +163,73 @@ struct PerformLyricsPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: cornerRadius))
+    }
+}
+
+// MARK: - Transpose
+
+/// Compact transpose control: shows the offset, opens a menu that stays open while
+/// you step up or down so several semitones take one visit.
+struct TransposeMenu: View {
+    @ObservedObject var song: Song
+    var onChange: () -> Void = {}
+
+    var body: some View {
+        Menu {
+            if let key = song.currentKey {
+                Text("Key: \(key.displayName)")
+            }
+            Button {
+                step(1)
+            } label: {
+                Label("Up a Semitone", systemImage: "arrow.up")
+            }
+            .disabled(song.transpose >= Song.transposeRange.upperBound)
+            .menuActionDismissBehavior(.disabled)
+
+            Button {
+                step(-1)
+            } label: {
+                Label("Down a Semitone", systemImage: "arrow.down")
+            }
+            .disabled(song.transpose <= Song.transposeRange.lowerBound)
+            .menuActionDismissBehavior(.disabled)
+
+            if song.transpose != 0 {
+                Button {
+                    song.transpose = 0
+                    changed()
+                } label: {
+                    Label("Back to Original", systemImage: "arrow.uturn.backward")
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.caption.weight(.bold))
+                Text(Self.offsetLabel(song.transpose))
+                    .font(.caption.monospacedDigit().weight(.semibold))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(song.transpose == 0 ? 0.12 : 0.25), in: Capsule())
+        }
+        .menuIndicator(.hidden)
+        .accessibilityLabel("Transpose")
+        .accessibilityValue(Self.offsetLabel(song.transpose))
+    }
+
+    static func offsetLabel(_ semitones: Int) -> String {
+        semitones == 0 ? "0" : String(format: "%+d", semitones)
+    }
+
+    private func step(_ delta: Int) {
+        song.transpose += delta
+        changed()
+    }
+
+    private func changed() {
+        song.dateModified = Date()
+        onChange()
     }
 }
