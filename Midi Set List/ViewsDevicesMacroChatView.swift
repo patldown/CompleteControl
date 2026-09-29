@@ -30,6 +30,24 @@ struct GeneratedSingleMacro {
     var oscFloatArg: Double?
 }
 
+/// MIDI-only variant for devices with no OSC in their spec or macros. The small on-device
+/// model can't reach for an OSC address it doesn't have a field for.
+@Generable
+struct GeneratedMIDIMacro {
+    @Guide(description: "Short, human-readable name (e.g. Clean, Drive, Patch A1)")
+    var name: String
+    @Guide(description: "Bank Select MSB value 0-127. Nil if not needed.")
+    var msbValue: Int?
+    @Guide(description: "Bank Select LSB value 0-127. Nil if not needed.")
+    var lsbValue: Int?
+    @Guide(description: "Program Change number 0-127. Nil if not needed.")
+    var pcValue: Int?
+    @Guide(description: "Control Change CC number 0-127. Nil if no CC message is needed.")
+    var ccNumber: Int?
+    @Guide(description: "Control Change value 0-127. Required when ccNumber is provided.")
+    var ccValue: Int?
+}
+
 // MARK: - Message model
 
 struct MacroChatMessage: Identifiable {
@@ -452,6 +470,21 @@ struct MacroChatView: View {
         chatSession.languageModelSession = makeOnDeviceSession()
     }
 
+    /// True when the device's spec or existing macros show it speaks OSC. Otherwise the
+    /// on-device model only gets MIDI fields to fill in. "OSC 1" style oscillator labels
+    /// in synth specs don't count — only OSC the network protocol does.
+    private var deviceUsesOSC: Bool {
+        if device.categories.contains(where: { $0.macros.contains(where: \.isOSC) }) { return true }
+        let spec = DeviceSpecManager.specContext(for: device)
+        return spec.range(of: #"(?i)open sound control|\bOSC\b[^\n]{0,40}\b(address|path|port|udp)"#,
+                          options: .regularExpression) != nil
+    }
+
+    /// The user asked for OSC in this message ("via OSC", "OSC fader") — not "OSC 2" the oscillator.
+    private func mentionsOSC(_ text: String) -> Bool {
+        text.range(of: #"(?i)\bOSC\b(?!\s*\d)"#, options: .regularExpression) != nil
+    }
+
     private func makeOnDeviceSession() -> LanguageModelSession {
         let specContext = DeviceSpecManager.specContext(for: device)
         var instructions = """
@@ -459,6 +492,9 @@ struct MacroChatView: View {
             Device: \(device.name), MIDI channel \(device.midiChannel).
             Category: \(category.name).
             """
+        if !deviceUsesOSC {
+            instructions += "\nThis is a MIDI instrument. Every macro uses MIDI fields only — never OSC."
+        }
         if !specContext.isEmpty {
             instructions += "\n\nDevice reference spec — use ONLY values from this spec:\n\(specContext)"
             instructions += """
@@ -556,10 +592,15 @@ struct MacroChatView: View {
         chatSession.statusText = "Running \(total) actions…"
 
         if activeProvider == .onDevice {
-            // One on-device session handles one request at a time — run in order
+            // One on-device session handles one request at a time — run in order. Each action
+            // starts from the chat as it was before the split, like the external path, so an
+            // earlier action's answer can't pull a later one off course.
+            let base = chatSession.languageModelSession ?? makeOnDeviceSession()
+            chatSession.languageModelSession = base
             for (index, action) in actions.enumerated() {
                 do {
-                    fill(index, with: .result(try await generateOnDevice(userText: action), prompt: action))
+                    let session = LanguageModelSession(transcript: base.transcript)
+                    fill(index, with: .result(try await generateOnDevice(userText: action, session: session), prompt: action))
                 } catch {
                     fill(index, with: .error(error.localizedDescription))
                 }
@@ -601,10 +642,13 @@ struct MacroChatView: View {
             chatSession.externalHistory.append(ExternalAIMessage(role: "assistant", content: response.text))
         }
 
-        // Connection dropped mid-batch — finish those actions on-device, in order
+        // Connection dropped mid-batch — finish those actions on-device, in order, each from a clean start
+        let base = chatSession.languageModelSession ?? makeOnDeviceSession()
+        chatSession.languageModelSession = base
         for index in offlineRetries.sorted() {
             do {
-                fill(index, with: .result(try await generateOnDevice(userText: actions[index]), prompt: actions[index]))
+                let session = LanguageModelSession(transcript: base.transcript)
+                fill(index, with: .result(try await generateOnDevice(userText: actions[index], session: session), prompt: actions[index]))
             } catch {
                 fill(index, with: .error(error.localizedDescription))
             }
@@ -630,13 +674,19 @@ struct MacroChatView: View {
         }
     }
 
-    private func generateOnDevice(userText: String) async throws -> ParsedMacro {
+    private func generateOnDevice(userText: String, session: LanguageModelSession? = nil) async throws -> ParsedMacro {
         guard onDeviceAvailable else { throw ExternalAIError.apiError("On-device AI is not available.") }
-        // Created on demand in case the connection dropped after the chat opened
-        let session = chatSession.languageModelSession ?? makeOnDeviceSession()
-        chatSession.languageModelSession = session
-        let response = try await session.respond(to: userText, generating: GeneratedSingleMacro.self)
-        return ParsedMacro(response.content)  // No cost for on-device processing
+        let session = session ?? {
+            // Created on demand in case the connection dropped after the chat opened
+            let shared = chatSession.languageModelSession ?? makeOnDeviceSession()
+            chatSession.languageModelSession = shared
+            return shared
+        }()
+        // No cost for on-device processing
+        if deviceUsesOSC || mentionsOSC(userText) {
+            return ParsedMacro(try await session.respond(to: userText, generating: GeneratedSingleMacro.self).content)
+        }
+        return ParsedMacro(try await session.respond(to: userText, generating: GeneratedMIDIMacro.self).content)
     }
 
     /// Calls the external provider without touching chat state, so several can run at once.
