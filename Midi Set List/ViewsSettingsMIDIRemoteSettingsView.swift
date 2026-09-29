@@ -21,6 +21,7 @@ struct MIDIRemoteSettingsView: View {
             monitorSection
             inputsSection
             snapshotSection
+            individualSnapshotsSection
             navigationSection
         }
         .navigationTitle("MIDI Receive")
@@ -116,21 +117,41 @@ struct MIDIRemoteSettingsView: View {
                 }
             }
             Stepper(value: $remote.snapshotBase, in: 0...MIDIRemoteSettings.maxSnapshotBase) {
-                LabeledContent("Snapshot 1", value: "\(remote.snapshotKind.rawValue) \(remote.snapshotBase)")
+                LabeledContent("Snapshot 1 starts at", value: "\(remote.snapshotKind.rawValue) \(remote.snapshotBase)")
             }
             learnButton(.snapshots)
             if remote.snapshotKind == .controlChange {
                 Toggle("Ignore Value 0", isOn: $remote.ignoreZeroValues)
             }
-            DisclosureGroup("All 12 Snapshots") {
-                ForEach(0..<Song.maxSnapshots, id: \.self) { index in
-                    LabeledContent("Snapshot \(index + 1)", value: remote.snapshotBinding(for: index)?.label ?? "—")
+        } header: {
+            Text("Snapshot Numbering")
+        } footer: {
+            Text("Snapshot numbers count up from Snapshot 1 — with \(remote.snapshotKind.rawValue) \(remote.snapshotBase) for Snapshot 1, Snapshot 2 is \(remote.snapshotKind.rawValue) \(remote.snapshotBase + 1), and so on. They act on the song playing in Perform, or the song open in the Songs tab.\(remote.snapshotKind == .controlChange ? " \"Ignore Value 0\" stops momentary footswitches from firing twice (press and release)." : "")")
+        }
+    }
+
+    private var individualSnapshotsSection: some View {
+        Section {
+            ForEach(0..<Song.maxSnapshots, id: \.self) { index in
+                bindingRow(.snapshot(index),
+                           value: remote.snapshotBinding(for: index)?.label ?? "—",
+                           isCustom: remote.hasOverride(forSnapshot: index))
+            }
+            if remote.hasAnyOverride {
+                Button("Reset All to Counted Numbers", role: .destructive) {
+                    remote.clearSnapshotOverrides()
                 }
             }
         } header: {
-            Text("Snapshots")
+            Text("Individual Snapshots")
         } footer: {
-            Text("Snapshot numbers count up from Snapshot 1 — with \(remote.snapshotKind.rawValue) \(remote.snapshotBase) for Snapshot 1, Snapshot 2 is \(remote.snapshotKind.rawValue) \(remote.snapshotBase + 1), and so on. They act on the song playing in Perform, or the song open in the Songs tab.\(remote.snapshotKind == .controlChange ? " \"Ignore Value 0\" stops momentary footswitches from firing twice (press and release)." : "")")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Give any snapshot its own pedal: tap ⋯ → Learn, then press the pedal. It replaces that snapshot's counted number for every song. \"Custom\" marks the ones you've changed.")
+                ForEach(Array(remote.conflicts.enumerated()), id: \.offset) { _, conflict in
+                    Text("\(conflict.winner.title) and \(conflict.loser.title) both use \(conflict.binding.label) — only \(conflict.winner.title) will respond.")
+                        .foregroundStyle(.orange)
+                }
+            }
         }
     }
 
@@ -139,51 +160,70 @@ struct MIDIRemoteSettingsView: View {
     private var navigationSection: some View {
         Section {
             ForEach(MIDIRemoteLearnTarget.navigation) { target in
-                HStack {
-                    Text(target.title)
-                    Spacer()
-                    if performance.learnTarget == target {
-                        ProgressView()
-                    } else {
-                        Text(remote.binding(for: target)?.label ?? "Off")
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
-                    Menu {
-                        Button {
-                            performance.learnTarget = target
-                        } label: {
-                            Label("Learn", systemImage: "ear")
-                        }
-                        Menu("Control Change") {
-                            numberPicker(kind: .controlChange, target: target)
-                        }
-                        Menu("Program Change") {
-                            numberPicker(kind: .programChange, target: target)
-                        }
-                        Menu("Note") {
-                            numberPicker(kind: .note, target: target)
-                        }
-                        Divider()
-                        Button(role: .destructive) {
-                            remote.setBinding(nil, for: target)
-                        } label: {
-                            Label("Turn Off", systemImage: "xmark")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                }
+                bindingRow(target, value: remote.binding(for: target)?.label ?? "Off", isCustom: false)
             }
         } header: {
             Text("Previous / Next")
         } footer: {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Previous / Next Song only work while a set list is playing in Perform. Tap ⋯ → Learn, then press the pedal to assign it.")
-                if !remote.overlappingTargets.isEmpty {
-                    Text("\(remote.overlappingTargets.map(\.title).joined(separator: ", ")) share a number with a snapshot — the snapshot won't be reachable from MIDI.")
-                        .foregroundStyle(.orange)
+            Text("Previous / Next Song only work while a set list is playing in Perform. Tap ⋯ → Learn, then press the pedal to assign it.")
+        }
+    }
+
+    /// A trigger row: name, current binding, and a ⋯ menu to learn, pick or reset it.
+    private func bindingRow(_ target: MIDIRemoteLearnTarget, value: String, isCustom: Bool) -> some View {
+        HStack {
+            Text(target.title)
+            if isCustom {
+                Text("Custom")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.15), in: Capsule())
+                    .foregroundStyle(Color.accentColor)
+            }
+            Spacer()
+            if performance.learnTarget == target {
+                Text("Press a pedal…")
+                    .foregroundStyle(.secondary)
+                ProgressView()
+            } else {
+                Text(value)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Menu {
+                Button {
+                    performance.learnTarget = target
+                } label: {
+                    Label("Learn", systemImage: "ear")
                 }
+                Menu("Control Change") {
+                    numberPicker(kind: .controlChange, target: target)
+                }
+                Menu("Program Change") {
+                    numberPicker(kind: .programChange, target: target)
+                }
+                Menu("Note") {
+                    numberPicker(kind: .note, target: target)
+                }
+                Divider()
+                if case .snapshot = target {
+                    if isCustom {
+                        Button {
+                            remote.setBinding(nil, for: target)
+                        } label: {
+                            Label("Use Counted Number", systemImage: "arrow.uturn.backward")
+                        }
+                    }
+                } else {
+                    Button(role: .destructive) {
+                        remote.setBinding(nil, for: target)
+                    } label: {
+                        Label("Turn Off", systemImage: "xmark")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
             }
         }
     }

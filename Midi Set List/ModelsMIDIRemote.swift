@@ -47,7 +47,7 @@ struct MIDIRemoteMessage: Equatable {
 // MARK: - Binding
 
 /// A message type + number, e.g. "CC 103". The channel comes from the receive channel.
-struct MIDIRemoteBinding: Codable, Equatable {
+struct MIDIRemoteBinding: Codable, Hashable {
     var kind: MIDIRemoteMessage.Kind
     var number: Int
 
@@ -79,19 +79,35 @@ enum MIDIRemoteAction: Equatable {
 }
 
 /// What a "Learn" button is waiting to assign.
-enum MIDIRemoteLearnTarget: String, CaseIterable, Identifiable {
+enum MIDIRemoteLearnTarget: Hashable, Identifiable {
+    /// Where the counted-up snapshot numbers start (Snapshot 1)
     case snapshots
+    /// One snapshot's own trigger, replacing its counted-up number (0-based)
+    case snapshot(Int)
     case previousSong, nextSong, previousSnapshot, nextSnapshot
 
-    var id: String { rawValue }
+    var id: String { key }
+
+    /// Storage key for navigation bindings
+    var key: String {
+        switch self {
+        case .snapshots:           return "snapshots"
+        case .snapshot(let i):     return "snapshot\(i)"
+        case .previousSong:        return "previousSong"
+        case .nextSong:            return "nextSong"
+        case .previousSnapshot:    return "previousSnapshot"
+        case .nextSnapshot:        return "nextSnapshot"
+        }
+    }
 
     var title: String {
         switch self {
-        case .snapshots:         return "Snapshot 1"
-        case .previousSong:      return "Previous Song"
-        case .nextSong:          return "Next Song"
-        case .previousSnapshot:  return "Previous Snapshot"
-        case .nextSnapshot:      return "Next Snapshot"
+        case .snapshots:           return "Snapshot Numbering"
+        case .snapshot(let i):     return "Snapshot \(i + 1)"
+        case .previousSong:        return "Previous Song"
+        case .nextSong:            return "Next Song"
+        case .previousSnapshot:    return "Previous Snapshot"
+        case .nextSnapshot:        return "Next Snapshot"
         }
     }
 
@@ -112,6 +128,7 @@ final class MIDIRemoteSettings: ObservableObject {
         static let snapshotBase     = "midiRemote.snapshotBase"
         static let ignoreZero       = "midiRemote.ignoreZeroValues"
         static let navigation       = "midiRemote.navigation"
+        static let overrides        = "midiRemote.snapshotOverrides"
     }
 
     /// Master switch for reacting to incoming MIDI.
@@ -139,7 +156,7 @@ final class MIDIRemoteSettings: ObservableObject {
         didSet { defaults.set(ignoreZeroValues, forKey: Key.ignoreZero) }
     }
 
-    /// Previous/next song and snapshot bindings, keyed by MIDIRemoteLearnTarget raw value.
+    /// Previous/next song and snapshot bindings, keyed by MIDIRemoteLearnTarget key.
     @Published private(set) var navigation: [String: MIDIRemoteBinding] {
         didSet {
             if let data = try? JSONEncoder().encode(navigation) {
@@ -148,11 +165,21 @@ final class MIDIRemoteSettings: ObservableObject {
         }
     }
 
+    /// Snapshots given their own trigger instead of the counted-up number,
+    /// keyed by 0-based snapshot index as a string.
+    @Published private(set) var snapshotOverrides: [String: MIDIRemoteBinding] {
+        didSet {
+            if let data = try? JSONEncoder().encode(snapshotOverrides) {
+                defaults.set(data, forKey: Key.overrides)
+            }
+        }
+    }
+
     static let defaultNavigation: [String: MIDIRemoteBinding] = [
-        MIDIRemoteLearnTarget.previousSong.rawValue:     .init(kind: .controlChange, number: 102),
-        MIDIRemoteLearnTarget.nextSong.rawValue:         .init(kind: .controlChange, number: 103),
-        MIDIRemoteLearnTarget.previousSnapshot.rawValue: .init(kind: .controlChange, number: 104),
-        MIDIRemoteLearnTarget.nextSnapshot.rawValue:     .init(kind: .controlChange, number: 105),
+        MIDIRemoteLearnTarget.previousSong.key:     .init(kind: .controlChange, number: 102),
+        MIDIRemoteLearnTarget.nextSong.key:         .init(kind: .controlChange, number: 103),
+        MIDIRemoteLearnTarget.previousSnapshot.key: .init(kind: .controlChange, number: 104),
+        MIDIRemoteLearnTarget.nextSnapshot.key:     .init(kind: .controlChange, number: 105),
     ]
 
     private init() {
@@ -167,6 +194,12 @@ final class MIDIRemoteSettings: ObservableObject {
             navigation = saved
         } else {
             navigation = Self.defaultNavigation
+        }
+        if let data = defaults.data(forKey: Key.overrides),
+           let saved = try? JSONDecoder().decode([String: MIDIRemoteBinding].self, from: data) {
+            snapshotOverrides = saved
+        } else {
+            snapshotOverrides = [:]
         }
     }
 
@@ -185,8 +218,26 @@ final class MIDIRemoteSettings: ObservableObject {
     /// Highest usable base so all 12 snapshots stay within 0–127.
     static let maxSnapshotBase = 127 - (Song.maxSnapshots - 1)
 
-    /// The binding that recalls snapshot `index` (0-based), or nil if out of range.
+    /// The binding that recalls snapshot `index` (0-based): its own trigger if it
+    /// has one, otherwise the counted-up number. Nil if that falls outside 0–127.
     func snapshotBinding(for index: Int) -> MIDIRemoteBinding? {
+        if let custom = snapshotOverrides[String(index)] { return custom }
+        return countedBinding(for: index)
+    }
+
+    /// True when snapshot `index` has its own trigger rather than the counted-up number.
+    func hasOverride(forSnapshot index: Int) -> Bool {
+        snapshotOverrides[String(index)] != nil
+    }
+
+    var hasAnyOverride: Bool { !snapshotOverrides.isEmpty }
+
+    /// Puts every snapshot back on the counted-up numbers.
+    func clearSnapshotOverrides() {
+        snapshotOverrides = [:]
+    }
+
+    private func countedBinding(for index: Int) -> MIDIRemoteBinding? {
         let number = snapshotBase + index
         guard (0...127).contains(number) else { return nil }
         return MIDIRemoteBinding(kind: snapshotKind, number: number)
@@ -194,31 +245,61 @@ final class MIDIRemoteSettings: ObservableObject {
 
     var snapshotRangeLabel: String {
         let last = min(127, snapshotBase + Song.maxSnapshots - 1)
-        return "\(snapshotKind.rawValue) \(snapshotBase)–\(last)"
+        let range = "\(snapshotKind.rawValue) \(snapshotBase)–\(last)"
+        return hasAnyOverride ? "\(range) (some custom)" : range
     }
 
     // MARK: Navigation mapping
 
     func binding(for target: MIDIRemoteLearnTarget) -> MIDIRemoteBinding? {
-        navigation[target.rawValue]
+        if case .snapshot(let index) = target { return snapshotBinding(for: index) }
+        return navigation[target.key]
     }
 
+    /// Assigns a trigger. For `.snapshot`, nil puts it back on its counted-up number.
     func setBinding(_ binding: MIDIRemoteBinding?, for target: MIDIRemoteLearnTarget) {
-        if target == .snapshots {
+        switch target {
+        case .snapshots:
             guard let binding else { return }
             snapshotKind = binding.kind
             snapshotBase = min(binding.number, Self.maxSnapshotBase)
-            return
+        case .snapshot(let index):
+            // Learning the number it already counts to is the same as no override
+            if let binding, binding == countedBinding(for: index) {
+                snapshotOverrides[String(index)] = nil
+            } else {
+                snapshotOverrides[String(index)] = binding
+            }
+        default:
+            navigation[target.key] = binding
         }
-        navigation[target.rawValue] = binding
     }
 
-    /// Navigation bindings that collide with one of the snapshot numbers.
-    var overlappingTargets: [MIDIRemoteLearnTarget] {
-        MIDIRemoteLearnTarget.navigation.filter { target in
-            guard let b = binding(for: target), b.kind == snapshotKind else { return false }
-            return (snapshotBase..<(snapshotBase + Song.maxSnapshots)).contains(b.number)
+    /// Pairs of triggers sharing one message, in priority order: the first of
+    /// each pair is the one that responds. Navigation beats a snapshot's own
+    /// trigger, which beats a counted-up number.
+    var conflicts: [(winner: MIDIRemoteLearnTarget, loser: MIDIRemoteLearnTarget, binding: MIDIRemoteBinding)] {
+        var ranked: [(MIDIRemoteLearnTarget, MIDIRemoteBinding)] = []
+        for target in MIDIRemoteLearnTarget.navigation {
+            if let b = navigation[target.key] { ranked.append((target, b)) }
         }
+        let indices = Array(0..<Song.maxSnapshots)
+        for i in indices where hasOverride(forSnapshot: i) {
+            if let b = snapshotBinding(for: i) { ranked.append((.snapshot(i), b)) }
+        }
+        for i in indices where !hasOverride(forSnapshot: i) {
+            if let b = countedBinding(for: i) { ranked.append((.snapshot(i), b)) }
+        }
+        var owner: [MIDIRemoteBinding: MIDIRemoteLearnTarget] = [:]
+        var result: [(winner: MIDIRemoteLearnTarget, loser: MIDIRemoteLearnTarget, binding: MIDIRemoteBinding)] = []
+        for (target, b) in ranked {
+            if let winner = owner[b] {
+                result.append((winner, target, b))
+            } else {
+                owner[b] = target
+            }
+        }
+        return result
     }
 
     // MARK: Resolution
@@ -233,13 +314,21 @@ final class MIDIRemoteSettings: ObservableObject {
             (.previousSong, .previousSong), (.nextSong, .nextSong),
             (.previousSnapshot, .previousSnapshot), (.nextSnapshot, .nextSnapshot),
         ]
-        for (target, action) in navActions where binding(for: target)?.matches(message) == true {
+        for (target, action) in navActions where navigation[target.key]?.matches(message) == true {
             return action
         }
 
+        // Then a snapshot's own trigger…
+        for index in 0..<Song.maxSnapshots where snapshotOverrides[String(index)]?.matches(message) == true {
+            return .snapshot(index)
+        }
+
+        // …then the counted-up numbers, skipping snapshots that have their own
         if message.kind == snapshotKind {
             let index = message.number - snapshotBase
-            if (0..<Song.maxSnapshots).contains(index) { return .snapshot(index) }
+            if (0..<Song.maxSnapshots).contains(index) && !hasOverride(forSnapshot: index) {
+                return .snapshot(index)
+            }
         }
         return nil
     }

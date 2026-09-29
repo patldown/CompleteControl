@@ -130,6 +130,8 @@ private let performTopic = HelpTopic(
                      "Settings → MIDI Receive & Control. The app only reacts to messages on this channel (or everything, with Omni). Set your controller to match."),
             HelpItem("Snapshot numbers",
                      "Snapshots use 12 numbers in a row. By default Snapshot 1 is CC 20, Snapshot 2 is CC 21, up to Snapshot 12 on CC 31. You can switch to Program Change or Note, and pick any starting number."),
+            HelpItem("One pedal, one snapshot",
+                     "Pedals not in a row? Long-press a snapshot in a song → Learn MIDI Trigger, then press the pedal. That snapshot now answers to that pedal in every song. You can also do this under Settings → MIDI Receive & Control → Individual Snapshots."),
             HelpItem("Previous / Next",
                      "By default CC 102 / 103 change song and CC 104 / 105 step through snapshots. Tap ⋯ → Learn next to any of them, then press the pedal to assign it."),
             HelpItem("Which song?",

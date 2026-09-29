@@ -80,10 +80,14 @@ struct SongSnapshotsSection: View {
         .onChange(of: song.snapshotCount) { _, count in
             if selected >= count { selected = max(0, count - 1) }
         }
+        // Don't leave a snapshot Learn waiting after leaving the song
+        .onDisappear {
+            if case .snapshot = performance.learnTarget { performance.learnTarget = nil }
+        }
     }
 
     private var footerText: String {
-        var text = "Snapshot 1 is sent when the song loads. Tap a snapshot to edit it; long-press to rename, duplicate or delete."
+        var text = "Snapshot 1 is sent when the song loads. Tap a snapshot to edit it; long-press to rename, duplicate, delete or learn its MIDI pedal."
         if !song.canAddSnapshot && song.snapshotCount < Song.maxSnapshots {
             text += " Add something to Snapshot 1 to unlock more snapshots."
         }
@@ -114,7 +118,9 @@ struct SongSnapshotsSection: View {
                 }
                 HStack(spacing: 6) {
                     Text("\(count) cmd")
-                    if remote.isEnabled, let binding = remote.snapshotBinding(for: index) {
+                    if performance.learnTarget == .snapshot(index) {
+                        Text("Press a pedal…")
+                    } else if remote.isEnabled, let binding = remote.snapshotBinding(for: index) {
                         Text(binding.label)
                     }
                 }
@@ -144,6 +150,20 @@ struct SongSnapshotsSection: View {
                     }
                 } label: {
                     Label("Duplicate", systemImage: "plus.square.on.square")
+                }
+            }
+            if remote.isEnabled {
+                Button {
+                    performance.learnTarget = .snapshot(index)
+                } label: {
+                    Label("Learn MIDI Trigger", systemImage: "ear")
+                }
+                if remote.hasOverride(forSnapshot: index) {
+                    Button {
+                        remote.setBinding(nil, for: .snapshot(index))
+                    } label: {
+                        Label("Use Counted MIDI Number", systemImage: "arrow.uturn.backward")
+                    }
                 }
             }
             if count > 0 {
