@@ -16,6 +16,10 @@ struct SettingsView: View {
                     apiKeysSection
                     taskRoutingSection
                     activeProvidersSection
+                    // Spending only applies to paid providers
+                    if ai.hasOpenAIKey || ai.hasAnthropicKey || !AICostLedger.shared.days.isEmpty {
+                        AICostSection()
+                    }
                 } else {
                     // No Apple Intelligence and no keys — only show how to turn AI on
                     aiUnavailableSection

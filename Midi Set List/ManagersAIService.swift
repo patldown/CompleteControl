@@ -299,13 +299,39 @@ struct AIResponse {
     var truncated = false
 
     func cost() -> Double {
-        // Approximate pricing per million tokens; best-effort by model family
+        let rates = AIPricing.rates(for: modelID)
+        return (Double(inputTokens) * rates.input + Double(outputTokens) * rates.output) / 1_000_000
+    }
+}
+
+// MARK: - Pricing (USD per million tokens, standard API rates)
+
+enum AIPricing {
+    /// Checked in order — more specific model IDs first.
+    /// Estimates only: excludes prompt caching and batch discounts.
+    private static let table: [(match: String, input: Double, output: Double)] = [
+        ("fable",       10.00, 50.00),
+        ("mythos",      10.00, 50.00),
+        ("opus-5-5",     4.00, 20.00),
+        ("opus-5",       5.00, 25.00),
+        ("opus-4-8",     5.00, 25.00),
+        ("opus-4-7",     5.00, 25.00),
+        ("opus-4-6",     5.00, 25.00),
+        ("opus-4-5",     5.00, 25.00),
+        ("opus",        15.00, 75.00),   // Opus 4 / 4.1 and older
+        ("sonnet-5",     2.00, 10.00),   // Sonnet 5 and 5.5
+        ("sonnet",       3.00, 15.00),   // Sonnet 4.x
+        ("haiku-4-5",    1.00,  5.00),
+        ("haiku-3-5",    0.80,  4.00),
+        ("haiku",        0.25,  1.25),
+        ("gpt-4o-mini",  0.15,  0.60),
+        ("gpt-4o",       2.50, 10.00),
+    ]
+
+    static func rates(for modelID: String) -> (input: Double, output: Double) {
         let id = modelID.lowercased()
-        let (inRate, outRate): (Double, Double)
-        if id.contains("opus")   { inRate = 15.0;  outRate = 75.0  }
-        else if id.contains("sonnet") { inRate = 3.0;   outRate = 15.0  }
-        else                     { inRate = 0.80;  outRate = 4.0   } // haiku / unknown
-        return (Double(inputTokens) * inRate + Double(outputTokens) * outRate) / 1_000_000
+        if let row = table.first(where: { id.contains($0.match) }) { return (row.input, row.output) }
+        return (3.00, 15.00)   // unknown model — mid-range estimate
     }
 }
 
@@ -325,11 +351,15 @@ enum ExternalAIClient {
     ) async throws -> AIResponse {
         // Fail fast with no connection so callers can fall back to on-device
         guard !AISettings.shared.offlineMode else { throw ExternalAIError.noConnection }
+        let response: AIResponse
         switch provider {
-        case .openAI:    return try await openAI(apiKey: apiKey, system: systemPrompt, messages: messages, maxTokens: maxOutputTokens)
-        case .anthropic: return try await anthropic(apiKey: apiKey, workspaceID: workspaceID, modelID: anthropicModelID, thinking: anthropicThinking, system: systemPrompt, messages: messages, maxTokens: maxOutputTokens)
+        case .openAI:    response = try await openAI(apiKey: apiKey, system: systemPrompt, messages: messages, maxTokens: maxOutputTokens)
+        case .anthropic: response = try await anthropic(apiKey: apiKey, workspaceID: workspaceID, modelID: anthropicModelID, thinking: anthropicThinking, system: systemPrompt, messages: messages, maxTokens: maxOutputTokens)
         case .onDevice:  throw ExternalAIError.notConfigured
         }
+        // Every paid request, from every feature, goes through here
+        AICostLedger.shared.record(response)
+        return response
     }
 
     /// Long outputs (e.g. a full reference file) can take well over the 60s default
