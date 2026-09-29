@@ -184,6 +184,7 @@ private extension AITask {
         switch self {
         case .bulkCheck: return "Quick yes/no check on each chat message: does it ask for more than one action? If the chosen AI isn't available, messages are sent as one."
         case .bulkSplit: return "Rewrites a multi-action chat message into a list of single actions."
+        case .setListAssistant: return "Creates, reorders and trims set lists from a request. Always shows a summary for approval first."
         default:         return nil
         }
     }

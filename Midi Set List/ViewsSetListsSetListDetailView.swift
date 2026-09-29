@@ -13,7 +13,9 @@ struct SetListDetailView: View {
     @Environment(MIDIManager.self) private var midiManager
     @FetchRequest(sortDescriptors: [SortDescriptor(\.name)]) private var allSongs: FetchedResults<Song>
     @ObservedObject var setList: SetList
-    
+    @ObservedObject private var ai = AISettings.shared
+
+    @State private var showingAssistant = false
     @State private var showingAddSongs = false
     @State private var selectedSong: Song?
     @State private var isSendingSetList = false
@@ -122,6 +124,19 @@ struct SetListDetailView: View {
             ToolbarItem(placement: .primaryAction) {
                 EditButton()
             }
+            // Hidden when no AI is available
+            if ai.isAvailable(.setListAssistant) {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showingAssistant = true } label: {
+                        Label("Edit with AI", systemImage: "sparkles")
+                            .foregroundStyle(ai.offlineMode ? Color.offlineMode : .accentColor)
+                            .offlineModeDot(ai.offlineMode)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingAssistant) {
+            SetListAssistantView(setList: setList)
         }
         .sheet(isPresented: $showingAddSongs) {
             AddSongsToSetListView(setList: setList, availableSongs: availableSongs)
