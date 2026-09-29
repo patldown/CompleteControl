@@ -1,0 +1,176 @@
+//
+//  MIDICommand.swift
+//  Midi Set List
+//
+
+import CoreData
+import Foundation
+
+@objc(MIDICommand)
+class MIDICommand: NSManagedObject, Identifiable {
+
+    // ── Scalar attributes ──────────────────────────────────────────────
+    @NSManaged var id: UUID
+    @NSManaged var notes: String?
+    @NSManaged var oscAddress: String?
+    /// Optional math formula evaluated at send time (overrides oscFloatArg when non-empty).
+    @NSManaged var oscFormula: String?
+    /// Optional formula evaluated at send time to override value1 (program number, bank value).
+    @NSManaged var value1Formula: String?
+    /// Optional formula evaluated at send time to override value2 (CC value).
+    @NSManaged var value2Formula: String?
+
+    // Raw integer storage
+    @NSManaged private var orderIndexRaw: Int32
+    @NSManaged private var value1Raw: Int32
+    @NSManaged private var delayMillisecondsRaw: Int32
+    @NSManaged private var channelRaw: NSNumber?
+    @NSManaged private var value2Raw: NSNumber?
+    @NSManaged private var oscFloatArgRaw: NSNumber?
+
+    // commandType stored as its rawValue string
+    @NSManaged var commandTypeRaw: String
+
+    // ── Public API (matching old SwiftData model) ──────────────────────
+    var orderIndex: Int {
+        get { Int(orderIndexRaw) }
+        set { orderIndexRaw = Int32(newValue) }
+    }
+
+    var value1: Int {
+        get { Int(value1Raw) }
+        set { value1Raw = Int32(newValue) }
+    }
+
+    var value2: Int? {
+        get { value2Raw?.intValue }
+        set { value2Raw = newValue.map { NSNumber(value: $0) } }
+    }
+
+    var delayMilliseconds: Int {
+        get { Int(delayMillisecondsRaw) }
+        set { delayMillisecondsRaw = Int32(newValue) }
+    }
+
+    var channel: Int? {
+        get { channelRaw?.intValue }
+        set { channelRaw = newValue.map { NSNumber(value: $0) } }
+    }
+
+    var oscFloatArg: Double? {
+        get { oscFloatArgRaw?.doubleValue }
+        set { oscFloatArgRaw = newValue.map { NSNumber(value: $0) } }
+    }
+
+    var commandType: MIDICommandType {
+        get { MIDICommandType(rawValue: commandTypeRaw) ?? .programChange }
+        set { commandTypeRaw = newValue.rawValue }
+    }
+
+    // ── Relationships ──────────────────────────────────────────────────
+    @NSManaged var song: Song?
+    @NSManaged var sourceMacro: DeviceMacro?
+
+    // ── Factory ────────────────────────────────────────────────────────
+    static func create(
+        commandType: MIDICommandType,
+        channel: Int? = nil,
+        value1: Int,
+        value2: Int? = nil,
+        delayMilliseconds: Int = 50,
+        notes: String? = nil,
+        in context: NSManagedObjectContext
+    ) -> MIDICommand {
+        let c = MIDICommand(context: context)
+        c.id = UUID()
+        c.commandTypeRaw = commandType.rawValue
+        c.channelRaw = channel.map { NSNumber(value: $0) }
+        c.value1Raw = Int32(value1)
+        c.value2Raw = value2.map { NSNumber(value: $0) }
+        c.delayMillisecondsRaw = Int32(delayMilliseconds)
+        c.notes = notes
+        return c
+    }
+
+    // Convenience init used internally (e.g. from DeviceMacro.toMIDICommands)
+    // Requires an NSManagedObjectContext; use .create() from view code.
+    convenience init(
+        commandType: MIDICommandType,
+        channel: Int?,
+        value1: Int,
+        value2: Int? = nil,
+        delayMilliseconds: Int = 50,
+        notes: String? = nil,
+        context: NSManagedObjectContext
+    ) {
+        self.init(context: context)
+        self.id = UUID()
+        self.commandTypeRaw = commandType.rawValue
+        self.channelRaw = channel.map { NSNumber(value: $0) }
+        self.value1Raw = Int32(value1)
+        self.value2Raw = value2.map { NSNumber(value: $0) }
+        self.delayMillisecondsRaw = Int32(delayMilliseconds)
+        self.notes = notes
+    }
+
+    // ── Computed properties (unchanged logic) ──────────────────────────
+    var hasValue1Formula: Bool { !(value1Formula ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
+    var hasValue2Formula: Bool { !(value2Formula ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
+
+    var displayDescription: String {
+        let channelText = channel.map { "Ch \($0)" } ?? "Omni"
+        switch commandType {
+        case .programChange:
+            return hasValue1Formula ? "PC [formula] [\(channelText)]" : "PC \(value1) [\(channelText)]"
+        case .controlChange:
+            return hasValue2Formula
+                ? "CC #\(value1) [formula] [\(channelText)]"
+                : "CC #\(value1) = \(value2 ?? 0) [\(channelText)]"
+        case .bankSelectMSB:
+            return hasValue1Formula ? "Bank MSB [formula] [\(channelText)]" : "Bank MSB \(value1) [\(channelText)]"
+        case .bankSelectLSB:
+            return hasValue1Formula ? "Bank LSB [formula] [\(channelText)]" : "Bank LSB \(value1) [\(channelText)]"
+        case .oscMessage:
+            let addr = oscAddress ?? "(no address)"
+            if let f = oscFormula, !f.isEmpty { return "OSC \(addr) [formula]" }
+            if let val = oscFloatArg { return "OSC \(addr) → \(String(format: "%.4g", val))" }
+            return "OSC \(addr)"
+        }
+    }
+
+    /// True when this command came from a macro but its current values no longer
+    /// match what the macro would produce at this position in the sequence.
+    var deviatesFromMacro: Bool {
+        guard let macro = sourceMacro, let song = song else { return false }
+        let expected = macro.expectedSignatures
+        let block = song.sortedCommands.filter { $0.sourceMacro?.objectID == macro.objectID }
+        guard block.count == expected.count,
+              let idx = block.firstIndex(where: { $0.objectID == objectID }),
+              idx < expected.count else {
+            return true
+        }
+        let sig = expected[idx]
+        func trim(_ s: String?) -> String? {
+            let t = s?.trimmingCharacters(in: .whitespaces)
+            return t?.isEmpty == false ? t : nil
+        }
+        return commandType       != sig.type                 ||
+               channel           != sig.channel              ||
+               value1            != sig.value1               ||
+               value2            != sig.value2               ||
+               trim(value1Formula) != sig.value1Formula      ||
+               trim(value2Formula) != sig.value2Formula      ||
+               oscAddress        != sig.oscAddress           ||
+               trim(oscFormula)  != sig.oscFormula
+    }
+
+    var isValid: Bool {
+        if commandType == .oscMessage {
+            return !(oscAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if let ch = channel, ch < 1 || ch > 16 { return false }
+        if value1 < 0 || value1 > 127 { return false }
+        if let v2 = value2, v2 < 0 || v2 > 127 { return false }
+        return true
+    }
+}
