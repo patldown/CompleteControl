@@ -60,6 +60,7 @@ struct ActivityLogView: View {
                 }
             }
             .navigationTitle("Activity")
+            .offlineStatusBadge()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

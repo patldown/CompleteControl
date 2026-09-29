@@ -57,6 +57,7 @@ struct DeviceLibraryView: View {
                 }
             }
             .navigationTitle("Devices")
+            .offlineStatusBadge()
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {

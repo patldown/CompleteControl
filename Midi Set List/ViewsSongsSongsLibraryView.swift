@@ -78,6 +78,7 @@ struct SongsLibraryView: View {
                 .onDelete(perform: deleteSongs)
             }
             .navigationTitle("Songs")
+            .offlineStatusBadge()
             .searchable(text: $searchText, prompt: "Search by name or artist")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {

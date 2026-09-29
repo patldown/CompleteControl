@@ -92,6 +92,7 @@ private struct PerformSetListPicker: View {
             }
         }
         .navigationTitle("Perform")
+        .offlineStatusBadge()
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {

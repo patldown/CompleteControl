@@ -39,6 +39,7 @@ struct SetListsView: View {
                 .onDelete(perform: deleteSetLists)
             }
             .navigationTitle("Set Lists")
+            .offlineStatusBadge()
             .searchable(text: $searchText, prompt: "Search set lists")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
