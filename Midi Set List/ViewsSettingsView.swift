@@ -143,6 +143,16 @@ struct SettingsView: View {
 
 // MARK: - Task routing row
 
+private extension AITask {
+    var routingCaption: String? {
+        switch self {
+        case .bulkCheck: return "Quick yes/no check on each chat message: does it ask for more than one action? If the chosen AI isn't available, messages are sent as one."
+        case .bulkSplit: return "Rewrites a multi-action chat message into a list of single actions."
+        default:         return nil
+        }
+    }
+}
+
 private struct TaskRoutingRow: View {
     let task: AITask
     @ObservedObject private var ai = AISettings.shared
@@ -166,8 +176,8 @@ private struct TaskRoutingRow: View {
                 .labelsHidden()
             }
 
-            if task == .bulkSplit {
-                Text("Rewrites a multi-action chat request into a list of single actions. The quick \"is this more than one action?\" check always runs on-device.")
+            if let caption = task.routingCaption {
+                Text(caption)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

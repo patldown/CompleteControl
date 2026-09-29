@@ -75,6 +75,7 @@ enum AITask: String, CaseIterable {
     case macroChat       = "task_macro_chat"
     case specAnalysis    = "task_spec_analysis"
     case macroGeneration = "task_macro_generation"
+    case bulkCheck       = "task_bulk_check"
     case bulkSplit       = "task_bulk_split"
 
     var displayName: String {
@@ -82,6 +83,7 @@ enum AITask: String, CaseIterable {
         case .macroChat:       return "Macro Chat (wand)"
         case .specAnalysis:    return "Build Reference File"
         case .macroGeneration: return "Generate Macros"
+        case .bulkCheck:       return "Detect Bulk Requests"
         case .bulkSplit:       return "Split Bulk Requests"
         }
     }

@@ -5,7 +5,8 @@
 //  Detects when one macro chat request asks for several macros and rewrites it
 //  into a list of standalone single-macro requests.
 //
-//  1. isMultiAction — yes/no check, always on the local (on-device) model.
+//  1. isMultiAction — yes/no check, using the provider routed for
+//                     "Detect Bulk Requests" in Settings.
 //  2. splitActions  — orchestrator that rewrites the request into the full,
 //                     ordered action list, using the provider routed for
 //                     "Split Bulk Requests" in Settings.
@@ -43,10 +44,12 @@ enum BulkRequestPlanner {
         together is ONE macro; one CC message is ONE macro; one OSC message is ONE macro.
         """
 
-    /// Local yes/no check. Returns false (send as one) if the on-device model is unavailable or fails.
+    /// Yes/no check on the provider routed for "Detect Bulk Requests".
+    /// Returns false (send as one) if that model is unavailable or fails.
     static func isMultiAction(_ request: String, context: Context) async -> Bool {
-        guard SystemLanguageModel.default.isAvailable else { return false }
-        let session = LanguageModelSession(instructions: """
+        let ai = AISettings.shared
+        let provider = ai.provider(for: .bulkCheck)
+        let instructions = """
             You classify requests sent to a MIDI/OSC macro assistant.
             Device: \(context.deviceName). Category: \(context.categoryName).
             \(macroDefinition)
@@ -54,13 +57,50 @@ enum BulkRequestPlanner {
             "load presets 1 to 5", "reverb on and delay off", "mute channels 1, 2 and 3".
             Answer false for a single macro, a question, or a correction to a previous \
             result (e.g. "LSB should be 2").
-            """)
+            """
+
+        func checkOnDevice() async -> Bool {
+            guard SystemLanguageModel.default.isAvailable else { return false }
+            let session = LanguageModelSession(instructions: instructions)
+            return (try? await session.respond(to: request, generating: MultiActionCheck.self)
+                .content.hasMultipleActions) ?? false
+        }
+
+        guard provider != .onDevice,
+              let apiKey = provider == .openAI ? ai.openAIKey : ai.anthropicKey
+        else { return await checkOnDevice() }
+
         do {
-            return try await session.respond(to: request, generating: MultiActionCheck.self)
-                .content.hasMultipleActions
+            let response = try await ExternalAIClient.chat(
+                provider: provider,
+                apiKey: apiKey,
+                systemPrompt: instructions + """
+
+                    Respond ONLY with a JSON object — no markdown fences, no explanation:
+                    {"multiple": true} or {"multiple": false}
+                    """,
+                messages: [ExternalAIMessage(role: "user", content: request)],
+                workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
+                anthropicModelID: ai.anthropicModel(for: .bulkCheck),
+                anthropicThinking: ai.thinkingEnabled(for: .bulkCheck)
+            )
+            return decodeMultiple(from: response.text)
+        } catch let error where ExternalAIError.isConnectivity(error) {
+            // Connection dropped mid-request — check on-device instead
+            return await checkOnDevice()
         } catch {
             return false
         }
+    }
+
+    private struct CheckPayload: Decodable { let multiple: Bool }
+
+    private static func decodeMultiple(from text: String) -> Bool {
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
+              let data = String(text[start...end]).data(using: .utf8),
+              let payload = try? JSONDecoder().decode(CheckPayload.self, from: data)
+        else { return false }
+        return payload.multiple
     }
 
     /// Orchestrator: rewrites a multi-action request into standalone single-macro requests.
