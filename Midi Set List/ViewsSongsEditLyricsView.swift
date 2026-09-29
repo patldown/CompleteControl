@@ -8,6 +8,7 @@
 import SwiftUI
 import CoreData
 import UniformTypeIdentifiers
+import PhotosUI
 
 struct EditLyricsView: View {
     @Environment(\.managedObjectContext) private var viewContext
@@ -17,6 +18,8 @@ struct EditLyricsView: View {
     @State private var lyricsText: String
     @State private var showingFilePicker = false
     @State private var pdfError: String?
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var isImportingImages = false
     @FocusState private var isEditorFocused: Bool
 
     init(song: Song) {
@@ -38,31 +41,50 @@ struct EditLyricsView: View {
                 .padding()
                 .background(Color(.systemGroupedBackground))
 
-                // PDF attachment row
+                // Sheet music row: one PDF, or a set of images (adding one replaces the other)
                 HStack {
                     if song.pdfFileName != nil {
                         Image(systemName: "doc.fill")
                             .foregroundStyle(.red)
-                        Text("PDF attached — shown in performance view")
+                        Text("Sheet music PDF attached")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Spacer()
+                    } else if !song.chartImageNames.isEmpty {
+                        Image(systemName: "photo.on.rectangle")
+                            .foregroundStyle(.blue)
+                        let count = song.chartImageNames.count
+                        Text("Sheet music: \(count) image\(count == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "music.note.list")
+                            .foregroundStyle(.secondary)
+                        Text("Attach sheet music — PDF or images (optional)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if isImportingImages {
+                        ProgressView().controlSize(.small)
+                    }
+                    Menu(song.hasSheetMusic ? "Change" : "Attach") {
+                        PhotosPicker(selection: $photoItems, maxSelectionCount: 40, matching: .images) {
+                            Label(song.chartImageNames.isEmpty ? "Images from Photos" : "Add Images from Photos",
+                                  systemImage: "photo.on.rectangle")
+                        }
+                        Button {
+                            showingFilePicker = true
+                        } label: {
+                            Label("PDF or Images from Files", systemImage: "folder")
+                        }
+                    }
+                    .font(.caption)
+                    if song.hasSheetMusic {
                         Button("Remove") {
-                            removePDF()
+                            removeSheetMusic()
                         }
                         .font(.caption)
                         .foregroundStyle(.red)
-                    } else {
-                        Image(systemName: "doc")
-                            .foregroundStyle(.secondary)
-                        Text("Attach sheet music PDF (optional)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Attach PDF") {
-                            showingFilePicker = true
-                        }
-                        .font(.caption)
                     }
                 }
                 .padding(.horizontal)
@@ -84,7 +106,7 @@ struct EditLyricsView: View {
                     .scrollContentBackground(.hidden)
                     .background(Color(.systemBackground))
             }
-            .navigationTitle("Edit Lyrics / Tabs")
+            .navigationTitle("Lyrics & Sheet Music")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -121,11 +143,33 @@ struct EditLyricsView: View {
             }
             .fileImporter(
                 isPresented: $showingFilePicker,
-                allowedContentTypes: [.pdf],
-                allowsMultipleSelection: false
+                allowedContentTypes: [.pdf, .image],
+                allowsMultipleSelection: true
             ) { result in
-                guard case .success(let urls) = result, let url = urls.first else { return }
-                attachPDF(from: url)
+                guard case .success(let urls) = result, !urls.isEmpty else { return }
+                if let pdf = urls.first(where: { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .pdf) == true }) {
+                    attachPDF(from: pdf)
+                } else {
+                    let datas = urls.compactMap { url -> Data? in
+                        let accessed = url.startAccessingSecurityScopedResource()
+                        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                        return try? Data(contentsOf: url)
+                    }
+                    addImages(datas)
+                }
+            }
+            .onChange(of: photoItems) { _, items in
+                guard !items.isEmpty else { return }
+                isImportingImages = true
+                Task {
+                    var datas: [Data] = []
+                    for item in items {  // in the order they were picked
+                        if let data = try? await item.loadTransferable(type: Data.self) { datas.append(data) }
+                    }
+                    addImages(datas)
+                    photoItems = []
+                    isImportingImages = false
+                }
             }
         }
     }
@@ -149,6 +193,7 @@ struct EditLyricsView: View {
                 try FileManager.default.removeItem(at: destURL)
             }
             try FileManager.default.copyItem(at: sourceURL, to: destURL)
+            removeImages()  // a PDF replaces any sheet-music images
             song.pdfFileName = filename
             pdfError = nil
             try? viewContext.save()
@@ -162,7 +207,56 @@ struct EditLyricsView: View {
             try? FileManager.default.removeItem(at: url)
         }
         song.pdfFileName = nil
+    }
+
+    private func removeImages() {
+        song.chartImageURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+        song.chartImageNames = []
+    }
+
+    private func removeSheetMusic() {
+        removePDF()
+        removeImages()
         try? viewContext.save()
+    }
+
+    /// Saves images as sheet-music pages after any existing ones. Large photos are scaled
+    /// down so pages stay sharp without filling the device.
+    private func addImages(_ datas: [Data]) {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        var names = song.chartImageNames
+        var failed = 0
+        for data in datas {
+            guard let image = UIImage(data: data), let jpeg = Self.pageJPEG(image) else { failed += 1; continue }
+            let name = "\(song.id.uuidString)-page-\(UUID().uuidString).jpg"
+            do {
+                try jpeg.write(to: docs.appendingPathComponent(name), options: .atomic)
+                names.append(name)
+            } catch {
+                failed += 1
+            }
+        }
+        guard names != song.chartImageNames else {
+            if failed > 0 { pdfError = "Could not add \(failed) image\(failed == 1 ? "" : "s")." }
+            return
+        }
+        removePDF()  // images replace a sheet-music PDF
+        song.chartImageNames = names
+        pdfError = failed > 0 ? "\(failed) image\(failed == 1 ? "" : "s") could not be added." : nil
+        try? viewContext.save()
+    }
+
+    private static func pageJPEG(_ image: UIImage, maxDimension: CGFloat = 2400) -> Data? {
+        let size = image.size
+        let scale = min(1, maxDimension / max(size.width, size.height))
+        guard scale < 1 else { return image.jpegData(compressionQuality: 0.85) }
+        let target = CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let resized = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        return resized.jpegData(compressionQuality: 0.85)
     }
 }
 

@@ -17,6 +17,8 @@ class Song: NSManagedObject, Identifiable {
     @NSManaged var notes: String?
     @NSManaged var lyrics: String?
     @NSManaged var pdfFileName: String?
+    /// JSON-encoded [String] of sheet-music image files in Documents, in page order
+    @NSManaged var chartImageNamesData: String?
     @NSManaged var timeSignature: String?
     /// JSON-encoded [String] of snapshot names, one per snapshot ("" = default name).
     @NSManaged var snapshotNamesData: String?
@@ -158,6 +160,38 @@ class Song: NSManagedObject, Identifiable {
         return FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask).first?
             .appendingPathComponent(filename)
+    }
+
+    // ── Sheet music (a PDF or a set of images) ─────────────────────────
+    var chartImageNames: [String] {
+        get {
+            guard let raw = chartImageNamesData, let data = raw.data(using: .utf8),
+                  let names = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+            return names
+        }
+        set {
+            chartImageNamesData = newValue.isEmpty ? nil
+                : (try? JSONEncoder().encode(newValue)).flatMap { String(data: $0, encoding: .utf8) }
+        }
+    }
+
+    var chartImageURLs: [URL] {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return [] }
+        return chartImageNames.map { docs.appendingPathComponent($0) }
+    }
+
+    var hasLyricsText: Bool { !(lyrics ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var hasSheetMusic: Bool { pdfFileName != nil || !chartImageNames.isEmpty }
+
+    /// What to show on Perform: this person's last choice when the song has both,
+    /// otherwise whichever the song has. Nil when it has neither.
+    func chartMode(preferred: PerformChartMode) -> PerformChartMode? {
+        switch (hasLyricsText, hasSheetMusic) {
+        case (true, true): preferred
+        case (true, false): .lyrics
+        case (false, true): .sheetMusic
+        case (false, false): nil
+        }
     }
 
     /// All commands, grouped by snapshot and then in send order.

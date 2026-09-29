@@ -130,6 +130,7 @@ final class PersistenceController {
             attr("notes",         .stringAttributeType,    optional: true),
             attr("lyrics",        .stringAttributeType,    optional: true),
             attr("pdfFileName",   .stringAttributeType,    optional: true),
+            attr("chartImageNamesData", .stringAttributeType, optional: true),
             attr("bpmRaw",        .integer32AttributeType, optional: true),
             attr("timeSignature", .stringAttributeType,    optional: true),
             attr("snapshotNamesData", .stringAttributeType, optional: true),

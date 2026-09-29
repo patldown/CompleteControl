@@ -2,9 +2,9 @@
 //  PerformLyricsPanel.swift
 //  Midi Set List
 //
-//  Lyrics / chart shown inline on the Perform screen, below the snapshots. It can
-//  auto-scroll in place, or expand to fill the app window while the snapshot strip
-//  stays reachable above it.
+//  Lyrics or sheet music shown inline on the Perform screen, below the snapshots. It
+//  can auto-scroll in place, or expand to fill the app window while the snapshot strip
+//  stays reachable above it. When a song has both, this person's last choice is shown.
 //
 
 import SwiftUI
@@ -17,20 +17,27 @@ struct PerformLyricsPanel: View {
     /// Shown in the control bar while expanded, since the song header is hidden then
     var title: String?
 
+    @ObservedObject private var prefs = UserPreferences.shared
     @State private var isAutoScrolling = false
-    @AppStorage("performLyricsScrollSpeed") private var scrollSpeed: Double = 20
     @State private var resetTrigger = false
     @State private var showingEditLyrics = false
 
-    private var hasLyrics: Bool { song.pdfFileURL != nil || !(song.lyrics ?? "").isEmpty }
+    private var mode: PerformChartMode? { song.chartMode(preferred: prefs.performChartMode) }
     private var cornerRadius: CGFloat { isExpanded ? 0 : 14 }
 
     var body: some View {
         Group {
-            if hasLyrics {
+            if let mode {
                 VStack(spacing: 0) {
-                    controlBar
-                    content
+                    controlBar(mode)
+                    ChartContentView(
+                        song: song, mode: mode,
+                        isScrolling: $isAutoScrolling, resetTrigger: $resetTrigger,
+                        fontSize: isExpanded ? 24 : 19,
+                        insets: isExpanded
+                            ? UIEdgeInsets(top: 24, left: 32, bottom: 400, right: 32)
+                            : UIEdgeInsets(top: 12, left: 16, bottom: 200, right: 16)
+                    )
                 }
                 .background(Color.black)
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
@@ -44,29 +51,9 @@ struct PerformLyricsPanel: View {
         }
     }
 
-    @ViewBuilder
-    private var content: some View {
-        if let pdfURL = song.pdfFileURL {
-            PDFKitView(url: pdfURL)
-        } else {
-            AutoScrollingTextView(
-                text: song.lyrics ?? "",
-                isScrolling: $isAutoScrolling,
-                scrollSpeed: $scrollSpeed,
-                resetTrigger: $resetTrigger,
-                fontSize: isExpanded ? 24 : 19,
-                insets: isExpanded
-                    ? UIEdgeInsets(top: 24, left: 32, bottom: 400, right: 32)
-                    : UIEdgeInsets(top: 12, left: 16, bottom: 200, right: 16),
-                transpose: song.transpose,
-                chordsPreferFlats: song.chordsPreferFlats
-            )
-        }
-    }
-
     // MARK: Controls
 
-    private var controlBar: some View {
+    private func controlBar(_ mode: PerformChartMode) -> some View {
         HStack(spacing: 12) {
             Button {
                 isAutoScrolling = false
@@ -83,27 +70,31 @@ struct PerformLyricsPanel: View {
 
             Spacer(minLength: 0)
 
-            if song.pdfFileURL == nil {
-                TransposeMenu(song: song) { try? viewContext.save() }
-
-                Button {
-                    isAutoScrolling = false
-                    resetTrigger.toggle()
-                } label: {
-                    Label("Reset to Top", systemImage: "arrow.up.to.line")
-                }
-
-                speedControl
-
-                Button {
-                    isAutoScrolling.toggle()
-                } label: {
-                    Label(isAutoScrolling ? "Pause Scrolling" : "Start Scrolling",
-                          systemImage: isAutoScrolling ? "pause.fill" : "play.fill")
-                        .frame(width: 22)
-                }
-                .foregroundStyle(isAutoScrolling ? Color.orange : Color.green)
+            if song.hasLyricsText && song.hasSheetMusic {
+                ChartModeMenu(current: mode) { isAutoScrolling = false }
             }
+
+            if mode == .lyrics {
+                TransposeMenu(song: song) { try? viewContext.save() }
+            }
+
+            Button {
+                isAutoScrolling = false
+                resetTrigger.toggle()
+            } label: {
+                Label("Reset to Top", systemImage: "arrow.up.to.line")
+            }
+
+            speedControl(mode)
+
+            Button {
+                isAutoScrolling.toggle()
+            } label: {
+                Label(isAutoScrolling ? "Pause Scrolling" : "Start Scrolling",
+                      systemImage: isAutoScrolling ? "pause.fill" : "play.fill")
+                    .frame(width: 22)
+            }
+            .foregroundStyle(isAutoScrolling ? Color.orange : Color.green)
 
             Button {
                 isExpanded.toggle()
@@ -122,26 +113,28 @@ struct PerformLyricsPanel: View {
         .background(Color.white.opacity(0.08))
     }
 
-    private var speedControl: some View {
-        HStack(spacing: 6) {
+    private func speedControl(_ mode: PerformChartMode) -> some View {
+        let speed = prefs.scrollSpeed(for: mode)
+        let range = UserPreferences.scrollSpeedRange
+        return HStack(spacing: 6) {
             Button {
-                scrollSpeed = max(5, scrollSpeed - 5)
+                prefs.setScrollSpeed(speed - 5, for: mode)
             } label: {
                 Label("Slower", systemImage: "minus")
             }
-            .disabled(scrollSpeed <= 5)
+            .disabled(speed <= range.lowerBound)
 
-            Text("\(Int(scrollSpeed))")
+            Text("\(Int(speed))")
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .frame(minWidth: 24)
-                .accessibilityLabel("Scroll speed \(Int(scrollSpeed))")
+                .accessibilityLabel("Scroll speed \(Int(speed))")
 
             Button {
-                scrollSpeed = min(100, scrollSpeed + 5)
+                prefs.setScrollSpeed(speed + 5, for: mode)
             } label: {
                 Label("Faster", systemImage: "plus")
             }
-            .disabled(scrollSpeed >= 100)
+            .disabled(speed >= range.upperBound)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -153,10 +146,10 @@ struct PerformLyricsPanel: View {
             Image(systemName: "text.alignleft")
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text("No lyrics or chart for this song")
+            Text("No lyrics or sheet music for this song")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Button("Add Lyrics") {
+            Button("Add Lyrics or Sheet Music") {
                 showingEditLyrics = true
             }
             .buttonStyle(.bordered)

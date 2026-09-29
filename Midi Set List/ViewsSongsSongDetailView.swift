@@ -179,17 +179,28 @@ struct SongDetailView: View {
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Lyrics / Tabs")
+                            Text("Lyrics & Sheet Music")
                                 .font(.headline)
                                 .foregroundStyle(.primary)
-                            
+
+                            if song.pdfFileName != nil {
+                                Label("Sheet music PDF", systemImage: "doc.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if !song.chartImageNames.isEmpty {
+                                Label("Sheet music: \(song.chartImageNames.count) image\(song.chartImageNames.count == 1 ? "" : "s")",
+                                      systemImage: "photo.on.rectangle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
                             if let lyrics = song.lyrics, !lyrics.isEmpty {
                                 Text(lyrics.prefix(100) + (lyrics.count > 100 ? "..." : ""))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
-                            } else {
-                                Text("Add lyrics or guitar tabs")
+                            } else if !song.hasSheetMusic {
+                                Text("Add lyrics, tabs, or sheet music (PDF or images)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -202,7 +213,7 @@ struct SongDetailView: View {
                     }
                 }
                 
-                if song.lyrics != nil && !song.lyrics!.isEmpty {
+                if song.hasLyricsText || song.hasSheetMusic {
                     Button {
                         showingLyricsPerformance = true
                     } label: {
@@ -213,10 +224,12 @@ struct SongDetailView: View {
             } header: {
                 Text("Performance")
             } footer: {
-                if song.lyrics == nil || song.lyrics!.isEmpty {
-                    Text("Add lyrics or tabs to enable Performance Mode with auto-scroll")
+                if !song.hasLyricsText && !song.hasSheetMusic {
+                    Text("Add lyrics or sheet music to enable Performance Mode with auto-scroll")
+                } else if song.hasLyricsText && song.hasSheetMusic {
+                    Text("Performance Mode shows lyrics or sheet music full screen with auto-scroll. Whichever you pick last is remembered for you.")
                 } else {
-                    Text("Performance Mode shows full-screen lyrics with auto-scroll for hands-free playing")
+                    Text("Performance Mode shows it full screen with auto-scroll for hands-free playing")
                 }
             }
             

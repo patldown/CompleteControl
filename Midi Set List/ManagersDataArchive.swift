@@ -209,6 +209,15 @@ enum DataArchiveExporter {
            let data = try? Data(contentsOf: url) {
             files.append(.init(kind: .songPDF, ownerID: id, filename: filename, data: data))
         }
+        // Sheet-music images use the same kind: every app version restores a .songPDF entry by
+        // writing it to Documents under its name, so older builds can still read these backups
+        if let song = object as? Song {
+            for (name, url) in zip(song.chartImageNames, song.chartImageURLs) {
+                if let data = try? Data(contentsOf: url) {
+                    files.append(.init(kind: .songPDF, ownerID: id, filename: name, data: data))
+                }
+            }
+        }
         if let device = object as? InstrumentDevice {
             for spec in device.specFiles {
                 if let data = try? Data(contentsOf: DeviceSpecManager.fileURL(spec)) {
@@ -438,6 +447,9 @@ enum DataArchiveImporter {
     private static func sanitizeFileReferences(_ object: NSManagedObject) {
         if let song = object as? Song, let name = song.pdfFileName {
             song.pdfFileName = safeFilename(name)
+        }
+        if let song = object as? Song, !song.chartImageNames.isEmpty {
+            song.chartImageNames = song.chartImageNames.compactMap { safeFilename($0) }
         }
         if let device = object as? InstrumentDevice,
            let raw = device.specFileNamesData,

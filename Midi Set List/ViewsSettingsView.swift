@@ -8,7 +8,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject private var ai = AISettings.shared
     @ObservedObject private var remote = MIDIRemoteSettings.shared
-    @AppStorage(AutoScrollingTextView.leadInLinesKey) private var lyricsLeadInLines = AutoScrollingTextView.defaultLeadInLines
+    @ObservedObject private var prefs = UserPreferences.shared
 
     var body: some View {
         NavigationStack {
@@ -62,16 +62,34 @@ struct SettingsView: View {
 
     private var lyricsSection: some View {
         Section {
-            Stepper(value: $lyricsLeadInLines, in: 0...10) {
+            Picker("Show When a Song Has Both", selection: $prefs.performChartMode) {
+                ForEach(PerformChartMode.allCases) { mode in
+                    Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                }
+            }
+
+            speedStepper("Lyrics Scroll Speed", value: $prefs.lyricsScrollSpeed)
+            speedStepper("Sheet Music Scroll Speed", value: $prefs.sheetMusicScrollSpeed)
+
+            Stepper(value: $prefs.lyricsLeadInLines, in: UserPreferences.leadInLinesRange) {
                 LabeledContent("Blank Lines Before Lyrics") {
-                    Text("\(lyricsLeadInLines)")
+                    Text("\(prefs.lyricsLeadInLines)")
                         .monospacedDigit()
                 }
             }
         } header: {
-            Text("Lyrics")
+            Text("Your Performance Defaults")
         } footer: {
-            Text("Empty lines shown above a song's lyrics, so the first line starts lower and auto-scroll has a lead-in. Applies on the Perform screen and in full view.")
+            Text("These belong to you, not the songs: they follow your Apple ID to your other devices, so someone sharing your songs keeps their own. The view you last picked on Perform is remembered here. Blank lines start the lyrics lower so auto-scroll has a lead-in.")
+        }
+    }
+
+    private func speedStepper(_ title: String, value: Binding<Double>) -> some View {
+        Stepper(value: value, in: UserPreferences.scrollSpeedRange, step: 5) {
+            LabeledContent(title) {
+                Text("\(Int(value.wrappedValue))")
+                    .monospacedDigit()
+            }
         }
     }
 

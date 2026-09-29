@@ -14,13 +14,19 @@ struct LyricsPerformanceView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var song: Song
 
+    @ObservedObject private var prefs = UserPreferences.shared
     @State private var isAutoScrolling = false
-    @State private var scrollSpeed: Double = 20.0
     @State private var showControls = true
     @State private var showingEditLyrics = false
     @State private var resetTrigger = false
 
-    private var showingPDF: Bool { song.pdfFileURL != nil }
+    /// Lyrics or sheet music — this person's last choice when the song has both
+    private var mode: PerformChartMode { song.chartMode(preferred: prefs.performChartMode) ?? .lyrics }
+
+    private var scrollSpeed: Binding<Double> {
+        Binding(get: { prefs.scrollSpeed(for: mode) },
+                set: { prefs.setScrollSpeed($0, for: mode) })
+    }
 
     var body: some View {
         // Stacked, not overlaid: the lyrics end where the controls begin, so text
@@ -32,18 +38,15 @@ struct LyricsPerformanceView: View {
             }
 
             Group {
-                if let pdfURL = song.pdfFileURL {
-                    PDFKitView(url: pdfURL)
+                if song.chartMode(preferred: prefs.performChartMode) == nil {
+                    Text("No lyrics or sheet music yet.\n\nTap Edit to add lyrics, a PDF or images.")
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                        .padding()
                 } else {
-                    AutoScrollingTextView(
-                        text: song.lyrics ?? "No lyrics added yet.\n\nTap 'Edit' to add lyrics or tabs.",
-                        isScrolling: $isAutoScrolling,
-                        scrollSpeed: $scrollSpeed,
-                        resetTrigger: $resetTrigger,
-                        insets: UIEdgeInsets(top: 24, left: 32, bottom: 500, right: 32),
-                        transpose: song.transpose,
-                        chordsPreferFlats: song.chordsPreferFlats
-                    )
+                    ChartContentView(song: song, mode: mode,
+                                     isScrolling: $isAutoScrolling, resetTrigger: $resetTrigger)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -54,7 +57,7 @@ struct LyricsPerformanceView: View {
                 }
             }
 
-            if showControls && !showingPDF {
+            if showControls && song.chartMode(preferred: prefs.performChartMode) != nil {
                 bottomControls
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -81,6 +84,21 @@ struct LyricsPerformanceView: View {
 
             Spacer()
 
+            if song.hasLyricsText && song.hasSheetMusic {
+                Picker("Show", selection: Binding(
+                    get: { mode },
+                    set: { isAutoScrolling = false; prefs.performChartMode = $0 }
+                )) {
+                    ForEach(PerformChartMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 260)
+
+                Spacer()
+            }
+
             Button {
                 isAutoScrolling = false
                 showingEditLyrics = true
@@ -103,13 +121,13 @@ struct LyricsPerformanceView: View {
                     Text("Scroll Speed")
                         .font(.subheadline)
                     Spacer()
-                    Text("\(Int(scrollSpeed))")
+                    Text("\(Int(scrollSpeed.wrappedValue))")
                         .font(.subheadline)
                         .monospacedDigit()
                 }
                 .foregroundStyle(.white)
 
-                Slider(value: $scrollSpeed, in: 5...100, step: 5)
+                Slider(value: scrollSpeed, in: UserPreferences.scrollSpeedRange, step: 5)
                     .tint(.white)
             }
             .padding(.horizontal)
@@ -148,10 +166,6 @@ struct LyricsPerformanceView: View {
 // MARK: - UIKit Auto-Scrolling Text View
 
 struct AutoScrollingTextView: UIViewRepresentable {
-    /// Settings key for the blank lines shown above the lyrics (0–10)
-    static let leadInLinesKey = "lyricsLeadInLines"
-    static let defaultLeadInLines = 5
-
     let text: String
     @Binding var isScrolling: Bool
     @Binding var scrollSpeed: Double
@@ -162,11 +176,12 @@ struct AutoScrollingTextView: UIViewRepresentable {
     var transpose: Int = 0
     /// Chord spelling from the song's key; nil lets each chord decide
     var chordsPreferFlats: Bool? = nil
-    @AppStorage(AutoScrollingTextView.leadInLinesKey) private var leadInLines = AutoScrollingTextView.defaultLeadInLines
+    /// Blank lines above the lyrics come from this person's preferences
+    @ObservedObject private var prefs = UserPreferences.shared
 
     /// Blank lines first, so the opening lyrics start lower and auto-scroll eases into them
     private var displayText: String {
-        String(repeating: "\n", count: min(max(leadInLines, 0), 10)) + text
+        String(repeating: "\n", count: min(max(prefs.lyricsLeadInLines, 0), 10)) + text
     }
 
     /// Recognised chords are tinted and bold, so it's clear which ones will transpose
@@ -234,7 +249,7 @@ struct AutoScrollingTextView: UIViewRepresentable {
 
         if resetTrigger != context.coordinator.lastResetTrigger {
             context.coordinator.lastResetTrigger = resetTrigger
-            scrollView.setContentOffset(.zero, animated: true)
+            context.coordinator.scrollToTop()
         }
 
         if isScrolling {
@@ -248,73 +263,13 @@ struct AutoScrollingTextView: UIViewRepresentable {
         Coordinator()
     }
 
-    class Coordinator {
-        weak var scrollView: UIScrollView?
+    final class Coordinator: AutoScroller {
         weak var textView: UITextView?
-        private var displayLink: CADisplayLink?
-        private var currentSpeed: Double = 0
-        var lastResetTrigger: Bool = false
         var lastRenderKey = ""
-
-        func startScrolling(speed: Double) {
-            currentSpeed = speed
-
-            if displayLink == nil {
-                displayLink = CADisplayLink(target: self, selector: #selector(scroll))
-                displayLink?.add(to: .main, forMode: .common)
-            }
-        }
-
-        func stopScrolling() {
-            displayLink?.invalidate()
-            displayLink = nil
-        }
-
-        @objc private func scroll() {
-            guard let scrollView = scrollView else { return }
-
-            let increment = CGFloat(currentSpeed / 60.0)
-            var offset = scrollView.contentOffset
-            offset.y += increment
-
-            let maxOffset = scrollView.contentSize.height - scrollView.bounds.height
-            if offset.y >= maxOffset {
-                offset.y = maxOffset
-                stopScrolling()
-            }
-
-            scrollView.setContentOffset(offset, animated: false)
-        }
-
-        deinit {
-            stopScrolling()
-        }
     }
 
     static func dismantleUIView(_ scrollView: UIScrollView, coordinator: Coordinator) {
         coordinator.stopScrolling()
-    }
-}
-
-// MARK: - PDF Viewer
-
-struct PDFKitView: UIViewRepresentable {
-    let url: URL
-
-    func makeUIView(context: Context) -> PDFView {
-        let pdfView = PDFView()
-        pdfView.backgroundColor = .black
-        pdfView.autoScales = true
-        pdfView.displayMode = .singlePageContinuous
-        pdfView.displayDirection = .vertical
-        pdfView.document = PDFDocument(url: url)
-        return pdfView
-    }
-
-    func updateUIView(_ pdfView: PDFView, context: Context) {
-        if pdfView.document?.documentURL != url {
-            pdfView.document = PDFDocument(url: url)
-        }
     }
 }
 
