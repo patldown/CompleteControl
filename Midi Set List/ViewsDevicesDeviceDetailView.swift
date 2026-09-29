@@ -257,6 +257,10 @@ private struct DeviceMemorySheet: View {
     @State private var isEditing = false
     @State private var isCompacting = false
     @State private var compactError: String? = nil
+    /// Set while reviewing a compaction result; the saved file is untouched until "Keep"
+    @State private var originalBeforeCompact: String? = nil
+
+    private var isReviewing: Bool { originalBeforeCompact != nil }
 
     var body: some View {
         NavigationStack {
@@ -282,6 +286,7 @@ private struct DeviceMemorySheet: View {
                         if isEditing { saveEdits() }
                         dismiss()
                     }
+                    .disabled(isReviewing)  // choose Keep or Discard first
                 }
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 16) {
@@ -304,24 +309,28 @@ private struct DeviceMemorySheet: View {
                             Label(isEditing ? "Lock" : "Edit", systemImage: isEditing ? "lock.fill" : "pencil")
                                 .foregroundStyle(isEditing ? .orange : .accentColor)
                         }
+                        .disabled(isReviewing)
                     }
                 }
             }
+            .interactiveDismissDisabled(isReviewing)
             .safeAreaInset(edge: .top) {
                 if ai.offlineMode { OfflineModeBanner() }
             }
             .safeAreaInset(edge: .bottom) {
-                if !isEditing && !content.isEmpty && canCompact {
+                if isReviewing {
+                    reviewBar
+                } else if !isEditing && !content.isEmpty && canCompact {
                     Button {
                         Task { await compactMemory() }
                     } label: {
                         HStack(spacing: 8) {
                             if isCompacting {
                                 ProgressView().scaleEffect(0.8)
-                                Text("Compacting…")
+                                Text("Working out lessons…")
                             } else {
-                                Image(systemName: ai.offlineMode ? "wifi.slash" : "sparkles")
-                                Text(ai.offlineMode ? "Compact with On-Device AI" : "Compact with AI")
+                                Image(systemName: ai.offlineMode ? "wifi.slash" : "lightbulb")
+                                Text(ai.offlineMode ? "Turn into Lessons (On-Device)" : "Turn into Lessons Learned")
                             }
                         }
                         .font(.subheadline.weight(.medium))
@@ -353,6 +362,39 @@ private struct DeviceMemorySheet: View {
         try? content.write(to: DeviceSpecManager.memoryFileURL(for: device), atomically: true, encoding: .utf8)
     }
 
+    private var reviewBar: some View {
+        VStack(spacing: 8) {
+            Text("Review the lessons — edit if needed. Your original memory is kept until you tap Keep.")
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 12) {
+                Button(role: .destructive) {
+                    if let original = originalBeforeCompact { content = original }
+                    originalBeforeCompact = nil
+                    isEditing = false
+                } label: {
+                    Label("Discard", systemImage: "arrow.uturn.backward")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    saveEdits()
+                    originalBeforeCompact = nil
+                    isEditing = false
+                } label: {
+                    Label("Keep", systemImage: "checkmark")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.large)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
     private func compactOnDevice(systemPrompt: String) async throws -> String {
         let session = LanguageModelSession(instructions: systemPrompt)
         return try await session.respond(to: content).content
@@ -381,62 +423,94 @@ private struct DeviceMemorySheet: View {
         isCompacting = true
         defer { isCompacting = false }
 
-        let specContext = DeviceSpecManager.specContext(for: device)
-        var systemPrompt = """
-            You are a memory file optimizer for a MIDI device assistant app called "Midi Set List."
-            The memory file holds user-confirmed corrections and learned values for a specific MIDI device.
-            """
-        if !specContext.isEmpty {
-            systemPrompt += """
-
-                The device's reference spec is provided below. You know what is already documented there.
-                Use it to decide what to KEEP vs. DROP from the memory file:
-                - KEEP entries that correct or add to the spec (these are the user's ground truth)
-                - DROP entries that merely restate what the spec already says correctly
-                - DROP entries that are superseded by a later correction in the memory file
-
-                DEVICE SPEC:
-                \(specContext)
-                """
-        }
-        systemPrompt += """
-
-            Condense the memory file into a minimal, non-redundant set of bullet facts.
-            Rules:
-            - One fact per line, starting with "- "
-            - Remove duplicate or near-duplicate entries (keep the most specific/recent one)
-            - Strip out conversational context — keep only the factual conclusion
-            - Aim for under 20 lines
-            - No headers, no markdown fences, no explanation
-            Output ONLY the compacted memory content.
-            """
-
         do {
             let text: String
             if ai.offlineMode {
-                text = try await compactOnDevice(systemPrompt: systemPrompt)
+                text = try await compactOnDevice(systemPrompt: lessonsPrompt(onDevice: true))
             } else {
                 do {
                     text = try await ExternalAIClient.chat(
                         provider: provider,
                         apiKey: apiKey ?? "",
-                        systemPrompt: systemPrompt,
+                        systemPrompt: lessonsPrompt(onDevice: false),
                         messages: [ExternalAIMessage(role: "user", content: content)],
                         workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
                         anthropicModelID: ai.anthropicModel(for: .macroChat),
-                        anthropicThinking: false
+                        anthropicThinking: ai.thinkingEnabled(for: .macroChat)
                     ).text
                 } catch let error where ExternalAIError.isConnectivity(error) && SystemLanguageModel.default.isAvailable {
                     // Connection dropped mid-request — fall back to on-device
-                    text = try await compactOnDevice(systemPrompt: systemPrompt)
+                    text = try await compactOnDevice(systemPrompt: lessonsPrompt(onDevice: true))
                 }
             }
+            // Nothing is saved yet — the user reviews, then keeps or discards
+            originalBeforeCompact = content
             content = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            saveEdits()
-            isEditing = true  // drop into edit mode so user can review the result
+            isEditing = true
         } catch {
             compactError = error.localizedDescription
         }
+    }
+
+    /// Turns raw chat corrections into lessons learned: a rule the assistant can
+    /// apply to new requests, the reason behind it, and a concrete example.
+    private func lessonsPrompt(onDevice: Bool) -> String {
+        var spec = DeviceSpecManager.specFilesContext(for: device)
+        // The on-device model has a small context window — keep the spec excerpt short
+        if onDevice && spec.count > 4000 { spec = String(spec.prefix(4000)) + "\n[spec truncated]" }
+
+        var prompt = """
+            You maintain the AI memory for "\(device.name)" (MIDI channel \(device.midiChannel)) \
+            in the app "Midi Set List". The memory is read by an AI assistant before it builds \
+            MIDI/OSC macros for this device.
+
+            The raw memory is a log of chat moments the user saved: what they asked ("You:"), \
+            what the AI got wrong ("Previous:"), and the values they confirmed ("Confirmed:").
+
+            Turn it into LESSONS LEARNED the assistant can apply to NEW requests — not a shorter log. \
+            For each lesson, work out the underlying rule from the evidence: why was the first answer \
+            wrong, and what pattern does the correction reveal (e.g. an off-by-one numbering scheme, \
+            a bank that needs LSB instead of MSB, a naming convention the user prefers)?
+            """
+        if !spec.isEmpty {
+            prompt += """
+
+
+                Compare against the device reference spec below. When the memory contradicts the spec, \
+                say so explicitly ("The spec says X, but on this unit it is Y"). Drop entries that only \
+                repeat what the spec already states correctly.
+
+                DEVICE SPEC:
+                \(spec)
+                """
+        }
+        prompt += """
+
+
+            Output format (Markdown, nothing else — no fences, no preamble):
+
+            # \(device.name) — Lessons Learned
+
+            ## <Topic, e.g. Bank select, Program numbers, Effects CCs, Naming>
+            - **Lesson:** <a general rule, phrased as an instruction for next time>
+              **Why:** <what went wrong and what the user confirmed — the evidence>
+              **Example:** "<the user's wording>" → <confirmed values, e.g. MSB 0, LSB 2, PC 12>
+
+            ## Confirmed values
+            - <macro name> → <values>   (quick reference, one line each)
+
+            Rules:
+            - Every lesson must make sense on its own, without the original chat.
+            - Never drop a confirmed value — if it doesn't fit a lesson, keep it under Confirmed values.
+            - Merge duplicates. If a later correction overrides an earlier one, keep only the latest.
+            - Don't invent reasons. If the cause isn't clear from the evidence, write \
+            "**Why:** Not stated — confirmed by the user." rather than guessing.
+            - Group related lessons under the same topic. Skip empty sections.
+            - The memory may already contain an earlier "Lessons Learned" section followed by new \
+            raw entries. Keep the existing lessons and fold the new evidence into them — update, \
+            strengthen or correct a lesson rather than duplicating it.
+            """
+        return prompt
     }
 }
 
