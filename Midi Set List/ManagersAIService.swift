@@ -5,6 +5,7 @@
 
 import Combine
 import Foundation
+import FoundationModels
 import Network
 import Security
 
@@ -207,6 +208,7 @@ class AISettings: ObservableObject {
     }
 
     // Returns the configured provider, falling back to on-device if no key.
+    // Without Apple Intelligence, falls back to whichever external provider has a key.
     // No connection always wins and routes to on-device.
     func provider(for task: AITask) -> AIProviderType {
         if offlineMode { return .onDevice }
@@ -214,8 +216,26 @@ class AISettings: ObservableObject {
         switch selected {
         case .openAI    where hasOpenAIKey:    return .openAI
         case .anthropic where hasAnthropicKey: return .anthropic
-        default: return .onDevice
+        default:
+            if !onDeviceAvailable {
+                if hasAnthropicKey { return .anthropic }
+                if hasOpenAIKey    { return .openAI }
+            }
+            return .onDevice
         }
+    }
+
+    // MARK: Availability — AI surfaces are hidden when nothing can run them
+
+    /// Apple Intelligence is supported and enabled on this device
+    var onDeviceAvailable: Bool { SystemLanguageModel.default.isAvailable }
+
+    /// Some AI could run here: Apple Intelligence, or a ChatGPT / Claude key
+    var anyAIAvailable: Bool { onDeviceAvailable || hasOpenAIKey || hasAnthropicKey }
+
+    /// The provider this task resolves to can actually run right now
+    func isAvailable(_ task: AITask) -> Bool {
+        provider(for: task) != .onDevice || onDeviceAvailable
     }
 
     func setProvider(_ provider: AIProviderType, for task: AITask) {

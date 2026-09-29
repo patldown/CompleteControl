@@ -11,14 +11,41 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
-                offlineModeSection
-                apiKeysSection
-                taskRoutingSection
-                activeProvidersSection
+                if ai.anyAIAvailable {
+                    offlineModeSection
+                    apiKeysSection
+                    taskRoutingSection
+                    activeProvidersSection
+                } else {
+                    // No Apple Intelligence and no keys — only show how to turn AI on
+                    aiUnavailableSection
+                    apiKeysSection
+                }
             }
             .animation(.default, value: ai.offlineMode)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
+        }
+    }
+
+    // MARK: - No AI available
+
+    private var aiUnavailableSection: some View {
+        Section {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "eye.slash")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("AI features are hidden").font(.body.weight(.semibold))
+                    Text("This device doesn't support Apple Intelligence. Add a ChatGPT or Claude key below to turn on AI macro generation, reference files and device memory.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+        } footer: {
+            Text("Nothing has been deleted — your reference files and device memory come back as soon as AI is available.")
         }
     }
 
@@ -124,10 +151,18 @@ struct SettingsView: View {
                         Text(resolved.displayName)
                             .font(.caption)
                             .foregroundStyle(mismatch ? .orange : .secondary)
-                        if mismatch {
+                        if !ai.isAvailable(task) {
+                            Text("Not available right now — hidden in the app")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        } else if mismatch {
                             Text("Add a \(configured.displayName) key above to activate")
                                 .font(.caption2)
                                 .foregroundStyle(.orange)
+                        } else if configured == .onDevice && resolved != .onDevice {
+                            Text("No Apple Intelligence on this device — using \(resolved.displayName)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     if ai.offlineMode {
@@ -135,6 +170,7 @@ struct SettingsView: View {
                         OfflineModeBadge()
                     }
                 }
+                .opacity(ai.isAvailable(task) ? 1 : 0.5)
                 .padding(.vertical, 2)
             }
         }
@@ -159,6 +195,16 @@ private struct TaskRoutingRow: View {
 
     private var selectedProvider: AIProviderType { ai.routing[task, default: .onDevice] }
 
+    /// Flags options that can't run, e.g. On-Device without Apple Intelligence or a provider with no key
+    private func label(for provider: AIProviderType) -> String {
+        switch provider {
+        case .onDevice  where !ai.onDeviceAvailable: return "\(provider.displayName) (unavailable)"
+        case .openAI    where !ai.hasOpenAIKey:      return "\(provider.displayName) (no key)"
+        case .anthropic where !ai.hasAnthropicKey:   return "\(provider.displayName) (no key)"
+        default:                                     return provider.displayName
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -169,7 +215,7 @@ private struct TaskRoutingRow: View {
                     set: { ai.setProvider($0, for: task) }
                 )) {
                     ForEach(AIProviderType.allCases) { provider in
-                        Label(provider.displayName, systemImage: provider.icon).tag(provider)
+                        Label(label(for: provider), systemImage: provider.icon).tag(provider)
                     }
                 }
                 .pickerStyle(.menu)

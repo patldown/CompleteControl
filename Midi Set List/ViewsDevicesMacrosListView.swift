@@ -26,7 +26,9 @@ struct MacrosListView: View {
                 ContentUnavailableView(
                     "No Macros",
                     systemImage: "waveform.badge.plus",
-                    description: Text("Tap + to define your first macro for this category.")
+                    description: Text(ai.isAvailable(.macroChat)
+                        ? "Tap + to define your first macro, or the wand to describe one to AI."
+                        : "Tap + to define your first macro for this category.")
                 )
             } else {
                 List {
@@ -44,13 +46,16 @@ struct MacrosListView: View {
             ToolbarItem(placement: .primaryAction) {
                 Button { showingAddMacro = true } label: { Image(systemName: "plus") }
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button { showingChatView = true } label: {
-                    Image(systemName: "wand.and.stars")
-                        .foregroundStyle(ai.offlineMode ? Color.offlineMode : .accentColor)
-                        .offlineModeDot(ai.offlineMode)
+            // Hidden when no AI can run Macro Chat (no Apple Intelligence, no ChatGPT/Claude key)
+            if ai.isAvailable(.macroChat) {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showingChatView = true } label: {
+                        Image(systemName: "wand.and.stars")
+                            .foregroundStyle(ai.offlineMode ? Color.offlineMode : .accentColor)
+                            .offlineModeDot(ai.offlineMode)
+                    }
+                    .accessibilityLabel(ai.offlineMode ? "Generate macros (offline, on-device)" : "Generate macros")
                 }
-                .accessibilityLabel(ai.offlineMode ? "Generate macros (offline, on-device)" : "Generate macros")
             }
             if !category.macros.isEmpty {
                 ToolbarItem(placement: .navigationBarLeading) { EditButton() }

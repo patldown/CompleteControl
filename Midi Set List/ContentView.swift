@@ -40,7 +40,7 @@ struct ContentView: View {
             Tab("Settings", systemImage: "gear") {
                 SettingsView()
             }
-            .badge(ai.offlineMode ? Text("Offline") : nil)
+            .badge(ai.offlineMode && ai.anyAIAvailable ? Text("Offline") : nil)
         }
     }
 }

@@ -56,93 +56,96 @@ struct DeviceDetailView: View {
                 }
             }
 
-            Section {
-                if device.specFiles.isEmpty {
-                    Text("No spec files attached")
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline)
-                } else {
-                    ForEach(device.specFiles) { file in
-                        Button { viewingSpecFile = file } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: file.filename.lowercased().hasSuffix(".pdf")
-                                      ? "doc.richtext.fill" : "doc.text.fill")
-                                    .foregroundStyle(.blue)
-                                    .frame(width: 24)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(file.displayName)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.primary)
-                                    Text(file.filename.lowercased().hasSuffix(".pdf") ? "PDF" : "Text")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
+            // AI-only sections: hidden (never deleted) when no AI can use them
+            if ai.isAvailable(.macroChat) {
+                Section {
+                    if device.specFiles.isEmpty {
+                        Text("No spec files attached")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+                    } else {
+                        ForEach(device.specFiles) { file in
+                            Button { viewingSpecFile = file } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: file.filename.lowercased().hasSuffix(".pdf")
+                                          ? "doc.richtext.fill" : "doc.text.fill")
+                                        .foregroundStyle(.blue)
+                                        .frame(width: 24)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(file.displayName)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.primary)
+                                        Text(file.filename.lowercased().hasSuffix(".pdf") ? "PDF" : "Text")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
                                 }
+                                .padding(.vertical, 2)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .onDelete(perform: deleteSpecFiles)
+                    }
+
+                    Button {
+                        showingFilePicker = true
+                    } label: {
+                        Label("Attach Spec File", systemImage: "doc.badge.plus")
+                    }
+                } header: {
+                    Text("Reference Files")
+                } footer: {
+                    Text("Attach PDF or text MIDI/OSC specifications. The AI macro generator will automatically use these as context when generating macros for this device.")
+                }
+
+                Section {
+                    if ai.offlineMode {
+                        OfflineModeBanner(detail: "AI features for this device run on-device")
+                            .listRowInsets(EdgeInsets())
+                    }
+                    if memoryExists {
+                        Button { showingMemory = true } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "brain.head.profile")
+                                    .foregroundStyle(.purple)
+                                    .frame(width: 24)
+                                Text("View Device Memory")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                    .font(.caption).foregroundStyle(.tertiary)
                             }
                             .padding(.vertical, 2)
                         }
                         .buttonStyle(.plain)
-                    }
-                    .onDelete(perform: deleteSpecFiles)
-                }
 
-                Button {
-                    showingFilePicker = true
-                } label: {
-                    Label("Attach Spec File", systemImage: "doc.badge.plus")
-                }
-            } header: {
-                Text("Reference Files")
-            } footer: {
-                Text("Attach PDF or text MIDI/OSC specifications. The AI macro generator will automatically use these as context when generating macros for this device.")
-            }
-
-            Section {
-                if ai.offlineMode {
-                    OfflineModeBanner(detail: "AI features for this device run on-device")
-                        .listRowInsets(EdgeInsets())
-                }
-                if memoryExists {
-                    Button { showingMemory = true } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "brain.head.profile")
-                                .foregroundStyle(.purple)
-                                .frame(width: 24)
-                            Text("View Device Memory")
+                        Button(role: .destructive) {
+                            showingClearMemoryConfirm = true
+                        } label: {
+                            Label("Clear Device Memory", systemImage: "trash")
                                 .font(.subheadline)
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption).foregroundStyle(.tertiary)
                         }
-                        .padding(.vertical, 2)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(role: .destructive) {
-                        showingClearMemoryConfirm = true
-                    } label: {
-                        Label("Clear Device Memory", systemImage: "trash")
+                    } else {
+                        Text("No memory yet — use \"Save to Memory\" in the macro chat to record corrections.")
+                            .foregroundStyle(.secondary)
                             .font(.subheadline)
                     }
-                } else {
-                    Text("No memory yet — use \"Save to Memory\" in the macro chat to record corrections.")
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline)
-                }
-            } header: {
-                HStack {
-                    Text("AI Memory")
-                    if ai.offlineMode {
-                        Spacer()
-                        OfflineModeBadge()
+                } header: {
+                    HStack {
+                        Text("AI Memory")
+                        if ai.offlineMode {
+                            Spacer()
+                            OfflineModeBadge()
+                        }
                     }
+                } footer: {
+                    Text("Corrections saved from the macro chat are always injected into future AI sessions for this device.")
                 }
-            } footer: {
-                Text("Corrections saved from the macro chat are always injected into future AI sessions for this device.")
             }
         }
         .onAppear { memoryExists = DeviceSpecManager.hasMemory(for: device) }
@@ -308,7 +311,7 @@ private struct DeviceMemorySheet: View {
                 if ai.offlineMode { OfflineModeBanner() }
             }
             .safeAreaInset(edge: .bottom) {
-                if !isEditing && !content.isEmpty {
+                if !isEditing && !content.isEmpty && canCompact {
                     Button {
                         Task { await compactMemory() }
                     } label: {
@@ -353,6 +356,12 @@ private struct DeviceMemorySheet: View {
     private func compactOnDevice(systemPrompt: String) async throws -> String {
         let session = LanguageModelSession(instructions: systemPrompt)
         return try await session.respond(to: content).content
+    }
+
+    /// Compact runs on Claude/ChatGPT when online, or on-device when offline.
+    /// The button is hidden when neither can run it.
+    private var canCompact: Bool {
+        ai.offlineMode ? ai.onDeviceAvailable : ai.provider(for: .macroChat) != .onDevice
     }
 
     @MainActor
