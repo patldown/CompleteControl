@@ -53,9 +53,15 @@ struct LaunchContainer<Content: View>: View {
     }
 }
 
+/// Picks up exactly where the iOS launch screen leaves off — same LaunchLogo, same size,
+/// centred on the full screen over LaunchBackground — then adds the name and progress.
 struct LaunchSplashView: View {
     let status: String
+    /// Matches the launch-screen logo's point size, so the hand-off doesn't jump
+    static let logoSize: CGFloat = 160
+
     @State private var breathe = false
+    @State private var showDetails = false
 
     private var appName: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
@@ -64,44 +70,40 @@ struct LaunchSplashView: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
+        ZStack {
+            Color("LaunchBackground")
 
-            ZStack {
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .fill(LinearGradient(colors: [.accentColor, .accentColor.opacity(0.6)],
-                                         startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: 104, height: 104)
-                    .shadow(color: .accentColor.opacity(0.35), radius: breathe ? 18 : 8)
-                Image(systemName: "pianokeys")
-                    .font(.system(size: 46, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .symbolEffect(.pulse, options: .repeating)
-            }
-            .scaleEffect(breathe ? 1.04 : 0.98)
+            Image("LaunchLogo")
+                .resizable()
+                .frame(width: Self.logoSize, height: Self.logoSize)
+                .shadow(color: .black.opacity(breathe ? 0.25 : 0.1), radius: breathe ? 16 : 6)
+                .scaleEffect(breathe ? 1.04 : 1.0)
+                .accessibilityHidden(true)
 
+            // Just below the centred logo
             Text(appName)
                 .font(.title2.bold())
-
-            Spacer()
+                .offset(y: Self.logoSize / 2 + 36)
+                .opacity(showDetails ? 1 : 0)
 
             VStack(spacing: 10) {
+                Spacer()
                 ProgressView()
-                    .controlSize(.regular)
                 Text(status)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .contentTransition(.opacity)
                     .animation(.default, value: status)
             }
-            .padding(.bottom, 48)
+            .padding(.bottom, 64)
+            .opacity(showDetails ? 1 : 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground).ignoresSafeArea())
+        .ignoresSafeArea()
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Loading. \(status)")
         .onAppear {
-            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+            withAnimation(.easeIn(duration: 0.3)) { showDetails = true }
+            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true).delay(0.2)) {
                 breathe = true
             }
         }
