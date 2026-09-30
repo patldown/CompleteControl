@@ -45,6 +45,9 @@ class Song: NSManagedObject, Identifiable {
     /// True: the capo moves to keep the song in its original key as the chords are transposed.
     /// False: transposing changes the key and the capo stays where it's set.
     @NSManaged var capoKeepsKey: Bool
+    /// Send Snapshot 1 when the song is loaded in Perform. Off: the song loads with no
+    /// snapshot live, and the first pedal press (or tap) sends one.
+    @NSManaged var sendsSnapshotOnLoad: Bool
     @NSManaged private var capoRaw: Int16
 
     // bpm is stored as NSNumber? so nil means "no clock"

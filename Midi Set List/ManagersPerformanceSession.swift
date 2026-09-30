@@ -44,7 +44,8 @@ final class PerformanceSession {
     /// The song MIDI snapshot triggers act on.
     var activeSong: Song? { currentSong ?? focusedSong }
 
-    /// Last snapshot recalled on `activeSong` (0-based).
+    /// Last snapshot recalled on `activeSong` (0-based); -1 when a song loaded without
+    /// sending one (see Song.sendsSnapshotOnLoad), so "next snapshot" goes to Snapshot 1.
     private(set) var activeSnapshot = 0
 
     // ── Feedback for the UI ───────────────────────────────────────────
@@ -67,7 +68,8 @@ final class PerformanceSession {
 
     // MARK: - Set list playback
 
-    /// Starts a set list: loads the first song (or `index`) and sends its Snapshot 1.
+    /// Starts a set list: loads the first song (or `index`) and sends its Snapshot 1
+    /// unless the song has that turned off.
     func play(_ setList: SetList, startAt index: Int = 0) {
         self.setList = setList
         activityLog?.log("Perform: started \"\(setList.name)\"", direction: .system)
@@ -89,7 +91,14 @@ final class PerformanceSession {
         songIndex = index
         let song = list[index]
         followClock(for: song)
-        recall(snapshot: 0, of: song)
+        if song.sendsSnapshotOnLoad {
+            recall(snapshot: 0, of: song)
+        } else {
+            sendTask?.cancel()
+            isSending = false
+            lastError = nil
+            activeSnapshot = -1
+        }
     }
 
     func nextSong() { if hasNextSong { goToSong(songIndex + 1) } }

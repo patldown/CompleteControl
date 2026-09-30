@@ -235,42 +235,19 @@ struct SongDetailView: View {
                 }
             }
             
-            SongSnapshotsSection(song: song, selected: $selectedSnapshot)
-
-            // Send Section — shown whenever the selected snapshot has commands
-            if !snapshotCommands.isEmpty {
-                Section {
-                    Button {
-                        Task { await sendAllCommands() }
-                    } label: {
-                        HStack {
-                            if isSendingCommands {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "paperplane.fill")
-                            }
-                            Text("Send \(song.snapshotName(selectedSnapshot))")
-                            Spacer()
-                            if !midiManager.connectedDevices.isEmpty {
-                                Text("\(midiManager.connectedDevices.count) MIDI")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
+            SongSnapshotsSection(song: song, selected: $selectedSnapshot,
+                                 footerOverride: isSelectMode ? "Select commands for batch operations." : nil) {
+                if !snapshotCommands.isEmpty {
+                    HStack {
+                        Text("\(song.snapshotName(selectedSnapshot)) Commands")
+                        Spacer()
+                        Text(isSelectMode ? "\(selectedCommands.count) selected" : "\(snapshotCommands.count)")
                     }
-                    .disabled(!canSendAny)
-                } header: {
-                    Text("MIDI / OSC")
-                } footer: {
-                    if canSendAny {
-                        Text("Sends this snapshot's \(snapshotCommands.count) command(s) in sequence.")
-                    } else {
-                        Text("Connect a MIDI device or an OSC target to send commands.")
-                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
                 }
-            }
-            
-            Section {
+
                 ForEach(snapshotCommands) { command in
                     Button {
                         if isSelectMode {
@@ -348,27 +325,47 @@ struct SongDetailView: View {
                         Label("Quick Add", systemImage: "bolt.fill")
                     }
                 } label: {
-                    Label("Add Command", systemImage: "plus.circle.fill")
+                    Label("Add to \(song.snapshotName(selectedSnapshot))", systemImage: "plus.circle.fill")
                 }
-            } header: {
-                HStack {
-                    Text("\(song.snapshotName(selectedSnapshot)) Commands")
-                    Spacer()
-                    if isSelectMode {
-                        Text("\(selectedCommands.count) selected")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("\(snapshotCommands.count)")
+
+                if !snapshotCommands.isEmpty {
+                    Button {
+                        Task { await sendAllCommands() }
+                    } label: {
+                        HStack {
+                            if isSendingCommands {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "paperplane.fill")
+                            }
+                            Text("Send \(song.snapshotName(selectedSnapshot))")
+                            Spacer()
+                            if !canSendAny && !isSendingCommands {
+                                Text("No MIDI or OSC connected")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if !midiManager.connectedDevices.isEmpty {
+                                Text("\(midiManager.connectedDevices.count) MIDI")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .disabled(!canSendAny)
+                }
+
+                Toggle(isOn: Binding(
+                    get: { song.sendsSnapshotOnLoad },
+                    set: { song.sendsSnapshotOnLoad = $0; saveSong() }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Send \(song.snapshotName(0)) When Song Loads")
+                        Text(song.sendsSnapshotOnLoad
+                             ? "In Perform, loading this song sends its first snapshot."
+                             : "In Perform, nothing is sent until you tap a snapshot or press a pedal.")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                }
-            } footer: {
-                if isSelectMode {
-                    Text("Select commands for batch operations.")
-                } else if snapshotCommands.isEmpty {
-                    Text("Add macros, macro groups or commands to this snapshot with Add Command.")
-                } else {
-                    Text("Commands are sent in order from top to bottom. Tap to edit, swipe left to delete, swipe right to send/duplicate. Long-press and drag to reorder.")
                 }
             }
         }
