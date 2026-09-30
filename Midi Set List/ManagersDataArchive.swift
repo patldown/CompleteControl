@@ -144,6 +144,9 @@ enum DataArchiveExporter {
         switch (entity, relationship) {
         case ("SetList", "songsRaw"),
              ("Song", "commandsRaw"),
+             ("Song", "partsRaw"),
+             ("Song", "chartRolesRaw"),
+             ("SongPart", "rolesRaw"),
              ("MIDICommand", "sourceMacro"),
              ("DeviceMacro", "category"),
              ("DeviceMacro", "childMacrosRaw"),
@@ -205,14 +208,15 @@ enum DataArchiveExporter {
 
     private static func attachedFiles(for object: NSManagedObject, id: UUID) -> [DataArchive.FileEntry] {
         var files: [DataArchive.FileEntry] = []
-        if let song = object as? Song, let url = song.pdfFileURL, let filename = song.pdfFileName,
+        // A song's own chart, or one of its parts
+        if let chart = object as? ChartSource, let url = chart.pdfFileURL, let filename = chart.pdfFileName,
            let data = try? Data(contentsOf: url) {
             files.append(.init(kind: .songPDF, ownerID: id, filename: filename, data: data))
         }
         // Sheet-music images use the same kind: every app version restores a .songPDF entry by
         // writing it to Documents under its name, so older builds can still read these backups
-        if let song = object as? Song {
-            for (name, url) in zip(song.chartImageNames, song.chartImageURLs) {
+        if let chart = object as? ChartSource {
+            for (name, url) in zip(chart.chartImageNames, chart.chartImageURLs) {
                 if let data = try? Data(contentsOf: url) {
                     files.append(.init(kind: .songPDF, ownerID: id, filename: name, data: data))
                 }
@@ -329,12 +333,23 @@ enum DataArchiveImporter {
             for record in archive.records {
                 guard let entity = model?.entitiesByName[record.entity] else { continue }   // unknown entity: skip
                 // insertNewObject instantiates the app's subclass (Song, SetList…)
-                let object = try existing(record.entity, id: record.id, context: context)
-                    ?? NSEntityDescription.insertNewObject(forEntityName: record.entity, into: context)
+                var found = try existing(record.entity, id: record.id, context: context)
+                // A custom role someone else made ("Horns") is the same as ours of that name
+                var keepLocalID = false
+                if found == nil, record.entity == "BandRole", case .string(let name)? = record.attributes["name"],
+                   let match = try existingRole(named: name, context: context) {
+                    found = match
+                    keepLocalID = true
+                }
+                let isNew = found == nil
+                let object = found ?? NSEntityDescription.insertNewObject(forEntityName: record.entity, into: context)
                 if let device = object as? InstrumentDevice, !device.isInserted {
                     previousSpecFiles[record.id] = device.specFiles
                 }
                 for (name, description) in entity.attributesByName {
+                    if keepLocalID && (name == "id" || name == "orderIndexRaw") { continue }
+                    // Keep the local order of roles already here; it's this band's roster order
+                    if record.entity == "BandRole" && !isNew && name == "orderIndexRaw" { continue }
                     if let raw = record.attributes[name], let value = decode(raw, type: description.attributeType) {
                         object.setValue(value, forKey: name)
                     } else if description.isOptional {
@@ -372,6 +387,8 @@ enum DataArchiveImporter {
 
             let written = try writeFiles(archive.files, objects: objects, overwriteMemory: mode == .replaceAll)
             try context.save()
+            // A backup from before band roles existed restores none; put the built-ins back
+            BandRole.seedDefaultsIfNeeded(in: context)
             for url in replacedFiles where !written.contains(url.standardizedFileURL) {
                 try? FileManager.default.removeItem(at: url)
             }
@@ -383,6 +400,13 @@ enum DataArchiveImporter {
     }
 
     // MARK: Helpers
+
+    private static func existingRole(named name: String, context: NSManagedObjectContext) throws -> NSManagedObject? {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "BandRole")
+        request.predicate = NSPredicate(format: "name ==[c] %@", name)
+        request.fetchLimit = 1
+        return try context.fetch(request).first
+    }
 
     private static func existing(_ entity: String, id: UUID, context: NSManagedObjectContext) throws -> NSManagedObject? {
         let request = NSFetchRequest<NSManagedObject>(entityName: entity)
@@ -398,7 +422,9 @@ enum DataArchiveImporter {
         for entity in context.persistentStoreCoordinator?.managedObjectModel.entities ?? [] {
             guard let name = entity.name else { continue }
             for object in try context.fetch(NSFetchRequest<NSManagedObject>(entityName: name)) {
-                if let song = object as? Song, let url = song.pdfFileURL { files.append(url) }
+                if let chart = object as? ChartSource {
+                    files += [chart.pdfFileURL].compactMap { $0 } + chart.chartImageURLs
+                }
                 if let device = object as? InstrumentDevice {
                     files += device.specFiles.map(DeviceSpecManager.fileURL)
                     files.append(DeviceSpecManager.memoryFileURL(for: device))
@@ -445,11 +471,11 @@ enum DataArchiveImporter {
     /// Stored file names are later used to read and delete files, so an imported
     /// name must never point outside the app's folders.
     private static func sanitizeFileReferences(_ object: NSManagedObject) {
-        if let song = object as? Song, let name = song.pdfFileName {
-            song.pdfFileName = safeFilename(name)
+        if let chart = object as? ChartSource, let name = chart.pdfFileName {
+            chart.pdfFileName = safeFilename(name)
         }
-        if let song = object as? Song, !song.chartImageNames.isEmpty {
-            song.chartImageNames = song.chartImageNames.compactMap { safeFilename($0) }
+        if let chart = object as? ChartSource, !chart.chartImageNames.isEmpty {
+            chart.chartImageNames = chart.chartImageNames.compactMap { safeFilename($0) }
         }
         if let device = object as? InstrumentDevice,
            let raw = device.specFileNamesData,
@@ -504,13 +530,15 @@ enum DataArchiveImporter {
         case "DeviceMacro":      (one, many) = ("macro", "macros")
         case "OSCTarget":        (one, many) = ("OSC device", "OSC devices")
         case "SavedPreset":      (one, many) = ("saved preset", "saved presets")
+        case "SongPart":         (one, many) = ("song part", "song parts")
+        case "BandRole":         (one, many) = ("band role", "band roles")
         default:                 (one, many) = (entity, entity)
         }
         return "\(count) \(count == 1 ? one : many)"
     }
 
     private static func displayOrder(_ entity: String) -> Int {
-        ["SetList", "Song", "MIDICommand", "InstrumentDevice", "MacroCategory", "DeviceMacro", "OSCTarget", "SavedPreset"]
+        ["SetList", "Song", "SongPart", "BandRole", "MIDICommand", "InstrumentDevice", "MacroCategory", "DeviceMacro", "OSCTarget", "SavedPreset"]
             .firstIndex(of: entity) ?? 99
     }
 }
