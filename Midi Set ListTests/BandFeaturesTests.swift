@@ -533,3 +533,35 @@ struct ReferenceTrackTests {
         #expect(song.referenceTrackDuration == nil)
     }
 }
+
+// MARK: - BPM and MIDI clock
+
+@Suite("BPM and MIDI clock")
+@MainActor
+struct SongClockTests {
+    let controller = PersistenceController(inMemory: true)
+    var ctx: NSManagedObjectContext { controller.viewContext }
+
+    @Test func songMadeWithATempo_sendsClockAtIt() {
+        let song = Song.create(name: "Test", bpm: 98, in: ctx)
+        #expect(song.midiClockEnabled)
+        #expect(song.clockBPM == 98)
+    }
+
+    @Test func songWithoutATempo_sendsNoClock() {
+        #expect(Song.create(name: "Test", in: ctx).clockBPM == nil)
+    }
+
+    @Test func clockOff_keepsTheSongsBPM() {
+        let song = Song.create(name: "Test", bpm: 120, in: ctx)
+        song.midiClockEnabled = false
+        #expect(song.bpm == 120)
+        #expect(song.clockBPM == nil)
+    }
+
+    @Test func settingABPMLater_doesNotTurnTheClockOn() {
+        let song = Song.create(name: "Test", in: ctx)
+        song.bpm = 140
+        #expect(song.clockBPM == nil)
+    }
+}

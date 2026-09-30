@@ -50,12 +50,20 @@ class Song: NSManagedObject, Identifiable, ChartSource {
     @NSManaged var sendsSnapshotOnLoad: Bool
     @NSManaged private var capoRaw: Int16
 
-    // bpm is stored as NSNumber? so nil means "no clock"
+    /// The song's tempo; nil when not set. It's part of the song whether or not the clock runs.
     @NSManaged private var bpmRaw: NSNumber?
     var bpm: Int? {
         get { bpmRaw?.intValue }
         set { bpmRaw = newValue.map { NSNumber(value: $0) } }
     }
+
+    /// Send MIDI clock at the song's BPM. Before this switch existed, having a BPM meant the
+    /// clock was on — the stored default (true) keeps those songs as they were, and songs
+    /// without a BPM have no clock either way.
+    @NSManaged var midiClockEnabled: Bool
+
+    /// The tempo to send as MIDI clock, or nil when this song sends none
+    var clockBPM: Int? { midiClockEnabled ? bpm : nil }
 
     // ── Key, transpose & capo ──────────────────────────────────────────
     static let transposeRange = -6...6
@@ -179,6 +187,8 @@ class Song: NSManagedObject, Identifiable, ChartSource {
         s.notes = notes
         s.lyrics = lyrics
         s.bpmRaw = bpm.map { NSNumber(value: $0) }
+        // As before the switch existed: a song made with a tempo sends clock at it
+        s.midiClockEnabled = bpm != nil
         s.timeSignature = timeSignature
         s.dateCreated = Date()
         s.dateModified = Date()

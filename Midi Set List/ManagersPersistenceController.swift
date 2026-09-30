@@ -142,6 +142,7 @@ final class PersistenceController {
             attr("pdfFileName",   .stringAttributeType,    optional: true),
             attr("chartImageNamesData", .stringAttributeType, optional: true),
             attr("bpmRaw",        .integer32AttributeType, optional: true),
+            attr("midiClockEnabled", .booleanAttributeType, defaultValue: true),
             attr("timeSignature", .stringAttributeType,    optional: true),
             attr("snapshotNamesData", .stringAttributeType, optional: true),
             attr("referenceTrackID",     .stringAttributeType, optional: true),

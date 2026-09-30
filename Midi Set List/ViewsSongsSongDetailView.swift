@@ -62,18 +62,50 @@ struct SongDetailView: View {
                     .multilineTextAlignment(.trailing)
                 }
 
-                Button {
-                    showingGenrePicker = true
-                } label: {
-                    LabeledContent("Genre") {
-                        Text(selectedGenres.isEmpty
-                             ? "Unspecified"
-                             : selectedGenres.sorted().joined(separator: ", "))
-                            .foregroundStyle(selectedGenres.isEmpty ? .secondary : .primary)
-                            .multilineTextAlignment(.trailing)
+                // Genre, BPM and time signature side by side; BPM and time signature are
+                // the song's own, whether or not it sends MIDI clock
+                HStack(alignment: .top, spacing: 12) {
+                    compactField("Genre") {
+                        Button {
+                            showingGenrePicker = true
+                        } label: {
+                            Text(selectedGenres.isEmpty ? "None" : selectedGenres.sorted().joined(separator: ", "))
+                                .foregroundStyle(selectedGenres.isEmpty ? .secondary : .primary)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 6)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    compactField("BPM") {
+                        TextField("—", value: Binding<Int?>(
+                            get: { song.bpm },
+                            set: { newBPM in
+                                song.bpm = newBPM.map { max(20, min(300, $0)) }
+                                if let bpm = song.clockBPM, midiManager.isClockRunning {
+                                    midiManager.startClock(bpm: bpm, sendTransport: clockSendTransport)
+                                } else if song.clockBPM == nil, midiManager.isClockRunning {
+                                    midiManager.stopClock()
+                                }
+                            }
+                        ), format: .number)
+                        .keyboardType(.numberPad)
+                        .monospacedDigit()
+                        .padding(.vertical, 6)
+                    }
+                    compactField("Time Sig.") {
+                        Picker("Time Signature", selection: Binding(
+                            get: { song.timeSignature ?? "" },
+                            set: { song.timeSignature = $0.isEmpty ? nil : $0; saveSong() }
+                        )) {
+                            Text("—").tag("")
+                            ForEach(timeSignatures, id: \.self) { Text($0).tag($0) }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
                     }
                 }
-                .foregroundStyle(.primary)
 
                 LabeledContent("Notes") {
                     TextField("Notes", text: Binding(
@@ -88,88 +120,60 @@ struct SongDetailView: View {
 
             keySection
 
-            // MIDI Clock Section
+            // MIDI Clock: only the clock — its tempo is the song's BPM above
             Section {
-                Toggle("Enable MIDI Clock", isOn: Binding(
-                    get: { song.bpm != nil },
+                Toggle("Send MIDI Clock", isOn: Binding(
+                    get: { song.midiClockEnabled && song.bpm != nil },
                     set: { enabled in
+                        song.midiClockEnabled = enabled
                         if enabled {
-                            song.bpm = 120
-                            if song.timeSignature == nil { song.timeSignature = "4/4" }
+                            if song.bpm == nil { song.bpm = 120 }
                         } else {
                             midiManager.stopClock()
-                            song.bpm = nil
                         }
+                        saveSong()
                     }
                 ))
 
-                if song.bpm != nil {
-                    LabeledContent("BPM") {
-                        TextField("20–300", value: Binding(
-                            get: { song.bpm ?? 120 },
-                            set: { newBPM in
-                                let clamped = max(20, min(300, newBPM))
-                                song.bpm = clamped
-                                if midiManager.isClockRunning {
-                                    midiManager.startClock(bpm: clamped, sendTransport: clockSendTransport)
-                                }
-                            }
-                        ), format: .number)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 70)
-                        .monospacedDigit()
-                    }
+                if let clockBPM = song.clockBPM, midiManager.isInitialized {
+                    Toggle("Send Start / Stop", isOn: $clockSendTransport)
+                        .disabled(midiManager.isClockRunning)
 
-                    Picker("Time Signature", selection: Binding(
-                        get: { song.timeSignature ?? "4/4" },
-                        set: { song.timeSignature = $0 }
-                    )) {
-                        ForEach(timeSignatures, id: \.self) { sig in
-                            Text(sig).tag(sig)
+                    Button {
+                        if midiManager.isClockRunning {
+                            midiManager.stopClock()
+                        } else {
+                            midiManager.startClock(bpm: clockBPM, sendTransport: clockSendTransport)
                         }
-                    }
-
-                    if midiManager.isInitialized {
-                        Toggle("Send Start / Stop", isOn: $clockSendTransport)
-                            .disabled(midiManager.isClockRunning)
-
-                        Button {
+                    } label: {
+                        HStack {
+                            Image(systemName: midiManager.isClockRunning ? "stop.fill" : "metronome")
+                            Text(midiManager.isClockRunning ? "Stop Clock" : "Start Clock")
                             if midiManager.isClockRunning {
-                                midiManager.stopClock()
-                            } else {
-                                midiManager.startClock(bpm: song.bpm ?? 120, sendTransport: clockSendTransport)
+                                Spacer()
+                                Text("\(midiManager.currentClockBPM) BPM")
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.8))
                             }
-                        } label: {
-                            HStack {
-                                Image(systemName: midiManager.isClockRunning ? "stop.fill" : "metronome")
-                                Text(midiManager.isClockRunning ? "Stop Clock" : "Start Clock")
-                                if midiManager.isClockRunning {
-                                    Spacer()
-                                    Text("\(midiManager.currentClockBPM) BPM")
-                                        .font(.caption)
-                                        .foregroundStyle(.white.opacity(0.8))
-                                }
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(midiManager.isClockRunning ? .red : .green)
-                        .disabled(midiManager.availableDevices.isEmpty)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(midiManager.isClockRunning ? .red : .green)
+                    .disabled(midiManager.availableDevices.isEmpty)
                 }
             } header: {
                 Text("MIDI Clock")
             } footer: {
-                if song.bpm == nil {
-                    Text("Enable to send MIDI clock pulses to connected devices.")
+                if song.clockBPM == nil {
+                    Text("Sends clock pulses at the song's BPM so connected gear follows its tempo.")
                 } else if midiManager.availableDevices.isEmpty {
                     Text("No MIDI devices found. Make sure your device is connected.")
                 } else {
                     Text(clockSendTransport
-                         ? "Sends 24 PPQN + Start/Stop to all available devices. Time signature is display-only."
-                         : "Sends 24 PPQN tempo only — no Start/Stop. Devices sync to tempo but play/stop independently.")
+                         ? "Sends 24 PPQN at \(song.bpm ?? 120) BPM + Start/Stop to all available devices."
+                         : "Sends 24 PPQN at \(song.bpm ?? 120) BPM, tempo only — devices sync to tempo but play/stop independently.")
                 }
             }
 

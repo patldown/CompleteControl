@@ -254,7 +254,7 @@ final class PerformanceSession {
     /// If the MIDI clock is running, move it to the new song's tempo (or stop it).
     private func followClock(for song: Song) {
         guard let midiManager, midiManager.isClockRunning else { return }
-        if let bpm = song.bpm {
+        if let bpm = song.clockBPM {
             midiManager.startClock(bpm: bpm, sendTransport: midiManager.clockSendsTransport)
         } else {
             midiManager.stopClock()
