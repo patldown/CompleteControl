@@ -29,8 +29,8 @@ struct ContentView: View {
                 DeviceLibraryView()
             }
 
-            Tab("MIDI Devices", systemImage: "cable.connector", value: "mididevices") {
-                MIDIDevicesView()
+            Tab("Connections", systemImage: "cable.connector", value: "connections") {
+                ConnectionsView()
             }
 
             Tab("Activity", systemImage: "waveform", value: "activity") {

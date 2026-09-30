@@ -1,15 +1,26 @@
 //
-//  MIDIDevicesView.swift
+//  ConnectionsView.swift
 //  Midi Set List
 //
 //  Created by Patrick Downey on 9/25/26.
 //
+//  Everything about how gear is connected, in one tab: Bluetooth pairing and pedals,
+//  MIDI outputs and inputs, and OSC / network devices such as mixers.
+//
 
 import SwiftUI
+import CoreData
 import CoreAudioKit
 
-struct MIDIDevicesView: View {
+struct ConnectionsView: View {
     @Environment(MIDIManager.self) private var midiManager
+    @Environment(OSCManager.self) private var oscManager
+    @Environment(\.managedObjectContext) private var viewContext
+    @FetchRequest(sortDescriptors: [SortDescriptor(\.name)]) private var oscTargets: FetchedResults<OSCTarget>
+    @ObservedObject private var pedals = PedalSettings.shared
+
+    @State private var showingAddOSCTarget = false
+    @State private var editingOSCTarget: OSCTarget?
     @State private var showingTestSheet = false
     @State private var showingBTMIDI = false
     @State private var lastError: String?
@@ -49,6 +60,27 @@ struct MIDIDevicesView: View {
                 } header: {
                     Text("Status")
                 }
+
+                Section {
+                    Button {
+                        showingBTMIDI = true
+                    } label: {
+                        Label("Pair Bluetooth MIDI Device", systemImage: "wave.3.right")
+                    }
+                    NavigationLink {
+                        PedalSettingsView()
+                    } label: {
+                        LabeledContent {
+                            Text(pedals.isEnabled ? "On" : "Off")
+                        } label: {
+                            Label("Page-Turner Pedals", systemImage: "shoe.2")
+                        }
+                    }
+                } header: {
+                    Text("Bluetooth")
+                } footer: {
+                    Text("Bluetooth MIDI gear — foot controllers, keyboards — pairs here, then shows under MIDI Outputs and Inputs. Page-turner pedals pair in the device's Bluetooth settings.")
+                }
                 
                 Section {
                     ForEach(midiManager.availableDevices) { device in
@@ -74,13 +106,13 @@ struct MIDIDevicesView: View {
                     }
                 } header: {
                     HStack {
-                        Text("Available Devices")
+                        Text("MIDI Outputs")
                         Spacer()
                         Text("\(midiManager.availableDevices.count)")
                             .foregroundStyle(.secondary)
                     }
                 } footer: {
-                    Text("Tap a device to connect or disconnect. Connected devices will receive MIDI commands.")
+                    Text("Tap a device to connect or disconnect. Connected devices receive MIDI commands.")
                 }
                 
                 Section {
@@ -110,13 +142,43 @@ struct MIDIDevicesView: View {
                     }
                 } header: {
                     HStack {
-                        Text("Inputs")
+                        Text("MIDI Inputs")
                         Spacer()
                         Text("\(midiManager.availableSources.count)")
                             .foregroundStyle(.secondary)
                     }
                 } footer: {
-                    Text("The app listens to every input — foot controllers, keyboards, Bluetooth MIDI. Pair Bluetooth gear with the wave button at the top.")
+                    Text("The app listens to every input — foot controllers, keyboards, Bluetooth MIDI.")
+                }
+
+                Section {
+                    ForEach(oscTargets) { target in
+                        OSCTargetRow(target: target)
+                            .swipeActions(edge: .leading) {
+                                Button("Edit") { editingOSCTarget = target }.tint(.blue)
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button("Delete", role: .destructive) { deleteOSCTarget(target) }
+                            }
+                    }
+                    Button {
+                        showingAddOSCTarget = true
+                    } label: {
+                        Label("Add OSC Device", systemImage: "plus.circle")
+                    }
+                } header: {
+                    HStack {
+                        Text("OSC / Network")
+                        Spacer()
+                        Text("\(oscTargets.count)")
+                            .foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    if let address = oscManager.lastSentAddress {
+                        Text("Mixers and other network gear, such as a Behringer XR18 or X32. Last sent: \(address)")
+                    } else {
+                        Text("Mixers and other network gear, such as a Behringer XR18 or X32. Swipe a device to edit or delete it.")
+                    }
                 }
 
                 if !midiManager.connectedDevices.isEmpty {
@@ -131,7 +193,7 @@ struct MIDIDevicesView: View {
                     }
                 }
             }
-            .navigationTitle("MIDI Devices")
+            .navigationTitle("Connections")
             .offlineStatusBadge()
             .performShortcut()
             .toolbar {
@@ -142,11 +204,20 @@ struct MIDIDevicesView: View {
                         Label("Scan", systemImage: "arrow.clockwise")
                     }
                 }
-                ToolbarItem(placement: .secondaryAction) {
-                    Button {
-                        showingBTMIDI = true
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button {
+                            showingBTMIDI = true
+                        } label: {
+                            Label("Pair Bluetooth MIDI Device", systemImage: "wave.3.right")
+                        }
+                        Button {
+                            showingAddOSCTarget = true
+                        } label: {
+                            Label("Add OSC Device", systemImage: "network")
+                        }
                     } label: {
-                        Label("Bluetooth MIDI", systemImage: "wave.3.right")
+                        Label("Add Connection", systemImage: "plus")
                     }
                 }
             }
@@ -155,6 +226,12 @@ struct MIDIDevicesView: View {
             }
             .sheet(isPresented: $showingTestSheet) {
                 MIDITestView()
+            }
+            .sheet(isPresented: $showingAddOSCTarget) {
+                AddEditOSCTargetView()
+            }
+            .sheet(item: $editingOSCTarget) { target in
+                AddEditOSCTargetView(target: target)
             }
             .alert("MIDI Error", isPresented: $showingError) {
                 Button("OK", role: .cancel) {}
@@ -167,6 +244,12 @@ struct MIDIDevicesView: View {
                 midiManager.scanForDevices()
             }
         }
+    }
+
+    private func deleteOSCTarget(_ target: OSCTarget) {
+        oscManager.disconnect(from: target)
+        viewContext.delete(target)
+        try? viewContext.save()
     }
 }
 
@@ -248,7 +331,7 @@ struct BTMIDIConnectSheet: UIViewControllerRepresentable {
 
 #Preview {
     NavigationStack {
-        MIDIDevicesView()
+        ConnectionsView()
     }
     .environment(MIDIManager())
     .environment(PerformanceSession())

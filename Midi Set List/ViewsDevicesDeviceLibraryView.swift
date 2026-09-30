@@ -6,52 +6,35 @@
 import SwiftUI
 import CoreData
 
+/// The instrument & macro library. How gear is connected (MIDI, Bluetooth, OSC mixers)
+/// lives in the Connections tab.
 struct DeviceLibraryView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @Environment(OSCManager.self) private var oscManager
     @FetchRequest(sortDescriptors: [SortDescriptor(\.name)]) private var instruments: FetchedResults<InstrumentDevice>
-    @FetchRequest(sortDescriptors: [SortDescriptor(\.name)]) private var oscTargets: FetchedResults<OSCTarget>
 
     @State private var showingAddInstrument = false
-    @State private var showingAddOSCTarget = false
-    @State private var editingOSCTarget: OSCTarget?
-
-    private var isEmpty: Bool { instruments.isEmpty && oscTargets.isEmpty }
 
     var body: some View {
         NavigationStack {
             Group {
-                if isEmpty {
-                    ContentUnavailableView(
-                        "No Devices",
-                        systemImage: "cable.connector",
-                        description: Text("Add MIDI instruments or network OSC devices to build a macro library.")
-                    )
+                if instruments.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Devices", systemImage: "pianokeys")
+                    } description: {
+                        Text("Add your MIDI instruments to build a macro library. Mixers and other OSC gear are in the Connections tab.")
+                    } actions: {
+                        Button("Add MIDI Instrument") { showingAddInstrument = true }
+                            .buttonStyle(.bordered)
+                    }
                 } else {
                     List {
-                        if !oscTargets.isEmpty {
-                            Section("OSC / Network") {
-                                ForEach(oscTargets) { target in
-                                    OSCTargetRow(target: target)
-                                        .swipeActions(edge: .leading) {
-                                            Button("Edit") { editingOSCTarget = target }.tint(.blue)
-                                        }
-                                        .swipeActions(edge: .trailing) {
-                                            Button("Delete", role: .destructive) { deleteOSCTarget(target) }
-                                        }
+                        Section("MIDI Instruments") {
+                            ForEach(instruments) { device in
+                                NavigationLink(destination: DeviceDetailView(device: device)) {
+                                    DeviceRow(device: device)
                                 }
                             }
-                        }
-
-                        if !instruments.isEmpty {
-                            Section("MIDI Instruments") {
-                                ForEach(instruments) { device in
-                                    NavigationLink(destination: DeviceDetailView(device: device)) {
-                                        DeviceRow(device: device)
-                                    }
-                                }
-                                .onDelete(perform: deleteInstruments)
-                            }
+                            .onDelete(perform: deleteInstruments)
                         }
                     }
                 }
@@ -61,19 +44,10 @@ struct DeviceLibraryView: View {
             .performShortcut()
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button {
-                            showingAddOSCTarget = true
-                        } label: {
-                            Label("Add OSC Target", systemImage: "network.badge.shield.half.filled")
-                        }
-                        Button {
-                            showingAddInstrument = true
-                        } label: {
-                            Label("Add MIDI Instrument", systemImage: "pianokeys")
-                        }
+                    Button {
+                        showingAddInstrument = true
                     } label: {
-                        Image(systemName: "plus")
+                        Label("Add MIDI Instrument", systemImage: "plus")
                     }
                 }
                 if !instruments.isEmpty {
@@ -83,23 +57,11 @@ struct DeviceLibraryView: View {
             .sheet(isPresented: $showingAddInstrument) {
                 AddEditDeviceView()
             }
-            .sheet(isPresented: $showingAddOSCTarget) {
-                AddEditOSCTargetView()
-            }
-            .sheet(item: $editingOSCTarget) { target in
-                AddEditOSCTargetView(target: target)
-            }
         }
     }
 
     private func deleteInstruments(at offsets: IndexSet) {
         for index in offsets { viewContext.delete(instruments[index]) }
-        try? viewContext.save()
-    }
-
-    private func deleteOSCTarget(_ target: OSCTarget) {
-        oscManager.disconnect(from: target)
-        viewContext.delete(target)
         try? viewContext.save()
     }
 }

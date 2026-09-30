@@ -153,7 +153,7 @@ private let performTopic = HelpTopic(
         ]),
         HelpSection(title: "Bluetooth foot controllers", icon: "wave.3.right", items: [
             HelpItem("Pairing",
-                     "Tap the wave button in Perform or MIDI Devices and pair the controller there. Bluetooth MIDI gear won't work if you only pair it in the iOS Bluetooth settings."),
+                     "Tap the wave button in Perform, or Pair Bluetooth MIDI Device in the Connections tab, and pair the controller there. Bluetooth MIDI gear won't work if you only pair it in the iOS Bluetooth settings."),
             HelpItem("Pedal fires twice",
                      "Momentary footswitches send a value on press and 0 on release. Keep \"Ignore Value 0\" on so only the press counts."),
             HelpItem("Nothing happens",
@@ -195,13 +195,13 @@ private let bluetoothMIDITopic = HelpTopic(
     sections: [
         HelpSection(title: "Pairing for the first time", icon: "gear", items: [
             HelpItem("How to pair",
-                     "Go to the MIDI Devices tab, tap the '•••' menu, and choose 'Bluetooth MIDI'. A pairing sheet appears — tap your device's name to connect. Once paired, it shows up in the MIDI Devices list automatically."),
+                     "Go to the Connections tab and tap Pair Bluetooth MIDI Device (or + at the top). A pairing sheet appears — tap your device's name to connect. Once paired, it shows up under MIDI Outputs and Inputs automatically."),
             HelpItem("Device doesn't appear in the list",
                      "Make sure your MIDI device is powered on and in Bluetooth pairing mode. Some devices need you to enable Bluetooth MIDI in their own menu before they broadcast. Try toggling Bluetooth off and back on in iOS Settings if it still doesn't show."),
         ]),
         HelpSection(title: "Staying connected", icon: "link", items: [
             HelpItem("Device dropped from the list",
-                     "If a Bluetooth MIDI device disappears after being away or powered off, it should reconnect automatically when it comes back in range. If it doesn't re-appear, go to MIDI Devices and pull down to refresh, or navigate away and back to the tab."),
+                     "If a Bluetooth MIDI device disappears after being away or powered off, it should reconnect automatically when it comes back in range. If it doesn't re-appear, go to Connections and pull down to refresh, or navigate away and back to the tab."),
             HelpItem("Commands not sending after reconnect",
                      "If the device shows as connected but MIDI is not getting through, tap the device row and use the Test button to verify the connection. You may need to disconnect and reconnect once to re-establish the session."),
         ]),
@@ -218,13 +218,13 @@ private let oscXR18Topic = HelpTopic(
             HelpItem("Same Wi-Fi network required",
                      "Your iPhone/iPad and your OSC device (e.g. a Behringer XR18 or similar mixer) must be on the same Wi-Fi network. Many mixers broadcast their own Wi-Fi hotspot — connecting to that directly is the simplest option and avoids any router configuration."),
             HelpItem("Finding your device's IP address",
-                     "The IP address is usually shown in the mixer's own network settings screen or companion app. Enter that address when adding an OSC Target in the app's Devices tab."),
+                     "The IP address is usually shown in the mixer's own network settings screen or companion app. Enter that address when adding an OSC device in the Connections tab (OSC / Network → Add OSC Device)."),
         ]),
         HelpSection(title: "Commands not reaching the device", icon: "exclamationmark.circle", items: [
             HelpItem("Check the OSC Target is enabled",
-                     "Go to Devices → OSC Targets and confirm your target is listed and connected. If it shows a red indicator, tap it and verify the IP address and port match your device's settings."),
+                     "Go to Connections → OSC / Network and confirm your device is listed and connected. If it shows a red indicator, tap it and verify the IP address and port match your device's settings."),
             HelpItem("Device stopped responding mid-session",
-                     "Some OSC devices require a periodic check-in to keep the connection active. The app handles this automatically, but if the connection drops, go to OSC Targets and toggle the target off and back on to restart the session."),
+                     "Some OSC devices require a periodic check-in to keep the connection active. The app handles this automatically, but if the connection drops, go to Connections → OSC / Network and toggle the device off and back on to restart the session."),
         ]),
         HelpSection(title: "Capturing device moves as macros", icon: "plus.circle", items: [
             HelpItem("Activity log → Save as Macro",
