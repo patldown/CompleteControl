@@ -183,6 +183,12 @@ final class AppleMusicReference {
         player.playbackTime = 0
     }
 
+    /// Jumps within the loaded track; negative seconds rewind, never past the start.
+    func skip(by seconds: TimeInterval) {
+        guard loadedTrackID != nil else { return }
+        player.playbackTime = max(0, player.playbackTime + seconds)
+    }
+
     func stop() {
         guard loadedTrackID != nil else { return }
         player.stop()

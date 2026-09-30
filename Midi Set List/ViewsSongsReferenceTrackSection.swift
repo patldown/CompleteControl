@@ -39,15 +39,25 @@ struct ReferenceTrackSection: View {
 
                     Spacer()
 
-                    if music.loadedTrackID == trackID {
+                    let isLoaded = music.loadedTrackID == trackID
+                    Group {
                         Button {
                             music.restart()
                         } label: {
                             Image(systemName: "backward.end.fill")
                         }
-                        .buttonStyle(.borderless)
                         .accessibilityLabel("Restart")
+
+                        Button {
+                            music.skip(by: -15)
+                        } label: {
+                            Image(systemName: "gobackward.15")
+                                .font(.title3)
+                        }
+                        .accessibilityLabel("Back 15 Seconds")
                     }
+                    .buttonStyle(.borderless)
+                    .disabled(!isLoaded)
 
                     PlayPauseButton(trackID: trackID, music: music)
                 }
