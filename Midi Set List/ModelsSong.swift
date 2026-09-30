@@ -205,6 +205,14 @@ class Song: NSManagedObject, Identifiable {
     // ── Reference track (Apple Music) ──────────────────────────────────
     var hasReferenceTrack: Bool { referenceTrackID != nil }
 
+    var referenceTrack: ReferenceTrack? {
+        guard let referenceTrackID else { return nil }
+        return ReferenceTrack(id: referenceTrackID,
+                              title: referenceTrackTitle ?? name,
+                              artist: referenceTrackArtist ?? artist ?? "",
+                              url: referenceTrackURL.flatMap(URL.init(string:)))
+    }
+
     func linkReferenceTrack(_ track: ReferenceTrack) {
         referenceTrackID = track.id
         referenceTrackTitle = track.title

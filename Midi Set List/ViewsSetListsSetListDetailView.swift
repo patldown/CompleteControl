@@ -21,6 +21,7 @@ struct SetListDetailView: View {
     @State private var isSendingSetList = false
     @State private var sendError: String?
     @State private var showingSendError = false
+    @State private var showingPlaylist = false
     
     var body: some View {
         List {
@@ -80,6 +81,18 @@ struct SetListDetailView: View {
                 }
             }
             
+            if !setList.songs.isEmpty {
+                Section {
+                    Button {
+                        showingPlaylist = true
+                    } label: {
+                        Label("Create Apple Music Playlist", systemImage: "music.note.list")
+                    }
+                } footer: {
+                    Text("Makes a playlist called \"\(setList.name)\" with these songs, in order, to listen along or rehearse with.")
+                }
+            }
+
             Section {
                 ForEach(Array(setList.songs.enumerated()), id: \.element.id) { index, song in
                     Button {
@@ -140,6 +153,9 @@ struct SetListDetailView: View {
         }
         .sheet(isPresented: $showingAssistant) {
             SetListAssistantView(setList: setList)
+        }
+        .sheet(isPresented: $showingPlaylist) {
+            SetListPlaylistView(setList: setList)
         }
         .sheet(isPresented: $showingAddSongs) {
             AddSongsToSetListView(setList: setList, availableSongs: availableSongs)

@@ -26,6 +26,13 @@ struct ReferenceTrack: Identifiable, Hashable {
     var artworkURL: URL?
     var url: URL?
 
+    init(id: String, title: String, artist: String, url: URL? = nil) {
+        self.id = id
+        self.title = title
+        self.artist = artist
+        self.url = url
+    }
+
     fileprivate init(_ song: MusicKit.Song) {
         id = song.id.rawValue
         title = song.title
@@ -40,6 +47,17 @@ struct ReferenceTrack: Identifiable, Hashable {
         guard let duration else { return nil }
         let seconds = Int(duration.rounded())
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+enum AppleMusicError: LocalizedError {
+    case accessDenied, noTracks
+
+    var errorDescription: String? {
+        switch self {
+        case .accessDenied: "Allow Apple Music access in Settings › Privacy & Security › Media & Apple Music."
+        case .noTracks: "None of the tracks could be found in Apple Music."
+        }
     }
 }
 
@@ -101,6 +119,24 @@ final class AppleMusicReference {
         var request = MusicCatalogSearchRequest(term: term, types: [MusicKit.Song.self])
         request.limit = 25
         return try await request.response().songs.map(ReferenceTrack.init)
+    }
+
+    /// The catalog's top hit for a song, used to match set list songs automatically
+    func bestMatch(title: String, artist: String?) async throws -> ReferenceTrack? {
+        try await search([title, artist ?? ""].joined(separator: " ")).first
+    }
+
+    // MARK: - Playlists
+
+    /// Creates a playlist in the person's Apple Music library, tracks in the given order.
+    func createPlaylist(name: String, description: String?, trackIDs: [String]) async throws {
+        guard await requestAccess() else { throw AppleMusicError.accessDenied }
+        let request = MusicCatalogResourceRequest<MusicKit.Song>(matching: \.id, memberOf: trackIDs.map { MusicItemID($0) })
+        let found = try await request.response().items
+        let byID = Dictionary(found.map { ($0.id.rawValue, $0) }, uniquingKeysWith: { first, _ in first })
+        let ordered = trackIDs.compactMap { byID[$0] }
+        guard !ordered.isEmpty else { throw AppleMusicError.noTracks }
+        _ = try await MusicLibrary.shared.createPlaylist(name: name, description: description, items: ordered)
     }
 
     // MARK: - Playback
