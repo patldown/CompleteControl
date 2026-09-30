@@ -400,20 +400,27 @@ private struct PerformSongHeader: View {
             let signature = song.timeSignature.map { " · " + $0 } ?? ""
             Label("\(bpm) BPM\(signature)", systemImage: "metronome")
         }
+        // The key the audience hears; the offset shows only when transposing really moved it
         if let key = song.currentKey {
             HStack(spacing: 4) {
                 Label(key.displayName, systemImage: "music.note")
-                if song.transpose != 0 {
+                if song.transpose != 0 && !song.isCapoKeepingKey {
                     Text("(\(TransposeMenu.offsetLabel(song.transpose)))")
                         .monospacedDigit()
                 }
             }
         }
         if song.capoEnabled {
-            if let fret = song.effectiveCapo {
-                Label(fret == 0 ? "No Capo" : "Capo \(fret)", systemImage: "guitars")
-            } else {
-                Label("Capo: below nut", systemImage: "guitars")
+            HStack(spacing: 4) {
+                if let fret = song.effectiveCapo {
+                    Label(fret == 0 ? "No Capo" : "Capo \(fret)", systemImage: "guitars")
+                } else {
+                    Label("Capo: out of range", systemImage: "guitars")
+                }
+                // What the fingers play, when that's not the key being heard
+                if let shapes = song.chordShapeKey, shapes != song.currentKey {
+                    Text("· \(shapes.displayName) shapes")
+                }
             }
         }
     }

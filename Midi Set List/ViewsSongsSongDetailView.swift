@@ -583,10 +583,6 @@ struct SongDetailView: View {
                 }
             }
 
-            if song.transpose != 0, let key = song.currentKey {
-                LabeledContent("Now Playing In", value: key.displayName)
-            }
-
             Toggle("Capo", isOn: Binding(
                 get: { song.capoEnabled },
                 set: { song.capoEnabled = $0; saveSong() }
@@ -602,20 +598,45 @@ struct SongDetailView: View {
                             .monospacedDigit()
                     }
                 }
-                if song.transpose != 0 {
-                    LabeledContent("Capo After Transpose") {
+
+                Toggle(isOn: Binding(
+                    get: { song.capoKeepsKey },
+                    set: { song.capoKeepsKey = $0; saveSong() }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Capo Keeps Original Key")
+                        Text(song.capoKeepsKey
+                             ? "Transpose changes the chord shapes; the capo moves to keep the key."
+                             : "Transpose changes the key; the capo stays put.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if song.transpose != 0 || song.capo != 0 {
+                    LabeledContent("Capo Now") {
                         if let fret = song.effectiveCapo {
-                            Text(fret == 0 ? "None" : "\(fret)")
+                            Text(fret == 0 ? "None" : "Fret \(fret)")
                         } else {
-                            Text("Below nut")
+                            Text("Out of range — transpose the other way")
+                                .foregroundStyle(.orange)
                         }
                     }
+                }
+            }
+
+            if song.originalKey != nil, song.transpose != 0 || song.capoEnabled {
+                if let key = song.currentKey {
+                    LabeledContent("Sounds In", value: key.displayName)
+                }
+                if song.capoEnabled, let shapes = song.chordShapeKey {
+                    LabeledContent("Chord Shapes In", value: shapes.displayName)
                 }
             }
         } header: {
             Text("Key & Capo")
         } footer: {
-            Text("Transpose moves the key and the chords in the lyrics up or down, without changing the saved lyrics. With Capo on, the capo moves with it — one fret per semitone — and shows on the Perform screen.")
+            Text("Set the key the song sounds in. Transpose shifts the chords in the lyrics without changing the saved lyrics. With Capo on and Capo Keeps Original Key, transposing down gives easier shapes and moves the capo up to match, so the audience hears the same key. Turn it off to really change the key and set the capo yourself.")
         }
     }
 

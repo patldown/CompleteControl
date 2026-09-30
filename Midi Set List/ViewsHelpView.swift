@@ -134,7 +134,7 @@ private let performTopic = HelpTopic(
             HelpItem("Chords, key & transpose",
                      "Chords in lyrics show in yellow when they're recognised — either a line of just chords above the words (G  D/F♯  Em7) or inline in brackets ([G]). The ± button on the lyrics bar moves them up or down, up to 6 semitones, and the song's key moves with them. Your saved lyrics aren't changed."),
             HelpItem("Capo",
-                     "Turn on Capo in a song's Key & Capo section and set the fret the chart uses. On the Perform screen it shows next to the BPM and key, and moves one fret per semitone when you transpose."),
+                     "Turn on Capo in a song's Key & Capo section and set the fret the chart uses. With Capo Keeps Original Key on, transposing moves the capo the opposite way so the audience hears the same key — e.g. transpose down 2 for open shapes and the capo goes up 2. Turn it off to really change the key; the capo then stays where you set it. Perform shows the key, the capo and the chord shapes you're playing."),
         ]),
         HelpSection(title: "MIDI control", icon: "slider.horizontal.below.rectangle", items: [
             HelpItem("Receive channel",

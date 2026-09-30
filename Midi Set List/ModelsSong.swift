@@ -31,6 +31,9 @@ class Song: NSManagedObject, Identifiable {
     @NSManaged var keyScaleRaw: String?
     @NSManaged private var transposeRaw: Int16
     @NSManaged var capoEnabled: Bool
+    /// True: the capo moves to keep the song in its original key as the chords are transposed.
+    /// False: transposing changes the key and the capo stays where it's set.
+    @NSManaged var capoKeepsKey: Bool
     @NSManaged private var capoRaw: Int16
 
     // bpm is stored as NSNumber? so nil means "no clock"
@@ -44,7 +47,7 @@ class Song: NSManagedObject, Identifiable {
     static let transposeRange = -6...6
     static let capoRange = 0...11
 
-    /// The key the song is written in (before transposing)
+    /// The key the song sounds in as charted — chords as written, with the chart capo if any
     var originalKey: MusicalKey? {
         get {
             guard let keyRoot, NoteName.pitchClass(keyRoot) != nil else { return nil }
@@ -56,14 +59,26 @@ class Song: NSManagedObject, Identifiable {
         }
     }
 
-    /// Semitones the chords and key are shown shifted by, -6…+6. Lyrics are never rewritten.
+    /// Semitones the chords are shown shifted by, -6…+6. Lyrics are never rewritten.
     var transpose: Int {
         get { Int(transposeRaw) }
         set { transposeRaw = Int16(min(max(newValue, Self.transposeRange.lowerBound), Self.transposeRange.upperBound)) }
     }
 
-    /// The key after transposing
-    var currentKey: MusicalKey? { originalKey?.transposed(by: transpose) }
+    /// Whether the capo is compensating for the transpose, so the key the audience hears stays put
+    var isCapoKeepingKey: Bool { capoEnabled && capoKeepsKey }
+
+    /// The key the audience hears. With the capo keeping the key it's the original key;
+    /// otherwise it moves with the transpose.
+    var currentKey: MusicalKey? {
+        isCapoKeepingKey ? originalKey : originalKey?.transposed(by: transpose)
+    }
+
+    /// The key of the chord shapes shown in the lyrics (what the fingers play). Differs from
+    /// `currentKey` when a capo is on.
+    var chordShapeKey: MusicalKey? {
+        originalKey?.transposed(by: transpose - (capoEnabled ? capo : 0))
+    }
 
     /// Capo fret the original chart is written for
     var capo: Int {
@@ -71,15 +86,17 @@ class Song: NSManagedObject, Identifiable {
         set { capoRaw = Int16(min(max(newValue, Self.capoRange.lowerBound), Self.capoRange.upperBound)) }
     }
 
-    /// Capo fret after transposing: shifting up a semitone moves the capo up one fret.
-    /// Nil when that would need a capo below the nut.
+    /// Capo fret to use now. Keeping the key, the capo moves opposite the chords — chords
+    /// down 2 (easier open shapes), capo up 2 — so the song still sounds in its original key.
+    /// Otherwise it stays at the chart fret. Nil when that fret can't exist (below the nut or
+    /// past fret 12).
     var effectiveCapo: Int? {
-        let fret = capo + transpose
-        return fret >= 0 ? fret : nil
+        let fret = isCapoKeepingKey ? capo - transpose : capo
+        return (0...12).contains(fret) ? fret : nil
     }
 
-    /// Chord spelling for lyrics: from the key when set, otherwise decided per chord
-    var chordsPreferFlats: Bool? { currentKey?.prefersFlats }
+    /// Chord spelling for lyrics: from the chord shapes' key when set, otherwise per chord
+    var chordsPreferFlats: Bool? { chordShapeKey?.prefersFlats }
 
     // ── Relationships (raw Core Data storage) ──────────────────────────
     @NSManaged private var commandsRaw: NSSet

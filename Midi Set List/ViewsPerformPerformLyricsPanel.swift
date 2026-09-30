@@ -170,7 +170,20 @@ struct TransposeMenu: View {
     var body: some View {
         Menu {
             if let key = song.currentKey {
-                Text("Key: \(key.displayName)")
+                Text("Sounds in \(key.displayName)")
+            }
+            if song.capoEnabled {
+                if let fret = song.effectiveCapo {
+                    Text(fret == 0 ? "No capo" : "Capo \(fret)"
+                         + (song.chordShapeKey.map { " · \($0.displayName) shapes" } ?? ""))
+                } else {
+                    Text("Capo out of range — transpose the other way")
+                }
+                Toggle("Capo Keeps Original Key", isOn: Binding(
+                    get: { song.capoKeepsKey },
+                    set: { song.capoKeepsKey = $0; changed() }
+                ))
+                .menuActionDismissBehavior(.disabled)
             }
             Button {
                 step(1)

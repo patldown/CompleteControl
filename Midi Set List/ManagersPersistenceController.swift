@@ -138,6 +138,7 @@ final class PersistenceController {
             attr("keyScaleRaw",   .stringAttributeType,    optional: true),
             attr("transposeRaw",  .integer16AttributeType, defaultValue: Int16(0)),
             attr("capoEnabled",   .booleanAttributeType,   defaultValue: false),
+            attr("capoKeepsKey",  .booleanAttributeType,   defaultValue: true),
             attr("capoRaw",       .integer16AttributeType, defaultValue: Int16(0)),
             attr("dateCreated",   .dateAttributeType),
             attr("dateModified",  .dateAttributeType),
