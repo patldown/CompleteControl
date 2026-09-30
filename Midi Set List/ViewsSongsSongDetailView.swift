@@ -481,102 +481,161 @@ struct SongDetailView: View {
         try? viewContext.save()
     }
 
+    /// Key and Scale side by side; Transpose, Capo and Sounds In below them. The capo's
+    /// settings live in one menu, and "capo now / shapes" shows only when it tells you
+    /// something the row doesn't.
     private var keySection: some View {
         Section {
-            Picker("Key", selection: Binding(
-                get: { song.keyRoot ?? "" },
-                set: { root in
-                    if root.isEmpty {
-                        song.originalKey = nil
-                    } else {
-                        song.originalKey = MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
-                    }
-                    saveSong()
-                }
-            )) {
-                Text("None").tag("")
-                ForEach(NoteName.pickerRoots, id: \.self) { root in
-                    Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
-                        .tag(root)
-                }
-            }
-
-            if let key = song.originalKey {
-                Picker("Scale", selection: Binding(
-                    get: { key.scale },
-                    set: { song.originalKey = MusicalKey(root: key.root, scale: $0); saveSong() }
-                )) {
-                    ForEach(MusicalScale.allCases) { scale in
-                        Text(scale.rawValue).tag(scale)
-                    }
-                }
-            }
-
-            Stepper(value: Binding(
-                get: { song.transpose },
-                set: { song.transpose = $0; saveSong() }
-            ), in: Song.transposeRange) {
-                LabeledContent("Transpose") {
-                    Text(song.transpose == 0 ? "Original" : "\(TransposeMenu.offsetLabel(song.transpose)) semitones")
-                        .monospacedDigit()
-                }
-            }
-
-            Toggle("Capo", isOn: Binding(
-                get: { song.capoEnabled },
-                set: { song.capoEnabled = $0; saveSong() }
-            ))
-
-            if song.capoEnabled {
-                Stepper(value: Binding(
-                    get: { song.capo },
-                    set: { song.capo = $0; saveSong() }
-                ), in: Song.capoRange) {
-                    LabeledContent("Chart Capo Fret") {
-                        Text(song.capo == 0 ? "None" : "\(song.capo)")
-                            .monospacedDigit()
-                    }
-                }
-
-                Toggle(isOn: Binding(
-                    get: { song.capoKeepsKey },
-                    set: { song.capoKeepsKey = $0; saveSong() }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Capo Keeps Original Key")
-                        Text(song.capoKeepsKey
-                             ? "Transpose changes the chord shapes; the capo moves to keep the key."
-                             : "Transpose changes the key; the capo stays put.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if song.transpose != 0 || song.capo != 0 {
-                    LabeledContent("Capo Now") {
-                        if let fret = song.effectiveCapo {
-                            Text(fret == 0 ? "None" : "Fret \(fret)")
-                        } else {
-                            Text("Out of range — transpose the other way")
-                                .foregroundStyle(.orange)
+            HStack(alignment: .top, spacing: 12) {
+                compactField("Key") {
+                    Picker("Key", selection: Binding(
+                        get: { song.keyRoot ?? "" },
+                        set: { root in
+                            song.originalKey = root.isEmpty
+                                ? nil
+                                : MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
+                            saveSong()
+                        }
+                    )) {
+                        Text("None").tag("")
+                        ForEach(NoteName.pickerRoots, id: \.self) { root in
+                            Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
+                                .tag(root)
                         }
                     }
                 }
-            }
-
-            if song.originalKey != nil, song.transpose != 0 || song.capoEnabled {
-                if let key = song.currentKey {
-                    LabeledContent("Sounds In", value: key.displayName)
+                compactField("Scale") {
+                    Picker("Scale", selection: Binding(
+                        get: { song.originalKey?.scale ?? .major },
+                        set: { scale in
+                            guard let key = song.originalKey else { return }
+                            song.originalKey = MusicalKey(root: key.root, scale: scale)
+                            saveSong()
+                        }
+                    )) {
+                        ForEach(MusicalScale.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .disabled(song.originalKey == nil)
                 }
-                if song.capoEnabled, let shapes = song.chordShapeKey {
-                    LabeledContent("Chord Shapes In", value: shapes.displayName)
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 12) {
+                    compactField("Transpose") { transposeStepper }
+                    compactField("Capo") { capoMenu }
+                    compactField("Sounds In") {
+                        Text(song.currentKey?.displayName ?? "—")
+                            .foregroundStyle(song.currentKey == nil ? .secondary : .primary)
+                            .padding(.vertical, 6)
+                    }
+                }
+                if let detail = capoDetail {
+                    Text(detail.text)
+                        .font(.caption)
+                        .foregroundStyle(detail.isWarning ? .orange : .secondary)
                 }
             }
         } header: {
             Text("Key & Capo")
         } footer: {
-            Text("Set the key the song sounds in. Transpose shifts the chords in the lyrics without changing the saved lyrics. With Capo on and Capo Keeps Original Key, transposing down gives easier shapes and moves the capo up to match, so the audience hears the same key. Turn it off to really change the key and set the capo yourself.")
+            Text("Transpose moves the chords in the lyrics without changing the saved lyrics. With the capo keeping the original key, transposing down gives easier shapes and moves the capo up, so the audience hears the same key.")
         }
+    }
+
+    private func compactField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var transposeStepper: some View {
+        HStack(spacing: 10) {
+            Button {
+                song.transpose -= 1
+                saveSong()
+            } label: {
+                Image(systemName: "minus.circle.fill")
+            }
+            .disabled(song.transpose <= Song.transposeRange.lowerBound)
+            .accessibilityLabel("Transpose down")
+
+            Text(TransposeMenu.offsetLabel(song.transpose))
+                .monospacedDigit()
+                .frame(minWidth: 24)
+
+            Button {
+                song.transpose += 1
+                saveSong()
+            } label: {
+                Image(systemName: "plus.circle.fill")
+            }
+            .disabled(song.transpose >= Song.transposeRange.upperBound)
+            .accessibilityLabel("Transpose up")
+        }
+        .font(.title3)
+        // Borderless: several buttons in one list row each need their own tap
+        .buttonStyle(.borderless)
+        .padding(.vertical, 2)
+    }
+
+    /// Capo on / off, the fret the chart is written for, and whether it keeps the key
+    private var capoMenu: some View {
+        Menu {
+            Toggle("Use a Capo", isOn: Binding(
+                get: { song.capoEnabled },
+                set: { song.capoEnabled = $0; saveSong() }
+            ))
+            if song.capoEnabled {
+                Picker("Chart Capo Fret", selection: Binding(
+                    get: { song.capo },
+                    set: { song.capo = $0; saveSong() }
+                )) {
+                    ForEach(Array(Song.capoRange), id: \.self) { fret in
+                        Text(fret == 0 ? "No Capo on Chart" : "Fret \(fret)").tag(fret)
+                    }
+                }
+                .pickerStyle(.menu)
+                Toggle("Keeps Original Key", isOn: Binding(
+                    get: { song.capoKeepsKey },
+                    set: { song.capoKeepsKey = $0; saveSong() }
+                ))
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(capoSummary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+            }
+            .padding(.vertical, 6)
+        }
+        .accessibilityLabel("Capo")
+        .accessibilityValue(capoSummary)
+    }
+
+    private var capoSummary: String {
+        guard song.capoEnabled else { return "Off" }
+        return song.capo == 0 ? "On" : "Fret \(song.capo)"
+    }
+
+    /// "Capo now: fret 4 · G shapes" when transposing moves the capo or changes the shapes
+    private var capoDetail: (text: String, isWarning: Bool)? {
+        guard song.capoEnabled, song.transpose != 0 || song.capo != 0 else { return nil }
+        guard let fret = song.effectiveCapo else {
+            return ("Capo out of range — transpose the other way", true)
+        }
+        var parts = [fret == 0 ? "No capo now" : "Capo now: fret \(fret)"]
+        if let shapes = song.chordShapeKey, song.originalKey != nil {
+            parts.append("\(shapes.displayName) shapes")
+        }
+        if !song.capoKeepsKey { parts.append("key changes with transpose") }
+        return (parts.joined(separator: " · "), false)
     }
 
     private var snapshotCommands: [MIDICommand] {
