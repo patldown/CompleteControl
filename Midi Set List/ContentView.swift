@@ -9,43 +9,44 @@ import SwiftUI
 import CoreData
 
 struct ContentView: View {
-    @ObservedObject private var ai = AISettings.shared
+    @State private var navigation = AppNavigation()
 
     var body: some View {
-        TabView {
-            Tab("Perform", systemImage: "play.circle") {
+        TabView(selection: $navigation.selectedTab) {
+            Tab("Perform", systemImage: "play.circle", value: "perform") {
                 PerformView()
             }
 
-            Tab("Set Lists", systemImage: "list.bullet") {
+            Tab("Set Lists", systemImage: "list.bullet", value: "setlists") {
                 SetListsView()
             }
 
-            Tab("Songs", systemImage: "music.note.list") {
+            Tab("Songs", systemImage: "music.note.list", value: "songs") {
                 SongsLibraryView()
             }
 
-            Tab("Devices", systemImage: "pianokeys") {
+            Tab("Devices", systemImage: "pianokeys", value: "devices") {
                 DeviceLibraryView()
             }
 
-            Tab("MIDI Devices", systemImage: "cable.connector") {
-                MIDIDevicesView()
+            Tab("Connections", systemImage: "cable.connector", value: "connections") {
+                ConnectionsView()
             }
 
-            Tab("Activity", systemImage: "waveform") {
+            Tab("Activity", systemImage: "waveform", value: "activity") {
                 ActivityLogView()
             }
 
-            Tab("Help", systemImage: "questionmark.circle") {
+            Tab("Help", systemImage: "questionmark.circle", value: "help") {
                 HelpView()
             }
 
-            Tab("Settings", systemImage: "gear") {
+            Tab("Settings", systemImage: "gear", value: "settings") {
                 SettingsView()
             }
-            .badge(ai.offlineMode && ai.anyAIAvailable ? Text("Offline") : nil)
         }
+        .floatingPerformShortcut(navigation)
+        .environment(navigation)
     }
 }
 

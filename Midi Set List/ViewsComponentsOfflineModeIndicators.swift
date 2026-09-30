@@ -66,9 +66,35 @@ struct OfflineModeBadge: View {
     }
 }
 
+// MARK: - App-wide status (top bar of every tab)
+
+/// Puts the offline pill in the leading edge of the navigation bar, so the status
+/// stays visible at every window size — including iPhone, where Settings moves
+/// under "More" and a tab badge would be hidden.
+private struct OfflineStatusBadgeModifier: ViewModifier {
+    @ObservedObject private var ai = AISettings.shared
+
+    func body(content: Content) -> some View {
+        content.toolbar {
+            if ai.offlineMode && ai.anyAIAvailable {
+                ToolbarItem(placement: .navigation) {
+                    OfflineModeBadge()
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+        }
+    }
+}
+
 // MARK: - Modifiers
 
 extension View {
+    /// Shows the offline pill in the navigation bar while there's no connection.
+    /// Apply to the root view inside each tab's NavigationStack.
+    func offlineStatusBadge() -> some View {
+        modifier(OfflineStatusBadgeModifier())
+    }
+
     /// Outlines an AI input or action with the offline colors when there's no connection.
     func offlineModeOutline(_ isOn: Bool, cornerRadius: CGFloat = 20) -> some View {
         overlay {

@@ -14,121 +14,166 @@ struct LyricsPerformanceView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var song: Song
 
+    @ObservedObject private var prefs = UserPreferences.shared
     @State private var isAutoScrolling = false
-    @State private var scrollSpeed: Double = 20.0
     @State private var showControls = true
     @State private var showingEditLyrics = false
     @State private var resetTrigger = false
+    @State private var pageRequest: PageRequest?
 
-    private var showingPDF: Bool { song.pdfFileURL != nil }
+    /// Lyrics or sheet music — this person's last choice on this song when it has both
+    private var mode: PerformChartMode { prefs.chartMode(for: song) ?? .lyrics }
+
+    private var scrollSpeed: Binding<Double> {
+        Binding(get: { prefs.scrollSpeed(for: mode, song: song) },
+                set: { prefs.setScrollSpeed($0, for: mode, song: song) })
+    }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-
-            if let pdfURL = song.pdfFileURL {
-                PDFKitView(url: pdfURL)
-            } else {
-                AutoScrollingTextView(
-                    text: song.lyrics ?? "No lyrics added yet.\n\nTap 'Edit' to add lyrics or tabs.",
-                    isScrolling: $isAutoScrolling,
-                    scrollSpeed: $scrollSpeed,
-                    resetTrigger: $resetTrigger
-                )
+        // Stacked, not overlaid: the lyrics end where the controls begin, so text
+        // never shows through behind the buttons
+        VStack(spacing: 0) {
+            if showControls {
+                topBar
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            if showControls {
-                VStack {
-                    HStack {
-                        Button {
-                            isAutoScrolling = false
-                            dismiss()
-                        } label: {
-                            Label("Close", systemImage: "xmark.circle.fill")
-                                .font(.title2)
-                                .labelStyle(.iconOnly)
-                        }
-                        .tint(.white)
-
-                        Spacer()
-
-                        Button {
-                            isAutoScrolling = false
-                            showingEditLyrics = true
-                        } label: {
-                            Label("Edit Lyrics", systemImage: "pencil.circle.fill")
-                                .font(.title2)
-                                .labelStyle(.iconOnly)
-                        }
-                        .tint(.white)
-                    }
-                    .padding()
-                    .background(.ultraThinMaterial.opacity(0.3))
-
-                    Spacer()
-
-                    if !showingPDF {
-                        VStack(spacing: 16) {
-                            VStack(spacing: 8) {
-                                HStack {
-                                    Image(systemName: "speedometer")
-                                    Text("Scroll Speed")
-                                        .font(.subheadline)
-                                    Spacer()
-                                    Text("\(Int(scrollSpeed))")
-                                        .font(.subheadline)
-                                        .monospacedDigit()
-                                }
-                                .foregroundStyle(.white)
-
-                                Slider(value: $scrollSpeed, in: 5...100, step: 5)
-                                    .tint(.white)
-                            }
-                            .padding(.horizontal)
-
-                            Button {
-                                isAutoScrolling.toggle()
-                            } label: {
-                                HStack {
-                                    Image(systemName: isAutoScrolling ? "pause.fill" : "play.fill")
-                                        .font(.title2)
-                                    Text(isAutoScrolling ? "Pause Scrolling" : "Start Scrolling")
-                                        .font(.headline)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(isAutoScrolling ? Color.orange : Color.green)
-                                .foregroundStyle(.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                            }
-                            .padding(.horizontal)
-
-                            Button {
-                                isAutoScrolling = false
-                                resetTrigger.toggle()
-                            } label: {
-                                Label("Reset to Top", systemImage: "arrow.up.to.line")
-                                    .font(.subheadline)
-                            }
-                            .tint(.white)
-                        }
-                        .padding(.vertical)
-                        .background(.ultraThinMaterial.opacity(0.3))
-                    }
+            Group {
+                if prefs.chartMode(for: song) == nil {
+                    Text("No lyrics or sheet music yet.\n\nTap Edit to add lyrics, a PDF or images.")
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                        .padding()
+                } else {
+                    ChartContentView(song: song, mode: mode,
+                                     isScrolling: $isAutoScrolling, resetTrigger: $resetTrigger,
+                                     pageRequest: pageRequest)
                 }
-                .transition(.opacity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation {
+                    showControls.toggle()
+                }
+            }
+
+            if showControls && prefs.chartMode(for: song) != nil {
+                bottomControls
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .background(Color.black.ignoresSafeArea())
+        // Page-turner pedals: page up / down and start / pause work here too
+        .background(PedalKeyCatcher(onKey: handlePedal).frame(width: 0, height: 0))
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
-        .onTapGesture {
-            withAnimation {
-                showControls.toggle()
-            }
-        }
         .sheet(isPresented: $showingEditLyrics) {
             EditLyricsView(song: song)
         }
+    }
+
+    private func handlePedal(_ key: PedalKey) -> Bool {
+        switch PedalSettings.shared.action(for: key) {
+        case .pageDown?: pageRequest = PageRequest(direction: 1)
+        case .pageUp?: pageRequest = PageRequest(direction: -1)
+        case .toggleAutoScroll?: isAutoScrolling.toggle()
+        default: return false
+        }
+        return true
+    }
+
+    private var topBar: some View {
+        HStack {
+            Button {
+                isAutoScrolling = false
+                dismiss()
+            } label: {
+                Label("Close", systemImage: "xmark.circle.fill")
+                    .font(.title2)
+                    .labelStyle(.iconOnly)
+            }
+            .tint(.white)
+
+            Spacer()
+
+            if song.hasLyricsText && song.hasSheetMusic {
+                Picker("Show", selection: Binding(
+                    get: { mode },
+                    set: { isAutoScrolling = false; prefs.setChartMode($0, for: song) }
+                )) {
+                    ForEach(PerformChartMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 260)
+
+                Spacer()
+            }
+
+            Button {
+                isAutoScrolling = false
+                showingEditLyrics = true
+            } label: {
+                Label("Edit Lyrics", systemImage: "pencil.circle.fill")
+                    .font(.title2)
+                    .labelStyle(.iconOnly)
+            }
+            .tint(.white)
+        }
+        .padding()
+        .background(Color(white: 0.12))
+    }
+
+    private var bottomControls: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 8) {
+                HStack {
+                    Image(systemName: "speedometer")
+                    Text("Scroll Speed")
+                        .font(.subheadline)
+                    Spacer()
+                    Text("\(Int(scrollSpeed.wrappedValue))")
+                        .font(.subheadline)
+                        .monospacedDigit()
+                }
+                .foregroundStyle(.white)
+
+                Slider(value: scrollSpeed, in: UserPreferences.scrollSpeedRange, step: 5)
+                    .tint(.white)
+            }
+            .padding(.horizontal)
+
+            Button {
+                isAutoScrolling.toggle()
+            } label: {
+                HStack {
+                    Image(systemName: isAutoScrolling ? "pause.fill" : "play.fill")
+                        .font(.title2)
+                    Text(isAutoScrolling ? "Pause Scrolling" : "Start Scrolling")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(isAutoScrolling ? Color.orange : Color.green)
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .padding(.horizontal)
+
+            Button {
+                isAutoScrolling = false
+                resetTrigger.toggle()
+            } label: {
+                Label("Reset to Top", systemImage: "arrow.up.to.line")
+                    .font(.subheadline)
+            }
+            .tint(.white)
+        }
+        .padding(.vertical)
+        .background(Color(white: 0.12))
     }
 }
 
@@ -139,6 +184,42 @@ struct AutoScrollingTextView: UIViewRepresentable {
     @Binding var isScrolling: Bool
     @Binding var scrollSpeed: Double
     @Binding var resetTrigger: Bool
+    var fontSize: CGFloat = 24
+    var insets = UIEdgeInsets(top: 100, left: 32, bottom: 500, right: 32)
+    /// Semitones to shift recognised chords by
+    var transpose: Int = 0
+    /// Chord spelling from the song's key; nil lets each chord decide
+    var chordsPreferFlats: Bool? = nil
+    /// Turn-the-page requests, e.g. from a page-turner pedal
+    var pageRequest: PageRequest? = nil
+    /// Blank lines above the lyrics come from this person's preferences
+    @ObservedObject private var prefs = UserPreferences.shared
+
+    /// Blank lines first, so the opening lyrics start lower and auto-scroll eases into them
+    private var displayText: String {
+        String(repeating: "\n", count: min(max(prefs.lyricsLeadInLines, 0), 10)) + text
+    }
+
+    /// Recognised chords are tinted and bold, so it's clear which ones will transpose
+    static let chordColor = UIColor.systemYellow
+
+    private var renderKey: String {
+        "\(displayText.hashValue)|\(fontSize)|\(insets)|\(transpose)|\(String(describing: chordsPreferFlats))"
+    }
+
+    private func applyText(to textView: UITextView) {
+        let rendered = ChordEngine.render(displayText, transpose: transpose, flats: chordsPreferFlats)
+        let attributed = NSMutableAttributedString(string: rendered.text, attributes: [
+            .font: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
+            .foregroundColor: UIColor.white,
+        ])
+        let chordFont = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+        for range in rendered.chordRanges {
+            attributed.addAttributes([.foregroundColor: Self.chordColor, .font: chordFont], range: range)
+        }
+        textView.attributedText = attributed
+        textView.textContainerInset = insets
+    }
 
     func makeUIView(context: Context) -> UIScrollView {
         let scrollView = UIScrollView()
@@ -147,14 +228,13 @@ struct AutoScrollingTextView: UIViewRepresentable {
         scrollView.showsHorizontalScrollIndicator = false
 
         let textView = UITextView()
-        textView.text = text
-        textView.font = UIFont.monospacedSystemFont(ofSize: 24, weight: .regular)
-        textView.textColor = .white
         textView.backgroundColor = .clear
         textView.isEditable = false
         textView.isSelectable = false
         textView.isScrollEnabled = false
-        textView.textContainerInset = UIEdgeInsets(top: 100, left: 32, bottom: 500, right: 32)
+        applyText(to: textView)
+        context.coordinator.lastRenderKey = renderKey
+        context.coordinator.lastPageRequestID = pageRequest?.id
         textView.textContainer.lineBreakMode = .byWordWrapping
         textView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -177,15 +257,21 @@ struct AutoScrollingTextView: UIViewRepresentable {
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
 
-        if textView.text != text {
-            textView.text = text
+        if context.coordinator.lastRenderKey != renderKey {
+            context.coordinator.lastRenderKey = renderKey
+            applyText(to: textView)
             scrollView.setNeedsLayout()
             scrollView.layoutIfNeeded()
         }
 
         if resetTrigger != context.coordinator.lastResetTrigger {
             context.coordinator.lastResetTrigger = resetTrigger
-            scrollView.setContentOffset(.zero, animated: true)
+            context.coordinator.scrollToTop()
+        }
+
+        if let pageRequest, pageRequest.id != context.coordinator.lastPageRequestID {
+            context.coordinator.lastPageRequestID = pageRequest.id
+            context.coordinator.page(pageRequest.direction)
         }
 
         if isScrolling {
@@ -199,72 +285,13 @@ struct AutoScrollingTextView: UIViewRepresentable {
         Coordinator()
     }
 
-    class Coordinator {
-        weak var scrollView: UIScrollView?
+    final class Coordinator: AutoScroller {
         weak var textView: UITextView?
-        private var displayLink: CADisplayLink?
-        private var currentSpeed: Double = 0
-        var lastResetTrigger: Bool = false
-
-        func startScrolling(speed: Double) {
-            currentSpeed = speed
-
-            if displayLink == nil {
-                displayLink = CADisplayLink(target: self, selector: #selector(scroll))
-                displayLink?.add(to: .main, forMode: .common)
-            }
-        }
-
-        func stopScrolling() {
-            displayLink?.invalidate()
-            displayLink = nil
-        }
-
-        @objc private func scroll() {
-            guard let scrollView = scrollView else { return }
-
-            let increment = CGFloat(currentSpeed / 60.0)
-            var offset = scrollView.contentOffset
-            offset.y += increment
-
-            let maxOffset = scrollView.contentSize.height - scrollView.bounds.height
-            if offset.y >= maxOffset {
-                offset.y = maxOffset
-                stopScrolling()
-            }
-
-            scrollView.setContentOffset(offset, animated: false)
-        }
-
-        deinit {
-            stopScrolling()
-        }
+        var lastRenderKey = ""
     }
 
     static func dismantleUIView(_ scrollView: UIScrollView, coordinator: Coordinator) {
         coordinator.stopScrolling()
-    }
-}
-
-// MARK: - PDF Viewer
-
-struct PDFKitView: UIViewRepresentable {
-    let url: URL
-
-    func makeUIView(context: Context) -> PDFView {
-        let pdfView = PDFView()
-        pdfView.backgroundColor = .black
-        pdfView.autoScales = true
-        pdfView.displayMode = .singlePageContinuous
-        pdfView.displayDirection = .vertical
-        pdfView.document = PDFDocument(url: url)
-        return pdfView
-    }
-
-    func updateUIView(_ pdfView: PDFView, context: Context) {
-        if pdfView.document?.documentURL != url {
-            pdfView.document = PDFDocument(url: url)
-        }
     }
 }
 

@@ -78,6 +78,8 @@ struct SongsLibraryView: View {
                 .onDelete(perform: deleteSongs)
             }
             .navigationTitle("Songs")
+            .offlineStatusBadge()
+            .performShortcut()
             .searchable(text: $searchText, prompt: "Search by name or artist")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -181,6 +183,14 @@ struct SongRowView: View {
                     Text("\(bpm) BPM")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                }
+
+                if let key = song.currentKey {
+                    Text("·").foregroundStyle(.tertiary).font(.caption)
+                    Text(key.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
             }
         }

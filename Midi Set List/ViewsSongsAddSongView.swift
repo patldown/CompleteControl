@@ -16,6 +16,8 @@ struct AddSongView: View {
     @State private var artist = ""
     @State private var selectedGenres: Set<String> = []
     @State private var notes = ""
+    @State private var keyRoot = ""
+    @State private var keyScale: MusicalScale = .major
     @State private var selectedTemplate: MIDICommandTemplate?
     @State private var showingTemplates = false
     @State private var showingGenrePicker = false
@@ -41,6 +43,20 @@ struct AddSongView: View {
                             Image(systemName: "chevron.right")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
+                        }
+                    }
+                    Picker("Key", selection: $keyRoot) {
+                        Text("None").tag("")
+                        ForEach(NoteName.pickerRoots, id: \.self) { root in
+                            Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
+                                .tag(root)
+                        }
+                    }
+                    if !keyRoot.isEmpty {
+                        Picker("Scale", selection: $keyScale) {
+                            ForEach(MusicalScale.allCases) { scale in
+                                Text(scale.rawValue).tag(scale)
+                            }
                         }
                     }
                     TextField("Notes (optional)", text: $notes, axis: .vertical)
@@ -114,6 +130,7 @@ struct AddSongView: View {
             in: viewContext
         )
         song.setGenres(Array(selectedGenres))
+        if !keyRoot.isEmpty { song.originalKey = MusicalKey(root: keyRoot, scale: keyScale) }
         if let template = selectedTemplate {
             for command in template.createCommands(in: viewContext) {
                 song.addCommand(command)

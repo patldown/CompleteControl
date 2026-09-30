@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Midi Set List connects to MIDI and OSC devices on your local network, such as mixers and synthesizers.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_apple-midi._udp</string>

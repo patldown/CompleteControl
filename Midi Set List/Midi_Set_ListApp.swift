@@ -18,7 +18,9 @@ struct Midi_Set_ListApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            LaunchContainer {
+                ContentView()
+            }
                 .environment(midiManager)
                 .environment(oscManager)
                 .environment(activityLog)

@@ -67,17 +67,67 @@ struct CreateSongIntent: AppIntent {
     @Parameter(title: "BPM", description: "Tempo in beats per minute, used for MIDI clock. Leave empty to skip.")
     var bpm: Int?
 
+    @Parameter(title: "Key", description: "Root note of the song's key, e.g. A or F♯. Leave empty to skip.")
+    var keyRoot: KeyRootAppEnum?
+
+    @Parameter(title: "Scale", description: "e.g. Major, Minor, Blues, Minor Pentatonic. Used with Key; defaults to Major.")
+    var keyScale: KeyScaleAppEnum?
+
     func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<SongEntity> {
         let name = songName; let bpmVal = bpm; let artistVal = artist
+        let key = keyRoot.map { MusicalKey(root: $0.rawValue, scale: keyScale?.scale ?? .major) }
         let entity = try await MainActor.run {
             let ctx = PersistenceController.shared.viewContext
             let song = Song.create(name: name, artist: artistVal, in: ctx)
             if let bpmVal { song.bpm = bpmVal }
+            song.originalKey = key
             try ctx.save()
             return SongEntity(id: song.id, name: song.name, artist: song.artist)
         }
         let artistPart = artist.map { " by \($0)" } ?? ""
         return .result(value: entity, dialog: "Created '\(songName)'\(artistPart).")
+    }
+}
+
+// MARK: - Key parameters
+
+enum KeyRootAppEnum: String, AppEnum {
+    case c = "C", cSharp = "C#", dFlat = "Db", d = "D", dSharp = "D#", eFlat = "Eb", e = "E", f = "F"
+    case fSharp = "F#", gFlat = "Gb", g = "G", gSharp = "G#", aFlat = "Ab", a = "A", aSharp = "A#", bFlat = "Bb", b = "B"
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Key")
+    static let caseDisplayRepresentations: [KeyRootAppEnum: DisplayRepresentation] = [
+        .c: "C", .cSharp: "C♯", .dFlat: "D♭", .d: "D", .dSharp: "D♯", .eFlat: "E♭", .e: "E", .f: "F",
+        .fSharp: "F♯", .gFlat: "G♭", .g: "G", .gSharp: "G♯", .aFlat: "A♭", .a: "A", .aSharp: "A♯", .bFlat: "B♭", .b: "B",
+    ]
+}
+
+enum KeyScaleAppEnum: String, AppEnum {
+    case major, minor, harmonicMinor, melodicMinor, majorPentatonic, minorPentatonic, blues
+    case dorian, phrygian, lydian, mixolydian, locrian
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Scale")
+    static let caseDisplayRepresentations: [KeyScaleAppEnum: DisplayRepresentation] = [
+        .major: "Major", .minor: "Minor", .harmonicMinor: "Harmonic Minor", .melodicMinor: "Melodic Minor",
+        .majorPentatonic: "Major Pentatonic", .minorPentatonic: "Minor Pentatonic", .blues: "Blues",
+        .dorian: "Dorian", .phrygian: "Phrygian", .lydian: "Lydian", .mixolydian: "Mixolydian", .locrian: "Locrian",
+    ]
+
+    var scale: MusicalScale {
+        switch self {
+        case .major: .major
+        case .minor: .minor
+        case .harmonicMinor: .harmonicMinor
+        case .melodicMinor: .melodicMinor
+        case .majorPentatonic: .majorPentatonic
+        case .minorPentatonic: .minorPentatonic
+        case .blues: .blues
+        case .dorian: .dorian
+        case .phrygian: .phrygian
+        case .lydian: .lydian
+        case .mixolydian: .mixolydian
+        case .locrian: .locrian
+        }
     }
 }
 

@@ -85,6 +85,8 @@ struct SongDetailView: View {
                 }
             }
             
+            keySection
+
             // MIDI Clock Section
             Section {
                 Toggle("Enable MIDI Clock", isOn: Binding(
@@ -177,17 +179,28 @@ struct SongDetailView: View {
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Lyrics / Tabs")
+                            Text("Lyrics & Sheet Music")
                                 .font(.headline)
                                 .foregroundStyle(.primary)
-                            
+
+                            if song.pdfFileName != nil {
+                                Label("Sheet music PDF", systemImage: "doc.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if !song.chartImageNames.isEmpty {
+                                Label("Sheet music: \(song.chartImageNames.count) image\(song.chartImageNames.count == 1 ? "" : "s")",
+                                      systemImage: "photo.on.rectangle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
                             if let lyrics = song.lyrics, !lyrics.isEmpty {
                                 Text(lyrics.prefix(100) + (lyrics.count > 100 ? "..." : ""))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
-                            } else {
-                                Text("Add lyrics or guitar tabs")
+                            } else if !song.hasSheetMusic {
+                                Text("Add lyrics, tabs, or sheet music (PDF or images)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -200,7 +213,7 @@ struct SongDetailView: View {
                     }
                 }
                 
-                if song.lyrics != nil && !song.lyrics!.isEmpty {
+                if song.hasLyricsText || song.hasSheetMusic {
                     Button {
                         showingLyricsPerformance = true
                     } label: {
@@ -211,10 +224,12 @@ struct SongDetailView: View {
             } header: {
                 Text("Performance")
             } footer: {
-                if song.lyrics == nil || song.lyrics!.isEmpty {
-                    Text("Add lyrics or tabs to enable Performance Mode with auto-scroll")
+                if !song.hasLyricsText && !song.hasSheetMusic {
+                    Text("Add lyrics or sheet music to enable Performance Mode with auto-scroll")
+                } else if song.hasLyricsText && song.hasSheetMusic {
+                    Text("Performance Mode shows lyrics or sheet music full screen with auto-scroll. Whichever you pick last is remembered for you.")
                 } else {
-                    Text("Performance Mode shows full-screen lyrics with auto-scroll for hands-free playing")
+                    Text("Performance Mode shows it full screen with auto-scroll for hands-free playing")
                 }
             }
             
@@ -520,6 +535,111 @@ struct SongDetailView: View {
         .onChange(of: song.bpm)    { _, _ in song.dateModified = Date(); try? viewContext.save() }
     }
     
+    // MARK: - Key, transpose & capo
+
+    private func saveSong() {
+        song.dateModified = Date()
+        try? viewContext.save()
+    }
+
+    private var keySection: some View {
+        Section {
+            Picker("Key", selection: Binding(
+                get: { song.keyRoot ?? "" },
+                set: { root in
+                    if root.isEmpty {
+                        song.originalKey = nil
+                    } else {
+                        song.originalKey = MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
+                    }
+                    saveSong()
+                }
+            )) {
+                Text("None").tag("")
+                ForEach(NoteName.pickerRoots, id: \.self) { root in
+                    Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
+                        .tag(root)
+                }
+            }
+
+            if let key = song.originalKey {
+                Picker("Scale", selection: Binding(
+                    get: { key.scale },
+                    set: { song.originalKey = MusicalKey(root: key.root, scale: $0); saveSong() }
+                )) {
+                    ForEach(MusicalScale.allCases) { scale in
+                        Text(scale.rawValue).tag(scale)
+                    }
+                }
+            }
+
+            Stepper(value: Binding(
+                get: { song.transpose },
+                set: { song.transpose = $0; saveSong() }
+            ), in: Song.transposeRange) {
+                LabeledContent("Transpose") {
+                    Text(song.transpose == 0 ? "Original" : "\(TransposeMenu.offsetLabel(song.transpose)) semitones")
+                        .monospacedDigit()
+                }
+            }
+
+            Toggle("Capo", isOn: Binding(
+                get: { song.capoEnabled },
+                set: { song.capoEnabled = $0; saveSong() }
+            ))
+
+            if song.capoEnabled {
+                Stepper(value: Binding(
+                    get: { song.capo },
+                    set: { song.capo = $0; saveSong() }
+                ), in: Song.capoRange) {
+                    LabeledContent("Chart Capo Fret") {
+                        Text(song.capo == 0 ? "None" : "\(song.capo)")
+                            .monospacedDigit()
+                    }
+                }
+
+                Toggle(isOn: Binding(
+                    get: { song.capoKeepsKey },
+                    set: { song.capoKeepsKey = $0; saveSong() }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Capo Keeps Original Key")
+                        Text(song.capoKeepsKey
+                             ? "Transpose changes the chord shapes; the capo moves to keep the key."
+                             : "Transpose changes the key; the capo stays put.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if song.transpose != 0 || song.capo != 0 {
+                    LabeledContent("Capo Now") {
+                        if let fret = song.effectiveCapo {
+                            Text(fret == 0 ? "None" : "Fret \(fret)")
+                        } else {
+                            Text("Out of range — transpose the other way")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+            }
+
+            if song.originalKey != nil, song.transpose != 0 || song.capoEnabled {
+                if let key = song.currentKey {
+                    LabeledContent("Sounds In", value: key.displayName)
+                }
+                if song.capoEnabled, let shapes = song.chordShapeKey {
+                    LabeledContent("Chord Shapes In", value: shapes.displayName)
+                }
+            }
+        } header: {
+            Text("Key & Capo")
+        } footer: {
+            Text("Set the key the song sounds in. Transpose shifts the chords in the lyrics without changing the saved lyrics. With Capo on and Capo Keeps Original Key, transposing down gives easier shapes and moves the capo up to match, so the audience hears the same key. Turn it off to really change the key and set the capo yourself.")
+        }
+    }
+
     private var snapshotCommands: [MIDICommand] {
         song.commands(inSnapshot: selectedSnapshot)
     }

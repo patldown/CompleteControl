@@ -103,7 +103,7 @@ struct MIDIRemoteSettingsView: View {
         } header: {
             Text("Inputs")
         } footer: {
-            Text("The app listens to every connected input. Bluetooth foot controllers need to be paired here (or in the MIDI Devices tab) — not in the iOS Bluetooth settings.")
+            Text("The app listens to every connected input. Bluetooth foot controllers need to be paired here (or in the Connections tab) — not in the iOS Bluetooth settings.")
         }
     }
 

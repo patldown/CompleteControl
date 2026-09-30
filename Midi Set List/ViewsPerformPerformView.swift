@@ -92,6 +92,7 @@ private struct PerformSetListPicker: View {
             }
         }
         .navigationTitle("Perform")
+        .offlineStatusBadge()
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -141,48 +142,58 @@ private struct PerformPlayingView: View {
     @Environment(MIDIManager.self) private var midiManager
     @ObservedObject private var remote = MIDIRemoteSettings.shared
 
-    @State private var showingLyrics = false
     @State private var showingBTMIDI = false
+    /// Lyrics fill the window; the snapshot strip stays above them
+    @State private var lyricsExpanded = false
+    @State private var panelCommand: LyricsPanelCommand?
 
     var body: some View {
         let songs = performance.songs
         VStack(spacing: 0) {
             if let song = performance.currentSong {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 12) {
+                    if !lyricsExpanded {
                         PerformSongHeader(song: song, index: performance.songIndex, total: songs.count)
-
-                        if let error = performance.lastError {
-                            errorBanner(error)
-                        }
-
-                        PerformSnapshotGrid(song: song)
-
-                        if hasLyrics(song) {
-                            Button {
-                                showingLyrics = true
-                            } label: {
-                                Label("Lyrics / Chart", systemImage: "text.alignleft")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-                        }
-
-                        remoteStatus
                     }
-                    .padding()
+                    if let error = performance.lastError {
+                        errorBanner(error)
+                    }
                 }
-                .fullScreenCover(isPresented: $showingLyrics) {
-                    LyricsPerformanceView(song: song)
+                .padding(.horizontal)
+                .padding(.top, lyricsExpanded ? 8 : 12)
+
+                PerformSnapshotStrip(song: song)
+                    .id(song.objectID)
+                    .padding(.vertical, 10)
+
+                PerformLyricsPanel(song: song, isExpanded: $lyricsExpanded,
+                                   title: "\(performance.songIndex + 1)/\(songs.count) · \(song.name)",
+                                   command: panelCommand)
+                    .id(song.objectID)  // new song, fresh scroll position
+                    .padding(.horizontal, lyricsExpanded ? 0 : 16)
+                    .overlay {
+                        if lyricsExpanded { songArrows(songs: songs) }
+                    }
+
+                if !lyricsExpanded {
+                    remoteStatus
+                        .padding(.horizontal)
+                        .padding(.top, 8)
                 }
             } else {
                 ContentUnavailableView("No Songs", systemImage: "music.note",
                                        description: Text("This set list has no songs."))
             }
 
-            navigationBar(songs: songs)
+            if !lyricsExpanded {
+                navigationBar(songs: songs)
+            }
         }
+        .animation(.default, value: lyricsExpanded)
+        // Bluetooth page-turner pedals arrive as key presses
+        .background(PedalKeyCatcher(onKey: handlePedal).frame(width: 0, height: 0))
+        .toolbar(lyricsExpanded ? .hidden : .visible, for: .navigationBar)
+        .toolbar(lyricsExpanded ? .hidden : .visible, for: .tabBar)
         .navigationTitle(performance.setList?.name ?? "Perform")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -225,8 +236,53 @@ private struct PerformPlayingView: View {
         }
     }
 
-    private func hasLyrics(_ song: Song) -> Bool {
-        song.pdfFileURL != nil || !(song.lyrics ?? "").isEmpty
+    /// Previous / next song arrows over the expanded lyrics, since the song bar is hidden then
+    private func songArrows(songs: [Song]) -> some View {
+        HStack {
+            songArrow("chevron.left", label: "Previous Song",
+                      detail: name(in: songs, at: performance.songIndex - 1)) {
+                performance.previousSong()
+            }
+            .opacity(performance.hasPreviousSong ? 1 : 0)
+            .disabled(!performance.hasPreviousSong)
+
+            Spacer()
+
+            songArrow("chevron.right", label: "Next Song",
+                      detail: name(in: songs, at: performance.songIndex + 1)) {
+                performance.nextSong()
+            }
+            .opacity(performance.hasNextSong ? 1 : 0)
+            .disabled(!performance.hasNextSong)
+        }
+        .padding(.horizontal, 8)
+    }
+
+    private func songArrow(_ icon: String, label: String, detail: String?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 40, height: 64)
+                .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.2)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityValue(detail ?? "")
+    }
+
+    private func handlePedal(_ key: PedalKey) -> Bool {
+        guard let action = PedalSettings.shared.action(for: key) else { return false }
+        switch action {
+        case .nextSong: performance.nextSong()
+        case .previousSong: performance.previousSong()
+        case .nextSnapshot: performance.nextSnapshot()
+        case .previousSnapshot: performance.previousSnapshot()
+        case .pageDown, .pageUp, .toggleAutoScroll, .toggleFullView:
+            panelCommand = LyricsPanelCommand(action: action)
+        }
+        return true
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -270,7 +326,7 @@ private struct PerformPlayingView: View {
     }
 
     private func navigationBar(songs: [Song]) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Button {
                 performance.previousSong()
             } label: {
@@ -279,7 +335,6 @@ private struct PerformPlayingView: View {
                          iconFirst: true)
             }
             .disabled(!performance.hasPreviousSong)
-            // The first song only moves forward
             .opacity(performance.hasPreviousSong ? 1 : 0)
 
             Button {
@@ -292,8 +347,9 @@ private struct PerformPlayingView: View {
             .disabled(!performance.hasNextSong)
         }
         .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .padding()
+        .controlSize(.regular)
+        .padding(.horizontal)
+        .padding(.vertical, 8)
         .background(.bar)
     }
 
@@ -302,17 +358,17 @@ private struct PerformPlayingView: View {
     }
 
     private func navLabel(title: String, icon: String, detail: String?, iconFirst: Bool) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             if iconFirst { Image(systemName: icon) }
-            VStack(spacing: 2) {
-                Text(title).font(.headline)
+            VStack(spacing: 1) {
+                Text(title).font(.subheadline.weight(.semibold))
                 if let detail {
-                    Text(detail).font(.caption).lineLimit(1).opacity(0.85)
+                    Text(detail).font(.caption2).lineLimit(1).opacity(0.8)
                 }
             }
             if !iconFirst { Image(systemName: icon) }
         }
-        .frame(maxWidth: .infinity, minHeight: 44)
+        .frame(maxWidth: .infinity, minHeight: 36)
     }
 }
 
@@ -329,7 +385,7 @@ private struct PerformSongHeader: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(song.name)
-                .font(.largeTitle.bold())
+                .font(.title.bold())
                 .lineLimit(2)
                 .minimumScaleFactor(0.6)
             if let artist = song.artist, !artist.isEmpty {
@@ -337,11 +393,14 @@ private struct PerformSongHeader: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
-            if let bpm = song.bpm {
-                let signature = song.timeSignature.map { " · " + $0 } ?? ""
-                Label("\(bpm) BPM\(signature)", systemImage: "metronome")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            if song.bpm != nil || song.currentKey != nil || song.capoEnabled {
+                // Wraps onto a second line on narrow screens rather than truncating
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) { musicDetails }
+                    VStack(alignment: .leading, spacing: 4) { musicDetails }
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             }
             if let notes = song.notes, !notes.isEmpty {
                 Text(notes)
@@ -351,67 +410,122 @@ private struct PerformSongHeader: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-}
 
-// MARK: - Snapshot grid
-
-private struct PerformSnapshotGrid: View {
-    @Environment(PerformanceSession.self) private var performance
-    @ObservedObject var song: Song
-    @ObservedObject private var remote = MIDIRemoteSettings.shared
-
-    private let columns = [GridItem(.adaptive(minimum: 150), spacing: 12)]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Snapshots")
-                .font(.headline)
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(0..<song.snapshotCount, id: \.self) { index in
-                    snapshotButton(index)
+    @ViewBuilder
+    private var musicDetails: some View {
+        if let bpm = song.bpm {
+            let signature = song.timeSignature.map { " · " + $0 } ?? ""
+            Label("\(bpm) BPM\(signature)", systemImage: "metronome")
+        }
+        // The key the audience hears; the offset shows only when transposing really moved it
+        if let key = song.currentKey {
+            HStack(spacing: 4) {
+                Label(key.displayName, systemImage: "music.note")
+                if song.transpose != 0 && !song.isCapoKeepingKey {
+                    Text("(\(TransposeMenu.offsetLabel(song.transpose)))")
+                        .monospacedDigit()
+                }
+            }
+        }
+        if song.capoEnabled {
+            HStack(spacing: 4) {
+                if let fret = song.effectiveCapo {
+                    Label(fret == 0 ? "No Capo" : "Capo \(fret)", systemImage: "guitars")
+                } else {
+                    Label("Capo: out of range", systemImage: "guitars")
+                }
+                // What the fingers play, when that's not the key being heard
+                if let shapes = song.chordShapeKey, shapes != song.currentKey {
+                    Text("· \(shapes.displayName) shapes")
                 }
             }
         }
     }
+}
 
-    private func snapshotButton(_ index: Int) -> some View {
+// MARK: - Snapshot strip
+
+/// One scrolling row of compact snapshot cards. Selecting a snapshot — by tap or MIDI
+/// pedal — scrolls so the next card is in view too, so you can see what's coming.
+private struct PerformSnapshotStrip: View {
+    @Environment(PerformanceSession.self) private var performance
+    @ObservedObject var song: Song
+    @ObservedObject private var remote = MIDIRemoteSettings.shared
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(0..<song.snapshotCount, id: \.self) { index in
+                        snapshotButton(index, proxy: proxy)
+                            .id(index)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            .onChange(of: performance.activeSnapshot) { old, new in
+                reveal(new, movingForward: new >= old, proxy: proxy)
+            }
+            .onAppear {
+                reveal(performance.activeSnapshot, movingForward: true, proxy: proxy, animated: false)
+            }
+        }
+    }
+
+    /// Scrolls just enough to show the selected card and, moving forward, the one after it.
+    /// Moving back, the selected card lands at the leading edge with the next one beside it.
+    private func reveal(_ index: Int, movingForward: Bool, proxy: ScrollViewProxy, animated: Bool = true) {
+        let last = song.snapshotCount - 1
+        guard last >= 0 else { return }
+        let target = movingForward ? min(index + 1, last) : min(index, last)
+        if animated {
+            withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(target) }
+        } else {
+            proxy.scrollTo(target)
+        }
+    }
+
+    private func snapshotButton(_ index: Int, proxy: ScrollViewProxy) -> some View {
         let isActive = performance.isActive(snapshot: index, of: song)
         let count = song.commands(inSnapshot: index).count
         return Button {
+            let previous = performance.activeSnapshot
             performance.selectSnapshot(index)
+            reveal(index, movingForward: index >= previous, proxy: proxy)
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
                     Text("\(index + 1)")
-                        .font(.caption.weight(.bold))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
                         .background(isActive ? Color.white.opacity(0.25) : Color.secondary.opacity(0.15),
                                     in: Capsule())
-                    Spacer()
+                    Spacer(minLength: 0)
                     if isActive && performance.isSending {
-                        ProgressView().controlSize(.small).tint(.white)
+                        ProgressView().controlSize(.mini).tint(.white)
                     } else if remote.isEnabled, let binding = remote.snapshotBinding(for: index) {
                         Text(binding.label)
                             .font(.caption2.monospacedDigit())
+                            .lineLimit(1)
                             .opacity(0.8)
                     }
                 }
                 Text(song.snapshotName(index))
-                    .font(.headline)
-                    .lineLimit(2)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.leading)
                 Text(count == 0 ? "Empty" : "\(count) command\(count == 1 ? "" : "s")")
-                    .font(.caption)
+                    .font(.caption2)
                     .opacity(0.8)
             }
             .foregroundStyle(isActive ? Color.white : Color.primary)
-            .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
-            .padding(12)
+            .frame(width: 128, alignment: .topLeading)
+            .padding(8)
             .background(isActive ? Color.accentColor : Color(.secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 14))
+                        in: RoundedRectangle(cornerRadius: 10))
             .overlay(
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(isActive ? Color.clear : Color.secondary.opacity(0.2))
             )
         }

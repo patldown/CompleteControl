@@ -28,6 +28,11 @@ extension ParsedMacro {
         pcValue = g.pcValue; ccNumber = g.ccNumber; ccValue = g.ccValue
         oscAddress = g.oscAddress; oscFloatArg = g.oscFloatArg
     }
+
+    init(_ g: GeneratedMIDIMacro) {
+        name = g.name; msbValue = g.msbValue; lsbValue = g.lsbValue
+        pcValue = g.pcValue; ccNumber = g.ccNumber; ccValue = g.ccValue
+    }
 }
 
 // MARK: - Anthropic model info (fetched live from API)

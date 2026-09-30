@@ -8,11 +8,14 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject private var ai = AISettings.shared
     @ObservedObject private var remote = MIDIRemoteSettings.shared
+    @ObservedObject private var prefs = UserPreferences.shared
+    @ObservedObject private var pedals = PedalSettings.shared
 
     var body: some View {
         NavigationStack {
             List {
                 midiSection
+                lyricsSection
                 if ai.anyAIAvailable {
                     offlineModeSection
                     apiKeysSection
@@ -31,6 +34,8 @@ struct SettingsView: View {
             }
             .animation(.default, value: ai.offlineMode)
             .navigationTitle("Settings")
+            .offlineStatusBadge()
+            .performShortcut()
             .navigationBarTitleDisplayMode(.large)
         }
     }
@@ -48,10 +53,57 @@ struct SettingsView: View {
                     Label("MIDI Receive & Control", systemImage: "slider.horizontal.below.rectangle")
                 }
             }
+            NavigationLink {
+                PedalSettingsView()
+            } label: {
+                LabeledContent {
+                    Text(pedals.isEnabled ? "On" : "Off")
+                } label: {
+                    Label("Page-Turner Pedals", systemImage: "shoe.2")
+                }
+            }
         } header: {
-            Text("MIDI")
+            Text("MIDI & Pedals")
         } footer: {
-            Text("Choose the receive channel and which messages recall snapshots or change songs — for foot controllers and other MIDI gear.")
+            Text("MIDI: choose the receive channel and which messages recall snapshots or change songs. Page-turner pedals: Bluetooth pedals that act as a keyboard, for turning pages and more.")
+        }
+    }
+
+    // MARK: - Lyrics
+
+    private var lyricsSection: some View {
+        Section {
+            Picker("View", selection: $prefs.chartModeOverride) {
+                Text("Remember Per Song").tag(PerformChartMode?.none)
+                ForEach(PerformChartMode.allCases) { mode in
+                    Text("Always \(mode.title)").tag(Optional(mode))
+                }
+            }
+
+            speedStepper("New Song Lyrics Speed", value: $prefs.lyricsScrollSpeed)
+            speedStepper("New Song Sheet Music Speed", value: $prefs.sheetMusicScrollSpeed)
+
+            Stepper(value: $prefs.lyricsLeadInLines, in: UserPreferences.leadInLinesRange) {
+                LabeledContent("Blank Lines Before Lyrics") {
+                    Text("\(prefs.lyricsLeadInLines)")
+                        .monospacedDigit()
+                }
+            }
+        } header: {
+            Text("Your Performance Settings")
+        } footer: {
+            Text(prefs.chartModeOverride == nil
+                 ? "For songs with both lyrics and sheet music, each song opens in the view you last used on it, at your last speed. These are yours alone and follow your Apple ID, so someone sharing your songs keeps their own. New songs start at the speeds above."
+                 : "Every song with \(prefs.chartModeOverride?.title.lowercased() ?? "") shows it. Your remembered view for each song is kept — switch back to Remember Per Song to use it again.")
+        }
+    }
+
+    private func speedStepper(_ title: String, value: Binding<Double>) -> some View {
+        Stepper(value: value, in: UserPreferences.scrollSpeedRange, step: 5) {
+            LabeledContent(title) {
+                Text("\(Int(value.wrappedValue))")
+                    .monospacedDigit()
+            }
         }
     }
 
@@ -121,15 +173,21 @@ struct SettingsView: View {
                 onSave: { key in ai.anthropicKey = key },
                 onClear: { ai.anthropicKey = nil }
             )
-            APIKeyRow(
-                label: "Anthropic Workspace ID",
-                icon: "building.2",
-                iconColor: .orange,
-                hasKey: ai.hasAnthropicWorkspaceID,
-                placeholder: "Paste Workspace ID…",
-                onSave: { id in ai.anthropicWorkspaceID = id },
-                onClear: { ai.anthropicWorkspaceID = nil }
-            )
+            // Belongs to the Claude key, so it sits under it, indented, once a key is saved
+            if ai.hasAnthropicKey || ai.hasAnthropicWorkspaceID {
+                APIKeyRow(
+                    label: "Workspace ID (optional)",
+                    icon: "building.2",
+                    iconColor: .orange,
+                    hasKey: ai.hasAnthropicWorkspaceID,
+                    placeholder: "Paste Workspace ID…",
+                    noun: "ID",
+                    isSubItem: true,
+                    onSave: { id in ai.anthropicWorkspaceID = id },
+                    onClear: { ai.anthropicWorkspaceID = nil }
+                )
+                .listRowSeparator(.hidden, edges: .top)
+            }
         } header: {
             Text("API Keys")
         } footer: {
@@ -296,6 +354,10 @@ private struct APIKeyRow: View {
     let iconColor: Color
     let hasKey: Bool
     var placeholder: String = "Paste API key…"
+    /// Word used on the buttons: "Add Key", "Remove ID"…
+    var noun: String = "Key"
+    /// Shown indented beneath the row it belongs to
+    var isSubItem = false
     let onSave: (String) -> Void
     let onClear: () -> Void
 
@@ -305,11 +367,19 @@ private struct APIKeyRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
+                if isSubItem {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 24)
+                }
                 Image(systemName: icon)
+                    .font(isSubItem ? .caption : .body)
                     .foregroundStyle(iconColor)
-                    .frame(width: 24)
+                    .frame(width: isSubItem ? 18 : 24)
                 Text(label)
-                    .font(.subheadline)
+                    .font(isSubItem ? .caption : .subheadline)
+                    .foregroundStyle(isSubItem ? .secondary : .primary)
                 Spacer()
                 if hasKey && !showingEntry {
                     HStack(spacing: 6) {
@@ -321,7 +391,7 @@ private struct APIKeyRow: View {
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
                 } else if !showingEntry {
-                    Button("Add Key") { showingEntry = true }
+                    Button("Add \(noun)") { showingEntry = true }
                         .font(.caption)
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
@@ -340,7 +410,7 @@ private struct APIKeyRow: View {
 
                     HStack {
                         if hasKey {
-                            Button("Remove Key", role: .destructive) {
+                            Button("Remove \(noun)", role: .destructive) {
                                 onClear()
                                 pendingKey = ""
                                 showingEntry = false
@@ -366,9 +436,9 @@ private struct APIKeyRow: View {
                         .disabled(pendingKey.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
-                .padding(.leading, 34)
+                .padding(.leading, isSubItem ? 62 : 34)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, isSubItem ? 0 : 4)
     }
 }
