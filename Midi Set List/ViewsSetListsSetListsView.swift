@@ -43,6 +43,10 @@ struct SetListsView: View {
             .performShortcut()
             .searchable(text: $searchText, prompt: "Search set lists")
             .toolbar {
+                // Edit: always top right, first of the buttons there, on every screen
+                ToolbarItem(placement: .primaryAction) {
+                    EditButton()
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showingAddSetList = true
@@ -62,9 +66,6 @@ struct SetListsView: View {
                     }
                 }
 
-                ToolbarItem(placement: .secondaryAction) {
-                    EditButton()
-                }
             }
             .sheet(isPresented: $showingAddSetList) {
                 AddSetListView()

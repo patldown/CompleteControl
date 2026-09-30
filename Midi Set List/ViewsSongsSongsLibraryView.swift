@@ -82,6 +82,10 @@ struct SongsLibraryView: View {
             .performShortcut()
             .searchable(text: $searchText, prompt: "Search by name or artist")
             .toolbar {
+                // Edit: always top right, first of the buttons there, on every screen
+                ToolbarItem(placement: .primaryAction) {
+                    EditButton()
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button { showingAddSong = true } label: {
                         Label("Add Song", systemImage: "plus")
@@ -94,9 +98,6 @@ struct SongsLibraryView: View {
                               : "line.3.horizontal.decrease.circle")
                     }
                     .foregroundStyle(isFiltered ? .orange : .accentColor)
-                }
-                ToolbarItem(placement: .secondaryAction) {
-                    EditButton()
                 }
             }
             .sheet(isPresented: $showingAddSong) {

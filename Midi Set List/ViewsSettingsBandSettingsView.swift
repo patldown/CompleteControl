@@ -82,7 +82,9 @@ struct BandSettingsView: View {
         }
         .navigationTitle("Band")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { EditButton() }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) { EditButton() }
+        }
         .sheet(item: $editingRole) { role in
             RoleEditorSheet(role: role)
         }

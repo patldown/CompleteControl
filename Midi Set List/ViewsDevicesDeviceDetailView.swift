@@ -172,13 +172,14 @@ struct DeviceDetailView: View {
         .navigationTitle(device.name)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            // Edit: always top right, first of the buttons there, on every screen
+            ToolbarItem(placement: .primaryAction) {
+                Button("Edit") { showingEditDevice = true }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { showingAddCategory = true } label: {
                     Image(systemName: "folder.badge.plus")
                 }
-            }
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button("Edit") { showingEditDevice = true }
             }
             ToolbarItem(placement: .secondaryAction) {
                 ShareItemButton(object: device, kindName: "Instrument", itemName: device.name)
