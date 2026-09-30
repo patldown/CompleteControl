@@ -46,20 +46,23 @@ struct SongDetailView: View {
     var body: some View {
         List(selection: $selectedCommands) {
             Section("Song Information") {
-                LabeledContent("Name") {
-                    TextField("Song Name", text: Binding(
-                        get: { song.name },
-                        set: { song.name = $0 }
-                    ))
-                    .multilineTextAlignment(.trailing)
-                }
-                
-                LabeledContent("Artist") {
-                    TextField("Artist", text: Binding(
-                        get: { song.artist ?? "" },
-                        set: { song.artist = $0.isEmpty ? nil : $0 }
-                    ))
-                    .multilineTextAlignment(.trailing)
+                // Name and Artist side by side, above Genre / BPM / Time Sig.
+                HStack(alignment: .top, spacing: 12) {
+                    compactField("Name") {
+                        TextField("Song Name", text: Binding(
+                            get: { song.name },
+                            set: { song.name = $0 }
+                        ))
+                        .font(.headline)
+                        .padding(.vertical, 6)
+                    }
+                    compactField("Artist") {
+                        TextField("Artist", text: Binding(
+                            get: { song.artist ?? "" },
+                            set: { song.artist = $0.isEmpty ? nil : $0 }
+                        ))
+                        .padding(.vertical, 6)
+                    }
                 }
 
                 // Genre, BPM and time signature side by side; BPM and time signature are
