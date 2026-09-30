@@ -93,7 +93,12 @@ struct SetListPlaylistView: View {
                 Text("Playlist Name")
             }
 
-            if music.isDenied {
+            if music.isNotSetUp {
+                Section {
+                    Label(AppleMusicError.notSetUp.localizedDescription, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+            } else if music.isDenied {
                 Section {
                     Text("Apple Music access is off. Turn it on in Settings › Privacy & Security › Media & Apple Music.")
                         .foregroundStyle(.orange)
@@ -143,7 +148,7 @@ struct SetListPlaylistView: View {
                         Spacer()
                     }
                 }
-                .disabled(isCreating || isMatching || addCount == 0
+                .disabled(isCreating || isMatching || addCount == 0 || music.isNotSetUp
                           || playlistName.trimmingCharacters(in: .whitespaces).isEmpty)
             } footer: {
                 if let createError {
@@ -175,7 +180,18 @@ struct SetListPlaylistView: View {
         // One at a time, so a long set list doesn't flood the catalog with requests
         for index in rows.indices where rows[index].status == .searching {
             let song = rows[index].song
-            let match = try? await music.bestMatch(title: song.name, artist: song.artist)
+            let match: ReferenceTrack?
+            do {
+                match = try await music.bestMatch(title: song.name, artist: song.artist)
+            } catch AppleMusicError.notSetUp {
+                // Every other search would fail the same way
+                for rest in rows.indices where rows[rest].status == .searching {
+                    rows[rest].status = .notFound
+                }
+                return
+            } catch {
+                match = nil
+            }
             guard !Task.isCancelled else { return }
             rows[index].track = match
             rows[index].status = match == nil ? .notFound : .matched
@@ -208,6 +224,7 @@ struct SetListPlaylistView: View {
 
 private struct PlaylistSongRow: View {
     @Binding var row: SetListPlaylistView.Row
+    private let music = AppleMusicReference.shared
     let number: Int
     let onChange: () -> Void
 
@@ -258,8 +275,13 @@ private struct PlaylistSongRow: View {
             Label(trackText, systemImage: "wand.and.stars")
                 .foregroundStyle(.secondary)
         case .notFound:
-            Label("No match found — tap to search", systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.orange)
+            if music.isNotSetUp {
+                Label("Unavailable until Apple Music is set up", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("No match found — tap to search", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+            }
         }
     }
 

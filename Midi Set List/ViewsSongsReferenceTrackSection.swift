@@ -103,6 +103,8 @@ struct ReferenceTrackSection: View {
         } footer: {
             if let error = music.lastError {
                 Text(error).foregroundStyle(.orange)
+            } else if music.isNotSetUp {
+                Text(AppleMusicError.notSetUp.localizedDescription).foregroundStyle(.orange)
             } else if music.isDenied {
                 Text("Apple Music access is off. Turn it on in Settings › Privacy & Security › Media & Apple Music.")
             } else if !song.hasReferenceTrack {
@@ -168,7 +170,8 @@ struct ReferenceTrackSearchView: View {
                         description: Text("Turn on access in Settings › Privacy & Security › Media & Apple Music.")
                     )
                 } else if let searchError {
-                    ContentUnavailableView("Search Failed", systemImage: "exclamationmark.triangle",
+                    ContentUnavailableView(music.isNotSetUp ? "Apple Music Not Set Up" : "Search Failed",
+                                           systemImage: "exclamationmark.triangle",
                                            description: Text(searchError))
                 } else if results.isEmpty && !isSearching && !query.isEmpty {
                     ContentUnavailableView.search(text: query)

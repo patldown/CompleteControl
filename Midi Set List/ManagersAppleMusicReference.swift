@@ -52,10 +52,12 @@ struct ReferenceTrack: Identifiable, Hashable {
 }
 
 enum AppleMusicError: LocalizedError {
-    case accessDenied, noTracks
+    case accessDenied, noTracks, notSetUp
 
     var errorDescription: String? {
         switch self {
+        case .notSetUp: "Apple Music isn't set up for this app yet. Turn on MusicKit for the app's ID in the Apple Developer portal, then reopen the app."
+
         case .accessDenied: "Allow Apple Music access in Settings › Privacy & Security › Media & Apple Music."
         case .noTracks: "None of the tracks could be found in Apple Music."
         }
@@ -77,6 +79,9 @@ final class AppleMusicReference {
     /// Catalog ID of a track being fetched to play
     private(set) var loadingTrackID: String?
     var lastError: String?
+    /// MusicKit isn't enabled for the app's ID, so Apple can't issue it a developer token.
+    /// Every catalog request fails until it is, so the UI says so instead of "no match".
+    private(set) var isNotSetUp = false
 
     @ObservationIgnored private let player = ApplicationMusicPlayer.shared
     @ObservationIgnored private var stateObserver: AnyCancellable?
@@ -109,7 +114,21 @@ final class AppleMusicReference {
     func refreshSubscription() async {
         authorization = MusicAuthorization.currentStatus  // may have changed in Settings
         guard isAuthorized else { return }
-        canPlayCatalog = (try? await MusicSubscription.current)?.canPlayCatalogContent ?? false
+        do {
+            canPlayCatalog = try await MusicSubscription.current.canPlayCatalogContent
+        } catch {
+            _ = translated(error)
+            canPlayCatalog = false
+        }
+    }
+
+    /// Turns MusicKit's missing-developer-token failure into AppleMusicError.notSetUp
+    private func translated(_ error: Error) -> Error {
+        if let tokenError = error as? MusicTokenRequestError, case .developerTokenRequestFailed = tokenError {
+            isNotSetUp = true
+            return AppleMusicError.notSetUp
+        }
+        return error
     }
 
     // MARK: - Search
@@ -119,7 +138,11 @@ final class AppleMusicReference {
         guard !term.isEmpty, await requestAccess() else { return [] }
         var request = MusicCatalogSearchRequest(term: term, types: [MusicKit.Song.self])
         request.limit = 25
-        return try await request.response().songs.map(ReferenceTrack.init)
+        do {
+            return try await request.response().songs.map(ReferenceTrack.init)
+        } catch {
+            throw translated(error)
+        }
     }
 
     /// The catalog's top hit for a song, used to match set list songs automatically
@@ -133,11 +156,20 @@ final class AppleMusicReference {
     func createPlaylist(name: String, description: String?, trackIDs: [String]) async throws {
         guard await requestAccess() else { throw AppleMusicError.accessDenied }
         let request = MusicCatalogResourceRequest<MusicKit.Song>(matching: \.id, memberOf: trackIDs.map { MusicItemID($0) })
-        let found = try await request.response().items
+        let found: MusicItemCollection<MusicKit.Song>
+        do {
+            found = try await request.response().items
+        } catch {
+            throw translated(error)
+        }
         let byID = Dictionary(found.map { ($0.id.rawValue, $0) }, uniquingKeysWith: { first, _ in first })
         let ordered = trackIDs.compactMap { byID[$0] }
         guard !ordered.isEmpty else { throw AppleMusicError.noTracks }
-        _ = try await MusicLibrary.shared.createPlaylist(name: name, description: description, items: ordered)
+        do {
+            _ = try await MusicLibrary.shared.createPlaylist(name: name, description: description, items: ordered)
+        } catch {
+            throw translated(error)
+        }
     }
 
     // MARK: - Playback
@@ -158,6 +190,10 @@ final class AppleMusicReference {
             lastError = "Allow Apple Music access in Settings to play reference tracks."
             return
         }
+        guard !isNotSetUp else {
+            lastError = AppleMusicError.notSetUp.localizedDescription
+            return
+        }
         guard canPlayCatalog else {
             lastError = "Playing in the app needs an Apple Music subscription. Use Open in Apple Music instead."
             return
@@ -175,7 +211,7 @@ final class AppleMusicReference {
             loadedTrackID = trackID
             await play()
         } catch {
-            lastError = error.localizedDescription
+            lastError = translated(error).localizedDescription
         }
     }
 
