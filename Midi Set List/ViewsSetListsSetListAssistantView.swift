@@ -59,7 +59,7 @@ struct SetListAssistantView: View {
                 Divider()
                 inputBar
             }
-            .navigationTitle(setList == nil ? "New Set List with AI" : "Edit with AI")
+            .navigationTitle(setList == nil ? "Set Lists with AI" : "Edit with AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -106,7 +106,7 @@ struct SetListAssistantView: View {
             Image(systemName: "sparkles.rectangle.stack")
                 .font(.largeTitle).foregroundStyle(.secondary)
             Text(setList == nil
-                 ? "Describe the set you want. You'll see the plan before anything is created."
+                 ? "Describe a new set, or a change to one of your set lists. You'll see the plan before anything changes."
                  : "Describe what to change in \"\(setList?.name ?? "")\". You'll see a summary before anything changes.")
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
 
@@ -139,6 +139,7 @@ struct SetListAssistantView: View {
         }
         return [
             "Make a 6-song set that builds in energy",
+            "Add a slow song to the end of my latest set list",
             "Build a 45-minute set from my rock songs and make it a playlist",
             "New set list with all my rock songs, fastest first",
             "Copy my latest set list but in reverse order"
@@ -204,7 +205,7 @@ struct SetListAssistantView: View {
             if preview.makePlaylist {
                 changeRow(icon: "music.note.list", color: .pink,
                           text: preview.kind == .none
-                              ? "Make an Apple Music playlist of \"\(setList?.name ?? "")\""
+                              ? "Make an Apple Music playlist of \"\(preview.target?.name ?? "")\""
                               : "Then make an Apple Music playlist from it")
             }
 
@@ -236,7 +237,7 @@ struct SetListAssistantView: View {
                 Text("Replaced by a newer plan").font(.caption).foregroundStyle(.secondary)
             } else if preview.kind == .none && preview.makePlaylist {
                 Button {
-                    playlistSetList = setList
+                    playlistSetList = preview.target
                 } label: {
                     Label("Review Playlist", systemImage: "music.note.list")
                         .font(.subheadline.weight(.semibold))
@@ -301,7 +302,7 @@ struct SetListAssistantView: View {
     private func planTitle(_ preview: SetListChangePreview) -> String {
         switch preview.kind {
         case .create: return "Create \"\(preview.newName ?? "New Set List")\""
-        case .update: return "Update \"\(setList?.name ?? "")\""
+        case .update: return "Update \"\(preview.target?.name ?? "")\""
         case .none:   return preview.makePlaylist ? "Apple Music Playlist" : "No changes"
         }
     }
@@ -384,9 +385,9 @@ struct SetListAssistantView: View {
 
     /// Snapshot the library and set lists once per conversation so song IDs stay stable
     private func startConversation() {
-        let built = SetListAssistant.Catalog(songs: Array(allSongs))
+        let built = SetListAssistant.Catalog(songs: Array(allSongs), setLists: Array(allSetLists))
         catalog = built
-        systemPrompt = SetListAssistant.systemPrompt(catalog: built, current: setList, otherSetLists: Array(allSetLists))
+        systemPrompt = SetListAssistant.systemPrompt(catalog: built, current: setList)
     }
 
     private func sessionForOnDevice() -> LanguageModelSession {
@@ -398,10 +399,13 @@ struct SetListAssistantView: View {
 
     private func apply(_ preview: SetListChangePreview, id: UUID) {
         do {
-            let result = try SetListAssistant.apply(preview, to: setList, in: viewContext)
+            let result = try SetListAssistant.apply(preview, in: viewContext)
             switch preview.kind {
             case .create: planStates[id] = .applied("Created \"\(result?.name ?? "set list")\" — find it in Set Lists")
-            default:      planStates[id] = .applied("Changes applied")
+            default:
+                planStates[id] = .applied(preview.target?.objectID == setList?.objectID
+                                          ? "Changes applied"
+                                          : "Updated \"\(result?.name ?? "set list")\"")
             }
             // The library and set lists changed — rebuild context for any follow-up request
             catalog = nil

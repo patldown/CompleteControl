@@ -20,13 +20,15 @@ import FoundationModels
 
 @Generable
 struct GeneratedSetListPlan {
-    @Guide(description: "\"update\" to change the open set list, \"create\" for a new set list, or \"none\" if nothing should change")
+    @Guide(description: "\"update\" to change an existing set list, \"create\" for a new set list, or \"none\" if nothing should change")
     var action: String
+    @Guide(description: "For \"update\": the ID of the set list to change, like L2. Empty means the open set list.")
+    var setListID: String
     @Guide(description: "Name for a new set list, or the new name when renaming. Empty to keep the current name.")
     var name: String
     @Guide(description: "The COMPLETE final song list in play order, using library IDs like S3")
     var songIDs: [String]
-    @Guide(description: "One or two sentences telling the user what will change and why")
+    @Guide(description: "One or two sentences telling the user what will change and why. Name songs and set lists by title, never by ID.")
     var summary: String
     @Guide(description: "True when the user wants an Apple Music playlist made from the resulting set list")
     var playlist: Bool
@@ -36,13 +38,14 @@ struct GeneratedSetListPlan {
 
 struct SetListPlan: Decodable {
     var action: String
+    var setListID: String?
     var name: String?
     var songIDs: [String]?
     var summary: String
     var playlist: Bool?
 
     init(_ g: GeneratedSetListPlan) {
-        action = g.action; name = g.name; songIDs = g.songIDs; summary = g.summary; playlist = g.playlist
+        action = g.action; setListID = g.setListID; name = g.name; songIDs = g.songIDs; summary = g.summary; playlist = g.playlist
     }
 }
 
@@ -59,6 +62,8 @@ struct SetListChangePreview {
     }
 
     let kind: Kind
+    /// The set list an update changes (the open one, or another named in the request)
+    let target: SetList?
     let summary: String
     /// New set list name (create), or rename target (update); nil keeps the name
     let newName: String?
@@ -89,8 +94,12 @@ enum SetListAssistant {
         let songsByID: [String: Song]
         let idsBySong: [NSManagedObjectID: String]
         let listing: String
+        /// Set lists get IDs too (L1, L2, …) so a request can change one that isn't open
+        let setListsByID: [String: SetList]
+        let idsBySetList: [NSManagedObjectID: String]
+        let setLists: [SetList]
 
-        init(songs: [Song]) {
+        init(songs: [Song], setLists: [SetList]) {
             var byID: [String: Song] = [:]
             var bySong: [NSManagedObjectID: String] = [:]
             var lines: [String] = []
@@ -112,6 +121,32 @@ enum SetListAssistant {
             songsByID = byID
             idsBySong = bySong
             listing = lines.joined(separator: "\n")
+
+            var listsByID: [String: SetList] = [:]
+            var idsByList: [NSManagedObjectID: String] = [:]
+            for (index, setList) in setLists.enumerated() {
+                listsByID["L\(index + 1)"] = setList
+                idsByList[setList.objectID] = "L\(index + 1)"
+            }
+            setListsByID = listsByID
+            idsBySetList = idsByList
+            self.setLists = setLists
+        }
+
+        /// Swaps any song or set list IDs (S3, L2) that slipped into AI text for their titles
+        func replacingIDs(in text: String) -> String {
+            guard let regex = try? NSRegularExpression(pattern: #"\b([SL])(\d+)\b"#) else { return text }
+            var result = text
+            let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+            for match in matches.reversed() {
+                guard let range = Range(match.range, in: result) else { continue }
+                let id = String(result[range])
+                let title: String? = id.hasPrefix("S")
+                    ? songsByID[id].map { "\"\($0.name)\"" }
+                    : setListsByID[id].map { "\"\($0.name)\"" }
+                if let title { result.replaceSubrange(range, with: title) }
+            }
+            return result
         }
 
         func ids(for songs: [Song]) -> String {
@@ -121,7 +156,7 @@ enum SetListAssistant {
 
     // MARK: Prompt
 
-    static func systemPrompt(catalog: Catalog, current: SetList?, otherSetLists: [SetList]) -> String {
+    static func systemPrompt(catalog: Catalog, current: SetList?) -> String {
         var prompt = """
             You are the set list assistant in "Midi Set List", an app musicians use to plan gigs.
             You change set lists by returning the COMPLETE final song order. The app works out what \
@@ -131,21 +166,22 @@ enum SetListAssistant {
             \(catalog.listing.isEmpty ? "(empty)" : catalog.listing)
             """
 
-        if let current {
+        if let current, let id = catalog.idsBySetList[current.objectID] {
             prompt += """
 
 
-                OPEN SET LIST "\(current.name)" (in play order): \(current.songs.isEmpty ? "(no songs)" : catalog.ids(for: current.songs))
+                OPEN SET LIST \(id) "\(current.name)" (in play order): \(current.songs.isEmpty ? "(no songs)" : catalog.ids(for: current.songs))
                 """
         } else {
-            prompt += "\n\nNo set list is open — you can only create a new one (action \"create\")."
+            prompt += "\n\nNo set list is open. To change an existing set list, name it with setListID."
         }
 
-        let others = otherSetLists.filter { $0.objectID != current?.objectID }.prefix(20)
+        let others = catalog.setLists.filter { $0.objectID != current?.objectID }.prefix(30)
         if !others.isEmpty {
-            prompt += "\n\nOTHER SET LISTS (reference only, for requests like \"like Friday's set but…\"):"
+            prompt += "\n\nOTHER SET LISTS, most recently changed first (ID | name: songs in order). Update one by giving its setListID:"
             for sl in others {
-                prompt += "\n\"\(sl.name)\": \(sl.songs.isEmpty ? "(no songs)" : catalog.ids(for: sl.songs))"
+                let id = catalog.idsBySetList[sl.objectID] ?? "?"
+                prompt += "\n\(id) | \"\(sl.name)\": \(sl.songs.isEmpty ? "(no songs)" : catalog.ids(for: sl.songs))"
             }
         }
 
@@ -153,13 +189,20 @@ enum SetListAssistant {
 
 
             Rules:
-            - action "update": change the open set list. songIDs is the FULL final list in order — include unchanged songs.
-            - action "create": a new set list. Give it a short, descriptive name. songIDs is its songs in order.
+            - action "update": change an existing set list. setListID is the one to change — empty for the open \
+            set list, or the ID (like L2) of the set list the user names. songIDs is the FULL final list of THAT \
+            set list in order — include its unchanged songs.
+            - When the user names an existing set list ("add Wonderwall to Friday Gig"), update that set list. \
+            Never create a new set list just because the named one isn't open. Match set list names loosely too.
+            - action "create": only when the user asks for a new set list, or names one that doesn't exist.
+            - For "create", give the set list a short, descriptive name. songIDs is its songs in order.
             - action "none": the message is a question or can't be done with these songs. songIDs is empty. Answer in summary.
             - Only use IDs from the song library. Never invent songs. If a song the user names isn't in the library, say so in summary.
             - Match song names loosely: ignore case, small typos and partial titles.
             - Keep songs in their existing relative order unless the user asks to reorder.
             - If the user is vague (e.g. "remove 2 songs"), make a sensible choice and name the songs in summary.
+            - In summary, always call songs and set lists by their titles. Never write IDs like S2 or L1 there — \
+            IDs are only for songIDs and setListID.
             - When ordering by energy or tempo, use BPM where known and explain your logic in summary.
             - Set "name" only when creating or when the user asks to rename; otherwise leave it empty.
             - Follow-up messages revise your previous plan — always return the complete revised plan.
@@ -177,7 +220,7 @@ enum SetListAssistant {
     static let jsonFormat = """
 
         Respond ONLY with a JSON object — no markdown fences, no explanation:
-        {"action": "update" | "create" | "none", "name": "string or empty", "songIDs": ["S1", "S2"], "summary": "string", "playlist": false}
+        {"action": "update" | "create" | "none", "setListID": "L2 or empty", "name": "string or empty", "songIDs": ["S1", "S2"], "summary": "string", "playlist": false}
         """
 
     // MARK: Request
@@ -227,9 +270,13 @@ enum SetListAssistant {
     // MARK: Preview
 
     static func preview(for plan: SetListPlan, catalog: Catalog, current: SetList?) -> SetListChangePreview {
+        // The set list the request is about: one it named, else the open one
+        let namedID = plan.setListID?.trimmingCharacters(in: .whitespaces).uppercased() ?? ""
+        let target = catalog.setListsByID[namedID] ?? current
+
         var kind: SetListChangePreview.Kind
         switch plan.action.lowercased() {
-        case "update": kind = current == nil ? .create : .update
+        case "update": kind = target == nil ? .create : .update
         case "create": kind = .create
         default:       kind = .none
         }
@@ -245,7 +292,7 @@ enum SetListAssistant {
         }
 
         let trimmedName = plan.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let currentSongs = kind == .update ? (current?.songs ?? []) : []
+        let currentSongs = kind == .update ? (target?.songs ?? []) : []
         let currentIDs = Set(currentSongs.map(\.objectID))
         let finalIDs = Set(final.map(\.objectID))
 
@@ -263,7 +310,7 @@ enum SetListAssistant {
         let newName: String?
         switch kind {
         case .create: newName = trimmedName.isEmpty ? "New Set List" : trimmedName
-        case .update: newName = (trimmedName.isEmpty || trimmedName == current?.name) ? nil : trimmedName
+        case .update: newName = (trimmedName.isEmpty || trimmedName == target?.name) ? nil : trimmedName
         case .none:   newName = nil
         }
 
@@ -273,13 +320,14 @@ enum SetListAssistant {
 
         // A playlist of the open set list as-is needs one open; a failed create gets no playlist
         let makePlaylist = (plan.playlist ?? false)
-            && (kind != .none || (requestedKind == .none && current != nil))
+            && (kind != .none || (requestedKind == .none && target != nil))
 
         return SetListChangePreview(
             kind: kind,
-            summary: plan.summary,
+            target: kind == .create ? nil : target,
+            summary: catalog.replacingIDs(in: plan.summary),
             newName: newName,
-            oldName: kind == .update ? current?.name : nil,
+            oldName: kind == .update ? target?.name : nil,
             finalSongs: entries,
             removed: currentSongs.filter { !finalIDs.contains($0.objectID) },
             unknownIDs: unknown,
@@ -290,7 +338,7 @@ enum SetListAssistant {
     // MARK: Apply (only after the user approves)
 
     @discardableResult
-    static func apply(_ preview: SetListChangePreview, to current: SetList?, in context: NSManagedObjectContext) throws -> SetList? {
+    static func apply(_ preview: SetListChangePreview, in context: NSManagedObjectContext) throws -> SetList? {
         let ordered = preview.finalSongs.map(\.song)
         switch preview.kind {
         case .none:
@@ -301,7 +349,7 @@ enum SetListAssistant {
             try context.save()
             return setList
         case .update:
-            guard let setList = current else { return nil }
+            guard let setList = preview.target else { return nil }
             if let name = preview.newName { setList.name = name }
             preview.removed.forEach(setList.removeSong)
             ordered.forEach(setList.addSong)   // no-op for songs already in the list
