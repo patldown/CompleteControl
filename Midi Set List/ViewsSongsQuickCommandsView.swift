@@ -41,7 +41,8 @@ struct QuickCommandsView: View {
                                         song: song,
                                         snapshotIndex: snapshotIndex,
                                         device: device,
-                                        onAdded: handleAdded
+                                        onAdded: handleAdded,
+                                        onDone: { dismiss() }
                                     )
                                 ) {
                                     HStack(spacing: 12) {
@@ -126,7 +127,7 @@ struct QuickCommandsView: View {
             .navigationTitle("Quick Add")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
             }
@@ -200,6 +201,8 @@ struct QuickDeviceCategoriesView: View {
     var snapshotIndex: Int = 0
     let device: InstrumentDevice
     let onAdded: (String) -> Void
+    /// Closes the whole Quick Add sheet (this view's own dismiss would only go back)
+    let onDone: () -> Void
 
     var body: some View {
         List {
@@ -212,7 +215,8 @@ struct QuickDeviceCategoriesView: View {
             } else {
                 ForEach(device.sortedCategories) { category in
                     NavigationLink(
-                        destination: QuickMacrosPickerView(song: song, snapshotIndex: snapshotIndex, category: category, onAdded: onAdded)
+                        destination: QuickMacrosPickerView(song: song, snapshotIndex: snapshotIndex, category: category,
+                                                           onAdded: onAdded, onDone: onDone)
                     ) {
                         HStack {
                             Image(systemName: "folder.fill").foregroundStyle(.orange)
@@ -226,6 +230,11 @@ struct QuickDeviceCategoriesView: View {
         }
         .navigationTitle(device.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done", action: onDone)
+            }
+        }
     }
 }
 
@@ -237,6 +246,7 @@ struct QuickMacrosPickerView: View {
     var snapshotIndex: Int = 0
     let category: MacroCategory
     let onAdded: (String) -> Void
+    let onDone: () -> Void
 
     @State private var addedMacroIDs: Set<UUID> = []
 
@@ -277,6 +287,11 @@ struct QuickMacrosPickerView: View {
         }
         .navigationTitle(category.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done", action: onDone)
+            }
+        }
     }
 
     private func addMacro(_ macro: DeviceMacro) {
