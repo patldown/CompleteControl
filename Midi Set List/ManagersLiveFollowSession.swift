@@ -91,7 +91,7 @@ final class LiveFollowSession: NSObject {
     }
 
     /// Set by the app
-    weak var performance: PerformanceSession?
+    @ObservationIgnored weak var performance: PerformanceSession?
 
     @ObservationIgnored private var session: MCSession?
     @ObservationIgnored private var advertiser: MCNearbyServiceAdvertiser?
