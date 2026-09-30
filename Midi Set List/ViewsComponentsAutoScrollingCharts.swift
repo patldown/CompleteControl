@@ -204,9 +204,8 @@ struct AutoScrollingPDFView: UIViewRepresentable {
     var liveChartID: UUID? = nil
 
     func makeUIView(context: Context) -> PDFView {
-        let pdfView = PDFView()
+        let pdfView = FitWidthPDFView()
         pdfView.backgroundColor = .black
-        pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
         pdfView.document = PDFDocument(url: url)
@@ -221,6 +220,7 @@ struct AutoScrollingPDFView: UIViewRepresentable {
     func updateUIView(_ pdfView: PDFView, context: Context) {
         if pdfView.document?.documentURL != url {
             pdfView.document = PDFDocument(url: url)
+            (pdfView as? FitWidthPDFView)?.refit()
             context.coordinator.scrollView = nil
         }
         context.coordinator.sync(isScrolling: isScrolling, speed: scrollSpeed, resetTrigger: resetTrigger,
@@ -240,6 +240,44 @@ struct AutoScrollingPDFView: UIViewRepresentable {
             if let found = firstScrollView(in: sub) { return found }
         }
         return nil
+    }
+}
+
+/// Scales pages to fill the view's width, like the image charts. PDFView's autoScales
+/// fits the whole page instead, so a portrait page on a landscape iPad sat between wide
+/// black bars. Refits when the view changes width (rotation, full view, window resizing);
+/// pinch zoom still goes up to 4×.
+final class FitWidthPDFView: PDFView {
+    private var fittedWidth: CGFloat = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        pageShadowsEnabled = false
+        pageBreakMargins = UIEdgeInsets(top: 0, left: 0, bottom: 8, right: 0)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    /// Fit again on the next layout, e.g. after the document changes
+    func refit() {
+        fittedWidth = 0
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0, abs(bounds.width - fittedWidth) > 0.5,
+              let page = document?.page(at: 0) else { return }
+        let pageWidth = page.bounds(for: displayBox).width
+        guard pageWidth > 0 else { return }
+        fittedWidth = bounds.width
+        let fit = bounds.width / pageWidth
+        autoScales = false
+        minScaleFactor = fit
+        maxScaleFactor = fit * 4
+        scaleFactor = fit
     }
 }
 
