@@ -17,11 +17,12 @@ import Foundation
 
 // MARK: - File format
 
-struct DataArchive: Codable {
+/// Plain data, so a large archive can be encoded and written off the main thread
+nonisolated struct DataArchive: Codable {
     static let formatID = "midisetlist-archive"
     static let currentVersion = 1
 
-    enum Kind: String, Codable { case backup, share }
+    nonisolated enum Kind: String, Codable { case backup, share }
 
     var format = DataArchive.formatID
     var version = DataArchive.currentVersion
@@ -32,7 +33,7 @@ struct DataArchive: Codable {
     var records: [Record]
     var files: [FileEntry]
 
-    struct Record: Codable {
+    nonisolated struct Record: Codable {
         var entity: String
         var id: UUID
         var attributes: [String: Value]
@@ -40,8 +41,8 @@ struct DataArchive: Codable {
         var relationships: [String: [UUID]]
     }
 
-    struct FileEntry: Codable {
-        enum Kind: String, Codable { case songPDF, specFile, deviceMemory }
+    nonisolated struct FileEntry: Codable {
+        nonisolated enum Kind: String, Codable { case songPDF, specFile, deviceMemory }
         var kind: Kind
         /// Song or InstrumentDevice the file belongs to
         var ownerID: UUID
@@ -51,7 +52,7 @@ struct DataArchive: Codable {
     }
 
     /// JSON-friendly attribute value
-    enum Value: Codable {
+    nonisolated enum Value: Codable {
         case string(String), int(Int64), double(Double), bool(Bool)
 
         init(from decoder: Decoder) throws {
@@ -259,7 +260,8 @@ enum DataArchiveExporter {
 
     // MARK: File output
 
-    static func write(_ archive: DataArchive, fileName: String) throws -> URL {
+    /// Safe to call off the main thread — encoding a full backup with its files is the slow part
+    nonisolated static func write(_ archive: DataArchive, fileName: String) throws -> URL {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601

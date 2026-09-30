@@ -77,6 +77,13 @@ struct BackupSection: View {
     @State private var showingImporter = false
     @State private var pendingImport: PendingImport?
     @State private var errorMessage: String?
+    @State private var isPreparingBackup = false
+    @State private var readyBackup: ReadyFile?
+
+    struct ReadyFile: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
 
     struct PendingImport: Identifiable {
         let id = UUID()
@@ -85,9 +92,21 @@ struct BackupSection: View {
 
     var body: some View {
         Section {
-            ShareLink(item: ArchiveFile.fullBackup(), preview: SharePreview("Midi Set List Backup")) {
-                Label("Export Full Backup", systemImage: "externaldrive.badge.plus")
+            // Not a ShareLink: that builds the file only after the tap, on the main thread,
+            // so a big library froze the screen for seconds with no sign anything happened
+            Button {
+                Task { await exportFullBackup() }
+            } label: {
+                HStack {
+                    Label(isPreparingBackup ? "Preparing Backup…" : "Export Full Backup",
+                          systemImage: "externaldrive.badge.plus")
+                    if isPreparingBackup {
+                        Spacer()
+                        ProgressView()
+                    }
+                }
             }
+            .disabled(isPreparingBackup)
             Button {
                 showingImporter = true
             } label: {
@@ -99,6 +118,11 @@ struct BackupSection: View {
             Text("A backup is one JSON file with your songs, set lists, instruments, macros, OSC devices, presets, reference files and AI memory. API keys are never included. Share a single set list, song, instrument or macro group from its own screen.")
         }
         .sheet(item: $pendingImport) { ImportReviewSheet(archive: $0.archive) }
+        .sheet(item: $readyBackup) { file in
+            ActivityShareSheet(items: [file.url])
+                .presentationDetents([.medium, .large])
+                .ignoresSafeArea()
+        }
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.json], allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
@@ -119,6 +143,35 @@ struct BackupSection: View {
         }
     }
 
+    /// Shows progress right away, gathers the data, then encodes and writes the file in the
+    /// background before offering Save / Share
+    private func exportFullBackup() async {
+        isPreparingBackup = true
+        defer { isPreparingBackup = false }
+        // Let the spinner appear before the work starts
+        try? await Task.sleep(for: .milliseconds(80))
+        do {
+            let archive = try DataArchiveExporter.fullBackup(context: PersistenceController.shared.viewContext)
+            let fileName = ArchiveFile.fullBackup().fileName
+            let url = try await Task.detached(priority: .userInitiated) {
+                try DataArchiveExporter.write(archive, fileName: fileName)
+            }.value
+            readyBackup = ReadyFile(url: url)
+        } catch {
+            errorMessage = "Couldn't make the backup: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// The system share sheet (Save to Files, AirDrop, Mail…) for files that are already made
+struct ActivityShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - Import review
