@@ -84,7 +84,9 @@ struct SongDetailView: View {
                     .multilineTextAlignment(.trailing)
                 }
             }
-            
+
+            ReferenceTrackSection(song: song)
+
             keySection
 
             // MIDI Clock Section
@@ -518,7 +520,10 @@ struct SongDetailView: View {
             // MIDI snapshot recalls act on the open song when no set list is playing
             performance.focus(song)
         }
-        .onDisappear { performance.unfocus(song) }
+        .onDisappear {
+            performance.unfocus(song)
+            AppleMusicReference.shared.stop()
+        }
         .onChange(of: selectedSnapshot) { _, _ in selectedCommands.removeAll() }
         .onChange(of: selectedGenres) { _, newValue in
             song.setGenres(Array(newValue))

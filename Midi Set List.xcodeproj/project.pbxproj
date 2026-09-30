@@ -399,6 +399,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Midi-Set-List-Info.plist";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Set List plays reference tracks from Apple Music.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "idi Set List connects to MIDI and OSC devices on your local network.";
@@ -446,6 +447,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Midi-Set-List-Info.plist";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Set List plays reference tracks from Apple Music.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "idi Set List connects to MIDI and OSC devices on your local network.";

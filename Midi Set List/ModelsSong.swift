@@ -22,6 +22,11 @@ class Song: NSManagedObject, Identifiable {
     @NSManaged var timeSignature: String?
     /// JSON-encoded [String] of snapshot names, one per snapshot ("" = default name).
     @NSManaged var snapshotNamesData: String?
+    /// Apple Music reference track: catalog ID plus what's shown without a network lookup
+    @NSManaged var referenceTrackID: String?
+    @NSManaged var referenceTrackTitle: String?
+    @NSManaged var referenceTrackArtist: String?
+    @NSManaged var referenceTrackURL: String?
     @NSManaged var dateCreated: Date
     @NSManaged var dateModified: Date
 
@@ -195,6 +200,25 @@ class Song: NSManagedObject, Identifiable {
     var chartImageURLs: [URL] {
         guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return [] }
         return chartImageNames.map { docs.appendingPathComponent($0) }
+    }
+
+    // ── Reference track (Apple Music) ──────────────────────────────────
+    var hasReferenceTrack: Bool { referenceTrackID != nil }
+
+    func linkReferenceTrack(_ track: ReferenceTrack) {
+        referenceTrackID = track.id
+        referenceTrackTitle = track.title
+        referenceTrackArtist = track.artist
+        referenceTrackURL = track.url?.absoluteString
+        dateModified = Date()
+    }
+
+    func unlinkReferenceTrack() {
+        referenceTrackID = nil
+        referenceTrackTitle = nil
+        referenceTrackArtist = nil
+        referenceTrackURL = nil
+        dateModified = Date()
     }
 
     var hasLyricsText: Bool { !(lyrics ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
