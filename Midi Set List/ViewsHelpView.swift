@@ -30,6 +30,7 @@ struct HelpView: View {
             }
             .navigationTitle("Help")
             .offlineStatusBadge()
+            .performShortcut()
         }
     }
 }

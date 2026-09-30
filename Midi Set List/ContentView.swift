@@ -9,10 +9,10 @@ import SwiftUI
 import CoreData
 
 struct ContentView: View {
-    @State private var selectedTab = "setlists"
+    @State private var navigation = AppNavigation()
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $navigation.selectedTab) {
             Tab("Perform", systemImage: "play.circle", value: "perform") {
                 PerformView()
             }
@@ -45,6 +45,8 @@ struct ContentView: View {
                 SettingsView()
             }
         }
+        .floatingPerformShortcut(navigation)
+        .environment(navigation)
     }
 }
 

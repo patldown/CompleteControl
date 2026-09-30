@@ -133,6 +133,7 @@ struct MIDIDevicesView: View {
             }
             .navigationTitle("MIDI Devices")
             .offlineStatusBadge()
+            .performShortcut()
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {

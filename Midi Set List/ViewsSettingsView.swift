@@ -34,6 +34,7 @@ struct SettingsView: View {
             .animation(.default, value: ai.offlineMode)
             .navigationTitle("Settings")
             .offlineStatusBadge()
+            .performShortcut()
             .navigationBarTitleDisplayMode(.large)
         }
     }

@@ -79,6 +79,7 @@ struct SongsLibraryView: View {
             }
             .navigationTitle("Songs")
             .offlineStatusBadge()
+            .performShortcut()
             .searchable(text: $searchText, prompt: "Search by name or artist")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {

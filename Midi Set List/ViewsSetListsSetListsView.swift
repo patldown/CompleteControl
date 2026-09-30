@@ -40,6 +40,7 @@ struct SetListsView: View {
             }
             .navigationTitle("Set Lists")
             .offlineStatusBadge()
+            .performShortcut()
             .searchable(text: $searchText, prompt: "Search set lists")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
