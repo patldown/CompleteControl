@@ -162,15 +162,21 @@ struct SettingsView: View {
                 onSave: { key in ai.anthropicKey = key },
                 onClear: { ai.anthropicKey = nil }
             )
-            APIKeyRow(
-                label: "Anthropic Workspace ID",
-                icon: "building.2",
-                iconColor: .orange,
-                hasKey: ai.hasAnthropicWorkspaceID,
-                placeholder: "Paste Workspace ID…",
-                onSave: { id in ai.anthropicWorkspaceID = id },
-                onClear: { ai.anthropicWorkspaceID = nil }
-            )
+            // Belongs to the Claude key, so it sits under it, indented, once a key is saved
+            if ai.hasAnthropicKey || ai.hasAnthropicWorkspaceID {
+                APIKeyRow(
+                    label: "Workspace ID (optional)",
+                    icon: "building.2",
+                    iconColor: .orange,
+                    hasKey: ai.hasAnthropicWorkspaceID,
+                    placeholder: "Paste Workspace ID…",
+                    noun: "ID",
+                    isSubItem: true,
+                    onSave: { id in ai.anthropicWorkspaceID = id },
+                    onClear: { ai.anthropicWorkspaceID = nil }
+                )
+                .listRowSeparator(.hidden, edges: .top)
+            }
         } header: {
             Text("API Keys")
         } footer: {
@@ -337,6 +343,10 @@ private struct APIKeyRow: View {
     let iconColor: Color
     let hasKey: Bool
     var placeholder: String = "Paste API key…"
+    /// Word used on the buttons: "Add Key", "Remove ID"…
+    var noun: String = "Key"
+    /// Shown indented beneath the row it belongs to
+    var isSubItem = false
     let onSave: (String) -> Void
     let onClear: () -> Void
 
@@ -346,11 +356,19 @@ private struct APIKeyRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
+                if isSubItem {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 24)
+                }
                 Image(systemName: icon)
+                    .font(isSubItem ? .caption : .body)
                     .foregroundStyle(iconColor)
-                    .frame(width: 24)
+                    .frame(width: isSubItem ? 18 : 24)
                 Text(label)
-                    .font(.subheadline)
+                    .font(isSubItem ? .caption : .subheadline)
+                    .foregroundStyle(isSubItem ? .secondary : .primary)
                 Spacer()
                 if hasKey && !showingEntry {
                     HStack(spacing: 6) {
@@ -362,7 +380,7 @@ private struct APIKeyRow: View {
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
                 } else if !showingEntry {
-                    Button("Add Key") { showingEntry = true }
+                    Button("Add \(noun)") { showingEntry = true }
                         .font(.caption)
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
@@ -381,7 +399,7 @@ private struct APIKeyRow: View {
 
                     HStack {
                         if hasKey {
-                            Button("Remove Key", role: .destructive) {
+                            Button("Remove \(noun)", role: .destructive) {
                                 onClear()
                                 pendingKey = ""
                                 showingEntry = false
@@ -407,9 +425,9 @@ private struct APIKeyRow: View {
                         .disabled(pendingKey.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
-                .padding(.leading, 34)
+                .padding(.leading, isSubItem ? 62 : 34)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, isSubItem ? 0 : 4)
     }
 }
