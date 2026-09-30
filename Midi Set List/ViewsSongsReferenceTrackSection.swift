@@ -55,6 +55,14 @@ struct ReferenceTrackSection: View {
                                 .font(.title3)
                         }
                         .accessibilityLabel("Back 15 Seconds")
+
+                        Button {
+                            music.skip(by: 15)
+                        } label: {
+                            Image(systemName: "goforward.15")
+                                .font(.title3)
+                        }
+                        .accessibilityLabel("Forward 15 Seconds")
                     }
                     .buttonStyle(.borderless)
                     .disabled(!isLoaded)

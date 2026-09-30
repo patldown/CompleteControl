@@ -138,6 +138,7 @@ final class PersistenceController {
             attr("referenceTrackTitle",  .stringAttributeType, optional: true),
             attr("referenceTrackArtist", .stringAttributeType, optional: true),
             attr("referenceTrackURL",    .stringAttributeType, optional: true),
+            attr("referenceTrackDurationRaw", .doubleAttributeType, optional: true),
             attr("keyRoot",       .stringAttributeType,    optional: true),
             attr("keyScaleRaw",   .stringAttributeType,    optional: true),
             attr("transposeRaw",  .integer16AttributeType, defaultValue: Int16(0)),

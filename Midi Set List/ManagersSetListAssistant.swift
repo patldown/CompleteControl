@@ -3,7 +3,8 @@
 //  Midi Set List
 //
 //  Natural-language set list editing: "remove the two slowest songs",
-//  "new set list with these in order: …".
+//  "new set list with these in order: …". It can also hand the result to
+//  Apple Music: "make this a playlist" opens the playlist review screen.
 //
 //  The AI never edits anything directly. It returns the COMPLETE final song
 //  order (as short song IDs); the app validates it against the library, works
@@ -27,6 +28,8 @@ struct GeneratedSetListPlan {
     var songIDs: [String]
     @Guide(description: "One or two sentences telling the user what will change and why")
     var summary: String
+    @Guide(description: "True when the user wants an Apple Music playlist made from the resulting set list")
+    var playlist: Bool
 }
 
 // MARK: - Plan (what the AI proposed)
@@ -36,9 +39,10 @@ struct SetListPlan: Decodable {
     var name: String?
     var songIDs: [String]?
     var summary: String
+    var playlist: Bool?
 
     init(_ g: GeneratedSetListPlan) {
-        action = g.action; name = g.name; songIDs = g.songIDs; summary = g.summary
+        action = g.action; name = g.name; songIDs = g.songIDs; summary = g.summary; playlist = g.playlist
     }
 }
 
@@ -63,6 +67,8 @@ struct SetListChangePreview {
     let removed: [Song]
     /// IDs the AI returned that aren't in the library — dropped, but shown to the user
     let unknownIDs: [String]
+    /// Open the Apple Music playlist review for the resulting set list (the open one when kind is .none)
+    let makePlaylist: Bool
 
     var hasChanges: Bool {
         switch kind {
@@ -95,6 +101,9 @@ enum SetListAssistant {
                 var parts = ["\(id) | \(song.name)"]
                 if let artist = song.artist, !artist.isEmpty { parts[0] += " — \(artist)" }
                 if let bpm = song.bpm { parts.append("\(bpm) BPM") }
+                if let seconds = song.referenceTrackDuration {
+                    parts.append(String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60))
+                }
                 if let key = song.currentKey { parts.append("Key \(key.root) \(key.scale.rawValue)") }
                 if !song.genres.isEmpty { parts.append(song.genres.joined(separator: "/")) }
                 if let ts = song.timeSignature, !ts.isEmpty { parts.append(ts) }
@@ -118,7 +127,7 @@ enum SetListAssistant {
             You change set lists by returning the COMPLETE final song order. The app works out what \
             was added, removed and moved, and shows the user a summary to approve before anything changes.
 
-            SONG LIBRARY (ID | title — artist | BPM | genre | time signature):
+            SONG LIBRARY (ID | title — artist | BPM | length | key | genre | time signature):
             \(catalog.listing.isEmpty ? "(empty)" : catalog.listing)
             """
 
@@ -154,6 +163,13 @@ enum SetListAssistant {
             - When ordering by energy or tempo, use BPM where known and explain your logic in summary.
             - Set "name" only when creating or when the user asks to rename; otherwise leave it empty.
             - Follow-up messages revise your previous plan — always return the complete revised plan.
+            - For a set of a given length (e.g. "45 minutes"), add up song lengths. Where a length isn't \
+            listed, assume 4 minutes. Get as close to the target as you can without going far over, and \
+            give the estimated total in summary.
+            - Set "playlist" to true when the user wants an Apple Music playlist (e.g. "make this a \
+            playlist", "…and make it a playlist"). The app then shows a playlist review screen for the \
+            resulting set list. To make a playlist of the open set list as it is, use action "none" with \
+            "playlist": true. Otherwise leave "playlist" false.
             """
         return prompt
     }
@@ -161,7 +177,7 @@ enum SetListAssistant {
     static let jsonFormat = """
 
         Respond ONLY with a JSON object — no markdown fences, no explanation:
-        {"action": "update" | "create" | "none", "name": "string or empty", "songIDs": ["S1", "S2"], "summary": "string"}
+        {"action": "update" | "create" | "none", "name": "string or empty", "songIDs": ["S1", "S2"], "summary": "string", "playlist": false}
         """
 
     // MARK: Request
@@ -252,7 +268,12 @@ enum SetListAssistant {
         }
 
         // An update or create with no songs at all is almost certainly a misread — don't offer to apply it
+        let requestedKind = kind
         if kind == .create && final.isEmpty { kind = .none }
+
+        // A playlist of the open set list as-is needs one open; a failed create gets no playlist
+        let makePlaylist = (plan.playlist ?? false)
+            && (kind != .none || (requestedKind == .none && current != nil))
 
         return SetListChangePreview(
             kind: kind,
@@ -261,7 +282,8 @@ enum SetListAssistant {
             oldName: kind == .update ? current?.name : nil,
             finalSongs: entries,
             removed: currentSongs.filter { !finalIDs.contains($0.objectID) },
-            unknownIDs: unknown
+            unknownIDs: unknown,
+            makePlaylist: makePlaylist
         )
     }
 

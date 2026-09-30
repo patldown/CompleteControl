@@ -26,11 +26,12 @@ struct ReferenceTrack: Identifiable, Hashable {
     var artworkURL: URL?
     var url: URL?
 
-    init(id: String, title: String, artist: String, url: URL? = nil) {
+    init(id: String, title: String, artist: String, url: URL? = nil, duration: TimeInterval? = nil) {
         self.id = id
         self.title = title
         self.artist = artist
         self.url = url
+        self.duration = duration
     }
 
     fileprivate init(_ song: MusicKit.Song) {
@@ -184,6 +185,7 @@ final class AppleMusicReference {
     }
 
     /// Jumps within the loaded track; negative seconds rewind, never past the start.
+    /// Skipping past the end just ends the track.
     func skip(by seconds: TimeInterval) {
         guard loadedTrackID != nil else { return }
         player.playbackTime = max(0, player.playbackTime + seconds)

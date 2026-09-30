@@ -27,6 +27,12 @@ class Song: NSManagedObject, Identifiable {
     @NSManaged var referenceTrackTitle: String?
     @NSManaged var referenceTrackArtist: String?
     @NSManaged var referenceTrackURL: String?
+    @NSManaged private var referenceTrackDurationRaw: NSNumber?
+    /// Length of the reference recording in seconds; helps AI plan sets to a running time
+    var referenceTrackDuration: TimeInterval? {
+        get { referenceTrackDurationRaw?.doubleValue }
+        set { referenceTrackDurationRaw = newValue.map { NSNumber(value: $0) } }
+    }
     @NSManaged var dateCreated: Date
     @NSManaged var dateModified: Date
 
@@ -210,7 +216,8 @@ class Song: NSManagedObject, Identifiable {
         return ReferenceTrack(id: referenceTrackID,
                               title: referenceTrackTitle ?? name,
                               artist: referenceTrackArtist ?? artist ?? "",
-                              url: referenceTrackURL.flatMap(URL.init(string:)))
+                              url: referenceTrackURL.flatMap(URL.init(string:)),
+                              duration: referenceTrackDuration)
     }
 
     func linkReferenceTrack(_ track: ReferenceTrack) {
@@ -218,6 +225,7 @@ class Song: NSManagedObject, Identifiable {
         referenceTrackTitle = track.title
         referenceTrackArtist = track.artist
         referenceTrackURL = track.url?.absoluteString
+        referenceTrackDuration = track.duration
         dateModified = Date()
     }
 
@@ -226,6 +234,7 @@ class Song: NSManagedObject, Identifiable {
         referenceTrackTitle = nil
         referenceTrackArtist = nil
         referenceTrackURL = nil
+        referenceTrackDuration = nil
         dateModified = Date()
     }
 

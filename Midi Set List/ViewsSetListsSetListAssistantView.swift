@@ -31,6 +31,8 @@ struct SetListAssistantView: View {
     @State private var systemPrompt = ""
     @State private var history: [ExternalAIMessage] = []
     @State private var onDeviceSession: LanguageModelSession?
+    /// Set list whose Apple Music playlist review is showing
+    @State private var playlistSetList: SetList?
 
     private struct Message: Identifiable {
         let id = UUID()
@@ -63,6 +65,9 @@ struct SetListAssistantView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .sheet(item: $playlistSetList) { setList in
+                SetListPlaylistView(setList: setList)
             }
         }
     }
@@ -128,11 +133,13 @@ struct SetListAssistantView: View {
                 "Remove the two slowest songs",
                 "Reorder from slowest to fastest BPM",
                 "Move the first song to the end",
+                "Make this an Apple Music playlist",
                 "Make a new set list with just the first 5 songs"
             ]
         }
         return [
             "Make a 6-song set that builds in energy",
+            "Build a 45-minute set from my rock songs and make it a playlist",
             "New set list with all my rock songs, fastest first",
             "Copy my latest set list but in reverse order"
         ]
@@ -194,6 +201,13 @@ struct SetListAssistantView: View {
                 }
             }
 
+            if preview.makePlaylist {
+                changeRow(icon: "music.note.list", color: .pink,
+                          text: preview.kind == .none
+                              ? "Make an Apple Music playlist of \"\(setList?.name ?? "")\""
+                              : "Then make an Apple Music playlist from it")
+            }
+
             if !preview.unknownIDs.isEmpty {
                 changeRow(icon: "questionmark.circle", color: .orange,
                           text: "Skipped \(preview.unknownIDs.count) song reference(s) not in your library")
@@ -220,12 +234,20 @@ struct SetListAssistantView: View {
         case nil:
             if id != latestPlanID {
                 Text("Replaced by a newer plan").font(.caption).foregroundStyle(.secondary)
+            } else if preview.kind == .none && preview.makePlaylist {
+                Button {
+                    playlistSetList = setList
+                } label: {
+                    Label("Review Playlist", systemImage: "music.note.list")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent).tint(.pink)
             } else if preview.hasChanges {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 10) {
                         Button { apply(preview, id: id) } label: {
-                            Label(preview.kind == .create ? "Create Set List" : "Apply Changes",
-                                  systemImage: "checkmark")
+                            Label(applyTitle(preview),
+                                  systemImage: preview.makePlaylist ? "music.note.list" : "checkmark")
                                 .font(.subheadline.weight(.semibold))
                         }
                         .buttonStyle(.borderedProminent).tint(.indigo)
@@ -280,7 +302,16 @@ struct SetListAssistantView: View {
         switch preview.kind {
         case .create: return "Create \"\(preview.newName ?? "New Set List")\""
         case .update: return "Update \"\(setList?.name ?? "")\""
-        case .none:   return "No changes"
+        case .none:   return preview.makePlaylist ? "Apple Music Playlist" : "No changes"
+        }
+    }
+
+    private func applyTitle(_ preview: SetListChangePreview) -> String {
+        switch (preview.kind, preview.makePlaylist) {
+        case (.create, true):  "Create Set List & Playlist"
+        case (.create, false): "Create Set List"
+        case (_, true):        "Apply & Make Playlist"
+        case (_, false):       "Apply Changes"
         }
     }
 
@@ -288,7 +319,7 @@ struct SetListAssistantView: View {
         switch preview.kind {
         case .create: return "plus.rectangle.on.rectangle"
         case .update: return "arrow.up.arrow.down"
-        case .none:   return "info.circle"
+        case .none:   return preview.makePlaylist ? "music.note.list" : "info.circle"
         }
     }
 
@@ -376,6 +407,7 @@ struct SetListAssistantView: View {
             catalog = nil
             history = []
             onDeviceSession = nil
+            if preview.makePlaylist, let result { playlistSetList = result }
         } catch {
             messages.append(Message(kind: .error("Couldn't save: \(error.localizedDescription)")))
         }
