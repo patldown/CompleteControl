@@ -21,7 +21,12 @@ struct PageRequest: Equatable {
     let direction: Int
 }
 
-/// Drives a UIScrollView downward at a steady speed (points per second at 60 fps).
+/// Drives a UIScrollView downward at a steady speed, in points per second.
+///
+/// The position is tracked unrounded in `exactY` and advanced by real frame time.
+/// UIScrollView snaps contentOffset to whole pixels, so adding a fraction of a point to
+/// contentOffset itself each frame loses the fraction: slow speeds never moved, and a
+/// range of faster speeds all snapped to the same one-pixel step.
 class AutoScroller: NSObject {
     weak var scrollView: UIScrollView?
     /// For views whose scroll view only exists after layout, such as PDFView's
@@ -31,6 +36,11 @@ class AutoScroller: NSObject {
 
     private var displayLink: CADisplayLink?
     private var currentSpeed: Double = 0
+    /// Unrounded scroll position; nil until the first frame reads the real offset
+    private var exactY: Double?
+    /// What was last applied, to notice when the person drags the chart themselves
+    private var lastAppliedY: CGFloat?
+    private var lastTimestamp: CFTimeInterval?
 
     private var target: UIScrollView? {
         if scrollView == nil { scrollView = findScrollView?() }
@@ -40,7 +50,7 @@ class AutoScroller: NSObject {
     func startScrolling(speed: Double) {
         currentSpeed = speed
         if displayLink == nil {
-            displayLink = CADisplayLink(target: self, selector: #selector(scroll))
+            displayLink = CADisplayLink(target: self, selector: #selector(scroll(_:)))
             displayLink?.add(to: .main, forMode: .common)
         }
     }
@@ -48,6 +58,9 @@ class AutoScroller: NSObject {
     func stopScrolling() {
         displayLink?.invalidate()
         displayLink = nil
+        exactY = nil
+        lastAppliedY = nil
+        lastTimestamp = nil
     }
 
     func scrollToTop() {
@@ -56,20 +69,34 @@ class AutoScroller: NSObject {
                                     animated: true)
     }
 
-    @objc private func scroll() {
+    @objc private func scroll(_ link: CADisplayLink) {
         guard let scrollView = target else { return }
 
-        var offset = scrollView.contentOffset
-        offset.y += CGFloat(currentSpeed / 60.0)
+        // Real time since the last frame, so ProMotion (120 Hz) runs at the same speed as 60 Hz.
+        // Capped so a stall (app in background, heavy layout) doesn't jump the chart.
+        let elapsed = lastTimestamp.map { min(link.timestamp - $0, 0.1) } ?? 0
+        lastTimestamp = link.timestamp
 
-        let minOffset = -scrollView.adjustedContentInset.top
-        let maxOffset = max(minOffset, scrollView.contentSize.height - scrollView.bounds.height
-                                       + scrollView.adjustedContentInset.bottom)
-        if offset.y >= maxOffset {
-            offset.y = maxOffset
-            stopScrolling()
+        // Start from, or pick up after, wherever the chart really is — e.g. after a drag
+        let current = scrollView.contentOffset.y
+        if exactY == nil || lastAppliedY.map({ abs(current - $0) > 1 }) ?? true
+            || scrollView.isDragging || scrollView.isDecelerating {
+            exactY = Double(current)
         }
-        scrollView.setContentOffset(offset, animated: false)
+        guard !scrollView.isDragging, !scrollView.isDecelerating, var y = exactY else { return }
+
+        y += currentSpeed * elapsed
+
+        let minOffset = Double(-scrollView.adjustedContentInset.top)
+        let maxOffset = max(minOffset, Double(scrollView.contentSize.height - scrollView.bounds.height
+                                              + scrollView.adjustedContentInset.bottom))
+        let reachedEnd = y >= maxOffset
+        y = min(max(y, minOffset), maxOffset)
+        exactY = y
+
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: CGFloat(y)), animated: false)
+        lastAppliedY = scrollView.contentOffset.y
+        if reachedEnd { stopScrolling() }
     }
 
     /// Scrolls most of a screen up or down, keeping a few lines of overlap for your place
