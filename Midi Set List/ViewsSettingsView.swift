@@ -3,6 +3,7 @@
 //  Midi Set List
 //
 
+import AppIntents
 import SwiftUI
 
 struct SettingsView: View {
@@ -20,6 +21,7 @@ struct SettingsView: View {
                     offlineModeSection
                     apiKeysSection
                     taskRoutingSection
+                    siriShortcutsSection
                     activeProvidersSection
                     // Spending only applies to paid providers
                     if ai.hasOpenAIKey || ai.hasAnthropicKey || !AICostLedger.shared.days.isEmpty {
@@ -200,7 +202,8 @@ struct SettingsView: View {
 
     private var taskRoutingSection: some View {
         Section {
-            ForEach(AITask.allCases, id: \.rawValue) { task in
+            // Shortcut-only tasks are picked in the Siri Shortcuts section
+            ForEach(AITask.allCases.filter { !$0.isShortcutOnly }, id: \.rawValue) { task in
                 TaskRoutingRow(task: task)
             }
         } header: {
@@ -216,6 +219,50 @@ struct SettingsView: View {
         .disabled(ai.offlineMode)
         .opacity(ai.offlineMode ? 0.5 : 1)
         .task(id: ai.offlineMode) { await ai.fetchAnthropicModels() }
+    }
+
+    // MARK: - Siri Shortcuts
+
+    private var siriShortcutsSection: some View {
+        Section {
+            AIShortcutRow(
+                name: "Create Song",
+                icon: "music.note",
+                detail: "Choose Song Details › From Text or From File with AI to fill in the title, artist, key, scale, BPM, genre and lyrics from a chord chart, lyric sheet, PDF or photo.",
+                engine: .routed
+            )
+            TaskRoutingRow(task: .songDetails, title: "AI for Create Song")
+                .padding(.leading, 38)
+                .listRowSeparator(.hidden, edges: .top)
+
+            AIShortcutRow(
+                name: "Analyze Device Spec",
+                icon: "doc.text.magnifyingglass",
+                detail: "Reads a MIDI implementation chart (pasted text or a photo) and saves a reference file on the instrument.",
+                engine: .onDeviceOnly
+            )
+            AIShortcutRow(
+                name: "Generate Macros from MIDI Table",
+                icon: "wand.and.stars",
+                detail: "Turns a MIDI table into a category of ready-to-use macros on an instrument.",
+                engine: .onDeviceOnly
+            )
+            AIShortcutRow(
+                name: "Get Reference Builder System Prompt",
+                icon: "square.and.arrow.up.on.square",
+                detail: "Gives you the prompt to use with an Ask ChatGPT or Ask Claude action, then Attach Device Spec saves the answer.",
+                engine: .yourOwn
+            )
+
+            ShortcutsLink()
+                .shortcutsLinkStyle(.automaticOutline)
+                .frame(maxWidth: .infinity)
+                .listRowBackground(Color.clear)
+        } header: {
+            Text("Siri Shortcuts")
+        } footer: {
+            Text("Find these in the Shortcuts app under Midi Set List, or ask Siri — e.g. \"Create song in Midi Set List\".")
+        }
     }
 
     // MARK: - Active providers summary
@@ -262,16 +309,70 @@ struct SettingsView: View {
     }
 }
 
+// MARK: - Siri Shortcut row
+
+private struct AIShortcutRow: View {
+    enum Engine {
+        /// Uses the AI picked for its task in these settings
+        case routed
+        /// Calls Apple Intelligence directly
+        case onDeviceOnly
+        /// Hands a prompt to an AI action of the person's choosing in Shortcuts
+        case yourOwn
+    }
+
+    let name: String
+    let icon: String
+    let detail: String
+    let engine: Engine
+    @ObservedObject private var ai = AISettings.shared
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(.indigo)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(name).font(.subheadline.weight(.semibold))
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+                engineLabel.font(.caption2)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private var engineLabel: some View {
+        switch engine {
+        case .routed:
+            Label("Uses the AI picked below", systemImage: "arrow.down")
+                .foregroundStyle(.secondary)
+        case .onDeviceOnly where ai.onDeviceAvailable:
+            Label("Uses Apple Intelligence (on-device)", systemImage: "iphone")
+                .foregroundStyle(.secondary)
+        case .onDeviceOnly:
+            Label("Needs Apple Intelligence, which isn't on this device", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+        case .yourOwn:
+            Label("Works with the ChatGPT or Claude action in Shortcuts", systemImage: "arrow.triangle.branch")
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 // MARK: - Task routing row
 
 private extension AITask {
+    /// Only used by a Siri Shortcut, so it's set up in the Siri Shortcuts section
+    var isShortcutOnly: Bool { self == .songDetails }
+
     var routingCaption: String? {
         switch self {
         case .bulkCheck: return "Quick yes/no check on each chat message: does it ask for more than one action? If the chosen AI isn't available, messages are sent as one."
         case .specAnalysis: return "Used by \"Generate Reference with AI\" on a device page. Claude or ChatGPT handle long manuals best."
         case .bulkSplit: return "Rewrites a multi-action chat message into a list of single actions."
         case .setListAssistant: return "Creates, reorders and trims set lists from a request. Always shows a summary for approval first."
-        case .songDetails: return "Used by the Create Song shortcut's \"with AI\" options to read title, key, BPM, genre and lyrics from text or a file."
         default:         return nil
         }
     }
@@ -279,6 +380,8 @@ private extension AITask {
 
 private struct TaskRoutingRow: View {
     let task: AITask
+    /// Defaults to the task's name
+    var title: String?
     @ObservedObject private var ai = AISettings.shared
 
     private var selectedProvider: AIProviderType { ai.routing[task, default: .onDevice] }
@@ -296,7 +399,7 @@ private struct TaskRoutingRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(task.displayName).font(.subheadline)
+                Text(title ?? task.displayName).font(.subheadline)
                 Spacer()
                 Picker("", selection: Binding(
                     get: { selectedProvider },
