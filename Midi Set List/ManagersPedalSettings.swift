@@ -55,7 +55,7 @@ struct PedalKey: Hashable, Codable {
 
     var name: String {
         guard let usage = UIKeyboardHIDUsage(rawValue: code) else { return "Key \(code)" }
-        switch usage {
+        return switch usage {
         case .keyboardDownArrow: "↓ Down Arrow"
         case .keyboardUpArrow: "↑ Up Arrow"
         case .keyboardLeftArrow: "← Left Arrow"

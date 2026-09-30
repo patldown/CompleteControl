@@ -326,7 +326,7 @@ private struct PerformPlayingView: View {
     }
 
     private func navigationBar(songs: [Song]) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Button {
                 performance.previousSong()
             } label: {
@@ -335,7 +335,6 @@ private struct PerformPlayingView: View {
                          iconFirst: true)
             }
             .disabled(!performance.hasPreviousSong)
-            // The first song only moves forward
             .opacity(performance.hasPreviousSong ? 1 : 0)
 
             Button {
@@ -348,8 +347,9 @@ private struct PerformPlayingView: View {
             .disabled(!performance.hasNextSong)
         }
         .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .padding()
+        .controlSize(.regular)
+        .padding(.horizontal)
+        .padding(.vertical, 8)
         .background(.bar)
     }
 
@@ -358,17 +358,17 @@ private struct PerformPlayingView: View {
     }
 
     private func navLabel(title: String, icon: String, detail: String?, iconFirst: Bool) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             if iconFirst { Image(systemName: icon) }
-            VStack(spacing: 2) {
-                Text(title).font(.headline)
+            VStack(spacing: 1) {
+                Text(title).font(.subheadline.weight(.semibold))
                 if let detail {
-                    Text(detail).font(.caption).lineLimit(1).opacity(0.85)
+                    Text(detail).font(.caption2).lineLimit(1).opacity(0.8)
                 }
             }
             if !iconFirst { Image(systemName: icon) }
         }
-        .frame(maxWidth: .infinity, minHeight: 44)
+        .frame(maxWidth: .infinity, minHeight: 36)
     }
 }
 
