@@ -94,6 +94,9 @@ private struct PerformSetListPicker: View {
         .navigationTitle("Perform")
         .offlineStatusBadge()
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                LiveFollowButton()
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showingBTMIDI = true
@@ -222,6 +225,9 @@ private struct PerformPlayingView: View {
                 } label: {
                     Label("Songs", systemImage: "list.number")
                 }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                LiveFollowButton()
             }
             ToolbarItem(placement: .secondaryAction) {
                 Button {

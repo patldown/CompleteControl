@@ -280,6 +280,8 @@ enum DataArchiveImporter {
         case merge
         /// Delete everything first, then restore the archive exactly
         case replaceAll
+        /// Add what's new; leave anything that's already here exactly as it is
+        case addNewOnly
     }
 
     struct Summary {
@@ -329,6 +331,7 @@ enum DataArchiveImporter {
 
             // Pass 1: create or update objects and their attributes
             var objects: [UUID: NSManagedObject] = [:]
+            var untouched = Set<UUID>()   // existing records kept as they are (addNewOnly)
             var previousSpecFiles: [UUID: [DeviceSpecFile]] = [:]
             for record in archive.records {
                 guard let entity = model?.entitiesByName[record.entity] else { continue }   // unknown entity: skip
@@ -342,6 +345,11 @@ enum DataArchiveImporter {
                     keepLocalID = true
                 }
                 let isNew = found == nil
+                if let found, mode == .addNewOnly {
+                    objects[record.id] = found
+                    untouched.insert(record.id)
+                    continue
+                }
                 let object = found ?? NSEntityDescription.insertNewObject(forEntityName: record.entity, into: context)
                 if let device = object as? InstrumentDevice, !device.isInserted {
                     previousSpecFiles[record.id] = device.specFiles
@@ -363,7 +371,7 @@ enum DataArchiveImporter {
 
             // Pass 2: relationships (to-many links are added, never removed)
             for record in archive.records {
-                guard let object = objects[record.id] else { continue }
+                guard let object = objects[record.id], !untouched.contains(record.id) else { continue }
                 for (name, description) in object.entity.relationshipsByName {
                     guard let ids = record.relationships[name], let destination = description.destinationEntity?.name else { continue }
                     let targets = try ids.compactMap { id in
@@ -385,7 +393,9 @@ enum DataArchiveImporter {
                 previous.filter { !current.contains($0.filename) }.forEach(device.addSpecFile)
             }
 
-            let written = try writeFiles(archive.files, objects: objects, overwriteMemory: mode == .replaceAll)
+            // Kept records keep their files too
+            let files = archive.files.filter { !untouched.contains($0.ownerID) }
+            let written = try writeFiles(files, objects: objects, overwriteMemory: mode == .replaceAll)
             try context.save()
             // A backup from before band roles existed restores none; put the built-ins back
             BandRole.seedDefaultsIfNeeded(in: context)

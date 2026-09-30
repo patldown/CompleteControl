@@ -202,6 +202,8 @@ struct AutoScrollingTextView: UIViewRepresentable {
     var chordsPreferFlats: Bool? = nil
     /// Turn-the-page requests, e.g. from a page-turner pedal
     var pageRequest: PageRequest? = nil
+    /// The chart shown, for Live Follow scrolling
+    var liveChartID: UUID? = nil
     /// Blank lines above the lyrics come from this person's preferences
     @ObservedObject private var prefs = UserPreferences.shared
 
@@ -289,6 +291,7 @@ struct AutoScrollingTextView: UIViewRepresentable {
         } else {
             context.coordinator.stopScrolling()
         }
+        context.coordinator.attachLiveScroll(chartID: liveChartID)
     }
 
     func makeCoordinator() -> Coordinator {

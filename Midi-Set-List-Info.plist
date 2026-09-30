@@ -5,6 +5,8 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_apple-midi._udp</string>
+		<string>_msl-live._tcp</string>
+		<string>_msl-live._udp</string>
 	</array>
 </dict>
 </plist>

@@ -46,6 +46,7 @@ struct ContentView: View {
             }
         }
         .floatingPerformShortcut(navigation)
+        .liveFollowPrompts()
         .environment(navigation)
     }
 }

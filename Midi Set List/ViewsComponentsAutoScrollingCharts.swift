@@ -36,6 +36,14 @@ class AutoScroller: NSObject {
 
     private var displayLink: CADisplayLink?
     private var currentSpeed: Double = 0
+
+    // Live Follow: the chart this scroll view shows, so a leader can report its position
+    // and followers showing the same chart can move to it
+    private var liveChartID: UUID?
+    private var offsetObservation: NSKeyValueObservation?
+    private weak var observedScrollView: UIScrollView?
+    private var liveScrollObserver: NSObjectProtocol?
+    private var isApplyingRemoteScroll = false
     /// Unrounded scroll position; nil until the first frame reads the real offset
     private var exactY: Double?
     /// What was last applied, to notice when the person drags the chart themselves
@@ -127,8 +135,60 @@ class AutoScroller: NSObject {
         }
     }
 
+    // MARK: Live Follow scrolling
+
+    /// Call on each update with the chart shown; safe to repeat
+    func attachLiveScroll(chartID: UUID?) {
+        liveChartID = chartID
+        guard let scrollView = target else { return }
+        if observedScrollView !== scrollView {
+            observedScrollView = scrollView
+            offsetObservation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] view, _ in
+                MainActor.assumeIsolated { self?.reportLiveScroll(view) }
+            }
+        }
+        if liveScrollObserver == nil {
+            liveScrollObserver = NotificationCenter.default.addObserver(
+                forName: LiveFollowSession.scrollNotification, object: nil, queue: .main
+            ) { [weak self] note in
+                let chartID = note.userInfo?["chartID"] as? UUID
+                let fraction = note.userInfo?["fraction"] as? Double
+                MainActor.assumeIsolated { self?.applyLiveScroll(chartID: chartID, fraction: fraction) }
+            }
+        }
+    }
+
+    private func scrollRange(_ scrollView: UIScrollView) -> ClosedRange<CGFloat> {
+        let minOffset = -scrollView.adjustedContentInset.top
+        let maxOffset = max(minOffset, scrollView.contentSize.height - scrollView.bounds.height
+                                       + scrollView.adjustedContentInset.bottom)
+        return minOffset...maxOffset
+    }
+
+    private func reportLiveScroll(_ scrollView: UIScrollView) {
+        guard let liveChartID, !isApplyingRemoteScroll else { return }
+        let range = scrollRange(scrollView)
+        let span = range.upperBound - range.lowerBound
+        guard span > 0 else { return }
+        let fraction = Double((scrollView.contentOffset.y - range.lowerBound) / span)
+        LiveFollowSession.shared.reportScroll(chartID: liveChartID, fraction: min(max(fraction, 0), 1))
+    }
+
+    private func applyLiveScroll(chartID: UUID?, fraction: Double?) {
+        guard let chartID, chartID == liveChartID, let fraction, let scrollView = target,
+              !scrollView.isDragging else { return }
+        let range = scrollRange(scrollView)
+        let y = range.lowerBound + (range.upperBound - range.lowerBound) * CGFloat(fraction)
+        guard abs(y - scrollView.contentOffset.y) > 2 else { return }
+        isApplyingRemoteScroll = true
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: y), animated: true)
+        isApplyingRemoteScroll = false
+    }
+
     deinit {
         stopScrolling()
+        offsetObservation?.invalidate()
+        if let liveScrollObserver { NotificationCenter.default.removeObserver(liveScrollObserver) }
     }
 }
 
@@ -140,6 +200,8 @@ struct AutoScrollingPDFView: UIViewRepresentable {
     @Binding var scrollSpeed: Double
     @Binding var resetTrigger: Bool
     var pageRequest: PageRequest? = nil
+    /// The chart shown, for Live Follow scrolling
+    var liveChartID: UUID? = nil
 
     func makeUIView(context: Context) -> PDFView {
         let pdfView = PDFView()
@@ -163,6 +225,7 @@ struct AutoScrollingPDFView: UIViewRepresentable {
         }
         context.coordinator.sync(isScrolling: isScrolling, speed: scrollSpeed, resetTrigger: resetTrigger,
                                  pageRequest: pageRequest)
+        context.coordinator.attachLiveScroll(chartID: liveChartID)
     }
 
     func makeCoordinator() -> AutoScroller { AutoScroller() }
@@ -189,6 +252,8 @@ struct AutoScrollingImagesView: UIViewRepresentable {
     @Binding var scrollSpeed: Double
     @Binding var resetTrigger: Bool
     var pageRequest: PageRequest? = nil
+    /// The chart shown, for Live Follow scrolling
+    var liveChartID: UUID? = nil
 
     func makeUIView(context: Context) -> UIScrollView {
         let scrollView = UIScrollView()
@@ -225,6 +290,7 @@ struct AutoScrollingImagesView: UIViewRepresentable {
         }
         context.coordinator.sync(isScrolling: isScrolling, speed: scrollSpeed, resetTrigger: resetTrigger,
                                  pageRequest: pageRequest)
+        context.coordinator.attachLiveScroll(chartID: liveChartID)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -297,15 +363,18 @@ struct ChartContentView: View {
                 insets: insets,
                 transpose: chords.transpose,
                 chordsPreferFlats: chords.flats,
-                pageRequest: pageRequest
+                pageRequest: pageRequest,
+                liveChartID: source.id
             )
         case .sheetMusic:
             if let pdfURL = source.pdfFileURL {
                 AutoScrollingPDFView(url: pdfURL, isScrolling: $isScrolling,
-                                     scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest)
+                                     scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest,
+                                     liveChartID: source.id)
             } else {
                 AutoScrollingImagesView(urls: source.chartImageURLs, isScrolling: $isScrolling,
-                                        scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest)
+                                        scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest,
+                                        liveChartID: source.id)
             }
         }
     }
