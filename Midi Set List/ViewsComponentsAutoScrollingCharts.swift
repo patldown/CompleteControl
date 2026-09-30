@@ -13,12 +13,21 @@ import PDFKit
 
 // MARK: - Scroll motor
 
+/// A one-off "turn the page" request, e.g. from a page-turner pedal. Each has its own
+/// id so pressing the same direction twice turns two pages.
+struct PageRequest: Equatable {
+    let id = UUID()
+    /// +1 down a page, -1 up a page
+    let direction: Int
+}
+
 /// Drives a UIScrollView downward at a steady speed (points per second at 60 fps).
 class AutoScroller: NSObject {
     weak var scrollView: UIScrollView?
     /// For views whose scroll view only exists after layout, such as PDFView's
     var findScrollView: (() -> UIScrollView?)?
     var lastResetTrigger = false
+    var lastPageRequestID: UUID?
 
     private var displayLink: CADisplayLink?
     private var currentSpeed: Double = 0
@@ -63,11 +72,26 @@ class AutoScroller: NSObject {
         scrollView.setContentOffset(offset, animated: false)
     }
 
+    /// Scrolls most of a screen up or down, keeping a few lines of overlap for your place
+    func page(_ direction: Int) {
+        guard let scrollView = target else { return }
+        let minOffset = -scrollView.adjustedContentInset.top
+        let maxOffset = max(minOffset, scrollView.contentSize.height - scrollView.bounds.height
+                                       + scrollView.adjustedContentInset.bottom)
+        let step = scrollView.bounds.height * 0.85 * CGFloat(direction)
+        let y = min(max(scrollView.contentOffset.y + step, minOffset), maxOffset)
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: y), animated: true)
+    }
+
     /// Applies the SwiftUI state on each update
-    func sync(isScrolling: Bool, speed: Double, resetTrigger: Bool) {
+    func sync(isScrolling: Bool, speed: Double, resetTrigger: Bool, pageRequest: PageRequest? = nil) {
         if resetTrigger != lastResetTrigger {
             lastResetTrigger = resetTrigger
             scrollToTop()
+        }
+        if let pageRequest, pageRequest.id != lastPageRequestID {
+            lastPageRequestID = pageRequest.id
+            page(pageRequest.direction)
         }
         if isScrolling {
             startScrolling(speed: speed)
@@ -88,6 +112,7 @@ struct AutoScrollingPDFView: UIViewRepresentable {
     @Binding var isScrolling: Bool
     @Binding var scrollSpeed: Double
     @Binding var resetTrigger: Bool
+    var pageRequest: PageRequest? = nil
 
     func makeUIView(context: Context) -> PDFView {
         let pdfView = PDFView()
@@ -96,6 +121,7 @@ struct AutoScrollingPDFView: UIViewRepresentable {
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
         pdfView.document = PDFDocument(url: url)
+        context.coordinator.lastPageRequestID = pageRequest?.id
         context.coordinator.findScrollView = { [weak pdfView] in
             pdfView.flatMap { Self.firstScrollView(in: $0) }
         }
@@ -108,7 +134,8 @@ struct AutoScrollingPDFView: UIViewRepresentable {
             pdfView.document = PDFDocument(url: url)
             context.coordinator.scrollView = nil
         }
-        context.coordinator.sync(isScrolling: isScrolling, speed: scrollSpeed, resetTrigger: resetTrigger)
+        context.coordinator.sync(isScrolling: isScrolling, speed: scrollSpeed, resetTrigger: resetTrigger,
+                                 pageRequest: pageRequest)
     }
 
     func makeCoordinator() -> AutoScroller { AutoScroller() }
@@ -134,6 +161,7 @@ struct AutoScrollingImagesView: UIViewRepresentable {
     @Binding var isScrolling: Bool
     @Binding var scrollSpeed: Double
     @Binding var resetTrigger: Bool
+    var pageRequest: PageRequest? = nil
 
     func makeUIView(context: Context) -> UIScrollView {
         let scrollView = UIScrollView()
@@ -159,6 +187,7 @@ struct AutoScrollingImagesView: UIViewRepresentable {
         context.coordinator.scrollView = scrollView
         context.coordinator.stack = stack
         context.coordinator.lastResetTrigger = resetTrigger
+        context.coordinator.lastPageRequestID = pageRequest?.id
         context.coordinator.load(urls)
         return scrollView
     }
@@ -167,7 +196,8 @@ struct AutoScrollingImagesView: UIViewRepresentable {
         if context.coordinator.urls != urls {
             context.coordinator.load(urls)
         }
-        context.coordinator.sync(isScrolling: isScrolling, speed: scrollSpeed, resetTrigger: resetTrigger)
+        context.coordinator.sync(isScrolling: isScrolling, speed: scrollSpeed, resetTrigger: resetTrigger,
+                                 pageRequest: pageRequest)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -211,6 +241,7 @@ struct ChartContentView: View {
     @Binding var resetTrigger: Bool
     var fontSize: CGFloat = 24
     var insets = UIEdgeInsets(top: 24, left: 32, bottom: 500, right: 32)
+    var pageRequest: PageRequest? = nil
 
     @ObservedObject private var prefs = UserPreferences.shared
 
@@ -230,15 +261,16 @@ struct ChartContentView: View {
                 fontSize: fontSize,
                 insets: insets,
                 transpose: song.transpose,
-                chordsPreferFlats: song.chordsPreferFlats
+                chordsPreferFlats: song.chordsPreferFlats,
+                pageRequest: pageRequest
             )
         case .sheetMusic:
             if let pdfURL = song.pdfFileURL {
                 AutoScrollingPDFView(url: pdfURL, isScrolling: $isScrolling,
-                                     scrollSpeed: speed, resetTrigger: $resetTrigger)
+                                     scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest)
             } else {
                 AutoScrollingImagesView(urls: song.chartImageURLs, isScrolling: $isScrolling,
-                                        scrollSpeed: speed, resetTrigger: $resetTrigger)
+                                        scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest)
             }
         }
     }

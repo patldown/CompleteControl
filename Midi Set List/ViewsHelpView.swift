@@ -130,6 +130,8 @@ private let performTopic = HelpTopic(
                      "A song's lyrics or chart show below its snapshots. Press play to auto-scroll, and use − / + to set the speed. The expand button fills the screen with lyrics while the snapshot row stays on top, so you can still recall snapshots."),
             HelpItem("Sheet music",
                      "Attach a PDF or photos of sheet music from a song's Lyrics & Sheet Music screen. On Perform it scrolls just like lyrics, with its own speed. Pinch to zoom on images."),
+            HelpItem("Page-turner pedals",
+                     "Bluetooth page turners (AirTurn, PageFlip, Donner, M-VAVE and others) work on the Perform screen: pair the pedal in Bluetooth settings and press it — arrow and Page Up / Page Down keys scroll a page at a time. Settings → Page-Turner Pedals lets you test a pedal and teach it next song, next snapshot, auto-scroll or full view."),
             HelpItem("Lyrics or sheet music, per song",
                      "If a song has both, the menu on the lyrics bar switches between them. Each song remembers your last choice and scroll speed — for you only, so a guitarist and a pianist sharing songs each get their own. To show one view on every song, pick Always Lyrics or Always Sheet Music in Settings → Your Performance Settings; switching back brings each song's memory back."),
             HelpItem("Chords, key & transpose",

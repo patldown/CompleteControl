@@ -9,6 +9,7 @@ struct SettingsView: View {
     @ObservedObject private var ai = AISettings.shared
     @ObservedObject private var remote = MIDIRemoteSettings.shared
     @ObservedObject private var prefs = UserPreferences.shared
+    @ObservedObject private var pedals = PedalSettings.shared
 
     var body: some View {
         NavigationStack {
@@ -52,10 +53,19 @@ struct SettingsView: View {
                     Label("MIDI Receive & Control", systemImage: "slider.horizontal.below.rectangle")
                 }
             }
+            NavigationLink {
+                PedalSettingsView()
+            } label: {
+                LabeledContent {
+                    Text(pedals.isEnabled ? "On" : "Off")
+                } label: {
+                    Label("Page-Turner Pedals", systemImage: "shoe.2")
+                }
+            }
         } header: {
-            Text("MIDI")
+            Text("MIDI & Pedals")
         } footer: {
-            Text("Choose the receive channel and which messages recall snapshots or change songs — for foot controllers and other MIDI gear.")
+            Text("MIDI: choose the receive channel and which messages recall snapshots or change songs. Page-turner pedals: Bluetooth pedals that act as a keyboard, for turning pages and more.")
         }
     }
 

@@ -10,17 +10,26 @@
 import SwiftUI
 import CoreData
 
+/// A pedal action for the lyrics panel. Each has its own id so repeats register.
+struct LyricsPanelCommand: Equatable {
+    let id = UUID()
+    let action: PedalAction
+}
+
 struct PerformLyricsPanel: View {
     @Environment(\.managedObjectContext) private var viewContext
     @ObservedObject var song: Song
     @Binding var isExpanded: Bool
     /// Shown in the control bar while expanded, since the song header is hidden then
     var title: String?
+    /// Page / scroll / full-view actions from a page-turner pedal
+    var command: LyricsPanelCommand?
 
     @ObservedObject private var prefs = UserPreferences.shared
     @State private var isAutoScrolling = false
     @State private var resetTrigger = false
     @State private var showingEditLyrics = false
+    @State private var pageRequest: PageRequest?
 
     private var mode: PerformChartMode? { prefs.chartMode(for: song) }
     private var cornerRadius: CGFloat { isExpanded ? 0 : 14 }
@@ -36,7 +45,8 @@ struct PerformLyricsPanel: View {
                         fontSize: isExpanded ? 24 : 19,
                         insets: isExpanded
                             ? UIEdgeInsets(top: 24, left: 32, bottom: 400, right: 32)
-                            : UIEdgeInsets(top: 12, left: 16, bottom: 200, right: 16)
+                            : UIEdgeInsets(top: 12, left: 16, bottom: 200, right: 16),
+                        pageRequest: pageRequest
                     )
                 }
                 .background(Color.black)
@@ -48,6 +58,16 @@ struct PerformLyricsPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingEditLyrics) {
             EditLyricsView(song: song)
+        }
+        .onChange(of: command) { _, command in
+            guard let command else { return }
+            switch command.action {
+            case .pageDown: pageRequest = PageRequest(direction: 1)
+            case .pageUp: pageRequest = PageRequest(direction: -1)
+            case .toggleAutoScroll: if mode != nil { isAutoScrolling.toggle() }
+            case .toggleFullView: isExpanded.toggle()
+            default: break
+            }
         }
     }
 

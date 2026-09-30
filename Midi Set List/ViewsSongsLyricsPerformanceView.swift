@@ -19,6 +19,7 @@ struct LyricsPerformanceView: View {
     @State private var showControls = true
     @State private var showingEditLyrics = false
     @State private var resetTrigger = false
+    @State private var pageRequest: PageRequest?
 
     /// Lyrics or sheet music — this person's last choice on this song when it has both
     private var mode: PerformChartMode { prefs.chartMode(for: song) ?? .lyrics }
@@ -46,7 +47,8 @@ struct LyricsPerformanceView: View {
                         .padding()
                 } else {
                     ChartContentView(song: song, mode: mode,
-                                     isScrolling: $isAutoScrolling, resetTrigger: $resetTrigger)
+                                     isScrolling: $isAutoScrolling, resetTrigger: $resetTrigger,
+                                     pageRequest: pageRequest)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -63,11 +65,23 @@ struct LyricsPerformanceView: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
+        // Page-turner pedals: page up / down and start / pause work here too
+        .background(PedalKeyCatcher(onKey: handlePedal).frame(width: 0, height: 0))
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .sheet(isPresented: $showingEditLyrics) {
             EditLyricsView(song: song)
         }
+    }
+
+    private func handlePedal(_ key: PedalKey) -> Bool {
+        switch PedalSettings.shared.action(for: key) {
+        case .pageDown?: pageRequest = PageRequest(direction: 1)
+        case .pageUp?: pageRequest = PageRequest(direction: -1)
+        case .toggleAutoScroll?: isAutoScrolling.toggle()
+        default: return false
+        }
+        return true
     }
 
     private var topBar: some View {
@@ -176,6 +190,8 @@ struct AutoScrollingTextView: UIViewRepresentable {
     var transpose: Int = 0
     /// Chord spelling from the song's key; nil lets each chord decide
     var chordsPreferFlats: Bool? = nil
+    /// Turn-the-page requests, e.g. from a page-turner pedal
+    var pageRequest: PageRequest? = nil
     /// Blank lines above the lyrics come from this person's preferences
     @ObservedObject private var prefs = UserPreferences.shared
 
@@ -218,6 +234,7 @@ struct AutoScrollingTextView: UIViewRepresentable {
         textView.isScrollEnabled = false
         applyText(to: textView)
         context.coordinator.lastRenderKey = renderKey
+        context.coordinator.lastPageRequestID = pageRequest?.id
         textView.textContainer.lineBreakMode = .byWordWrapping
         textView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -250,6 +267,11 @@ struct AutoScrollingTextView: UIViewRepresentable {
         if resetTrigger != context.coordinator.lastResetTrigger {
             context.coordinator.lastResetTrigger = resetTrigger
             context.coordinator.scrollToTop()
+        }
+
+        if let pageRequest, pageRequest.id != context.coordinator.lastPageRequestID {
+            context.coordinator.lastPageRequestID = pageRequest.id
+            context.coordinator.page(pageRequest.direction)
         }
 
         if isScrolling {

@@ -145,6 +145,7 @@ private struct PerformPlayingView: View {
     @State private var showingBTMIDI = false
     /// Lyrics fill the window; the snapshot strip stays above them
     @State private var lyricsExpanded = false
+    @State private var panelCommand: LyricsPanelCommand?
 
     var body: some View {
         let songs = performance.songs
@@ -166,7 +167,8 @@ private struct PerformPlayingView: View {
                     .padding(.vertical, 10)
 
                 PerformLyricsPanel(song: song, isExpanded: $lyricsExpanded,
-                                   title: "\(performance.songIndex + 1)/\(songs.count) · \(song.name)")
+                                   title: "\(performance.songIndex + 1)/\(songs.count) · \(song.name)",
+                                   command: panelCommand)
                     .id(song.objectID)  // new song, fresh scroll position
                     .padding(.horizontal, lyricsExpanded ? 0 : 16)
                     .overlay {
@@ -188,6 +190,8 @@ private struct PerformPlayingView: View {
             }
         }
         .animation(.default, value: lyricsExpanded)
+        // Bluetooth page-turner pedals arrive as key presses
+        .background(PedalKeyCatcher(onKey: handlePedal).frame(width: 0, height: 0))
         .toolbar(lyricsExpanded ? .hidden : .visible, for: .navigationBar)
         .toolbar(lyricsExpanded ? .hidden : .visible, for: .tabBar)
         .navigationTitle(performance.setList?.name ?? "Perform")
@@ -266,6 +270,19 @@ private struct PerformPlayingView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .accessibilityValue(detail ?? "")
+    }
+
+    private func handlePedal(_ key: PedalKey) -> Bool {
+        guard let action = PedalSettings.shared.action(for: key) else { return false }
+        switch action {
+        case .nextSong: performance.nextSong()
+        case .previousSong: performance.previousSong()
+        case .nextSnapshot: performance.nextSnapshot()
+        case .previousSnapshot: performance.previousSnapshot()
+        case .pageDown, .pageUp, .toggleAutoScroll, .toggleFullView:
+            panelCommand = LyricsPanelCommand(action: action)
+        }
+        return true
     }
 
     private func errorBanner(_ message: String) -> some View {
