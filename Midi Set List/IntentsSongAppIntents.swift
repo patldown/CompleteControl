@@ -52,14 +52,38 @@ struct SongEntityQuery: EntityQuery {
 
 // MARK: - Create Song Intent
 
+/// Where Create Song gets the song's details from
+enum SongDetailsSourceAppEnum: String, AppEnum {
+    case manual, text, file
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Song Details")
+    static let caseDisplayRepresentations: [SongDetailsSourceAppEnum: DisplayRepresentation] = [
+        .manual: DisplayRepresentation(title: "Enter Myself", image: .init(systemName: "keyboard")),
+        .text: DisplayRepresentation(title: "From Text with AI", image: .init(systemName: "text.badge.star")),
+        .file: DisplayRepresentation(title: "From File with AI", image: .init(systemName: "doc.badge.gearshape")),
+    ]
+}
+
 struct CreateSongIntent: AppIntent {
     static let title: LocalizedStringResource = "Create Song"
     static let description = IntentDescription(
-        "Creates a new song in your Midi Set List library. You can then add MIDI commands, lyrics, and clock settings to it."
+        "Creates a new song in your Midi Set List library. Enter the details yourself, or let AI read the title, key, scale, BPM, genre and lyrics from text (a chord chart, lyric sheet, or just a name and artist) or from a file (text, PDF, or a photo of a chart)."
     )
 
+    @Parameter(title: "Song Details", description: "Enter the details yourself, or have AI read them from text or a file.",
+               default: .manual)
+    var source: SongDetailsSourceAppEnum
+
     @Parameter(title: "Song Name", description: "e.g. Wonderwall, Africa, Comfortably Numb")
-    var songName: String
+    var songName: String?
+
+    @Parameter(title: "Text", description: "A chord chart, lyric sheet, or just a song name and artist.",
+               inputOptions: String.IntentInputOptions(multiline: true))
+    var sourceText: String?
+
+    @Parameter(title: "File", description: "A text file, RTF, PDF, or photo of a chord chart or lyric sheet.",
+               supportedContentTypes: [.plainText, .text, .rtf, .pdf, .image])
+    var sourceFile: IntentFile?
 
     @Parameter(title: "Artist", description: "e.g. Oasis, Toto (optional)")
     var artist: String?
@@ -73,19 +97,83 @@ struct CreateSongIntent: AppIntent {
     @Parameter(title: "Scale", description: "e.g. Major, Minor, Blues, Minor Pentatonic. Used with Key; defaults to Major.")
     var keyScale: KeyScaleAppEnum?
 
+    static var parameterSummary: some ParameterSummary {
+        Switch(\.$source) {
+            Case(.text) {
+                Summary("Create a song from \(\.$sourceText) (\(\.$source))")
+            }
+            Case(.file) {
+                Summary("Create a song from \(\.$sourceFile) (\(\.$source))")
+            }
+            DefaultCase {
+                Summary("Create \(\.$songName) (\(\.$source))") {
+                    \.$artist
+                    \.$bpm
+                    \.$keyRoot
+                    \.$keyScale
+                }
+            }
+        }
+    }
+
     func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<SongEntity> {
-        let name = songName; let bpmVal = bpm; let artistVal = artist
-        let key = keyRoot.map { MusicalKey(root: $0.rawValue, scale: keyScale?.scale ?? .major) }
+        var details = SongDetails()
+
+        switch source {
+        case .manual:
+            guard let name = songName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+                throw $songName.needsValueError("What's the song called?")
+            }
+            details.title = name
+            details.artist = artist
+            details.bpm = bpm
+            details.key = keyRoot.map { MusicalKey(root: $0.rawValue, scale: keyScale?.scale ?? .major) }
+
+        case .text:
+            guard let text = sourceText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw $sourceText.needsValueError("What text should I read the song from?")
+            }
+            details = try await SongDetailsAI.extract(from: text)
+
+        case .file:
+            guard let file = sourceFile else {
+                throw $sourceFile.needsValueError("Which file should I read the song from?")
+            }
+            let text = try await SongDetailsAI.text(fromFile: file.data, type: file.type, filename: file.filename)
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw SongDetailsError.unreadableFile
+            }
+            details = try await SongDetailsAI.extract(from: text)
+            // A file named after the song is a fair title when the contents don't give one
+            if details.title == nil {
+                let base = (file.filename as NSString).deletingPathExtension
+                if !base.isEmpty { details.title = base }
+            }
+        }
+
+        guard let title = details.title else { throw SongDetailsError.noTitle }
+        let result = details
         let entity = try await MainActor.run {
             let ctx = PersistenceController.shared.viewContext
-            let song = Song.create(name: name, artist: artistVal, in: ctx)
-            if let bpmVal { song.bpm = bpmVal }
-            song.originalKey = key
+            let song = Song.create(name: title, artist: result.artist, lyrics: result.lyrics, bpm: result.bpm, in: ctx)
+            song.originalKey = result.key
+            if !result.genres.isEmpty { song.setGenres(result.genres) }
             try ctx.save()
             return SongEntity(id: song.id, name: song.name, artist: song.artist)
         }
-        let artistPart = artist.map { " by \($0)" } ?? ""
-        return .result(value: entity, dialog: "Created '\(songName)'\(artistPart).")
+        return .result(value: entity, dialog: IntentDialog(stringLiteral: Self.summary(title: title, details: result)))
+    }
+
+    /// "Created 'Wonderwall' by Oasis — F♯ Minor, 87 BPM, Rock, with lyrics."
+    private static func summary(title: String, details: SongDetails) -> String {
+        var text = "Created '\(title)'"
+        if let artist = details.artist { text += " by \(artist)" }
+        var parts: [String] = []
+        if let key = details.key { parts.append(key.displayName) }
+        if let bpm = details.bpm { parts.append("\(bpm) BPM") }
+        if !details.genres.isEmpty { parts.append(details.genres.joined(separator: "/")) }
+        if details.lyrics != nil { parts.append("with lyrics") }
+        return parts.isEmpty ? text + "." : text + " — " + parts.joined(separator: ", ") + "."
     }
 }
 

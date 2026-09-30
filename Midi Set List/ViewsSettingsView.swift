@@ -271,6 +271,7 @@ private extension AITask {
         case .specAnalysis: return "Used by \"Generate Reference with AI\" on a device page. Claude or ChatGPT handle long manuals best."
         case .bulkSplit: return "Rewrites a multi-action chat message into a list of single actions."
         case .setListAssistant: return "Creates, reorders and trims set lists from a request. Always shows a summary for approval first."
+        case .songDetails: return "Used by the Create Song shortcut's \"with AI\" options to read title, key, BPM, genre and lyrics from text or a file."
         default:         return nil
         }
     }
