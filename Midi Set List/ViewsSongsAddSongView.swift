@@ -45,20 +45,32 @@ struct AddSongView: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
-                    Picker("Key", selection: $keyRoot) {
-                        Text("None").tag("")
-                        ForEach(NoteName.pickerRoots, id: \.self) { root in
-                            Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
-                                .tag(root)
-                        }
-                    }
-                    if !keyRoot.isEmpty {
-                        Picker("Scale", selection: $keyScale) {
-                            ForEach(MusicalScale.allCases) { scale in
-                                Text(scale.rawValue).tag(scale)
+                    // Key and Scale side by side, as in the song editor
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Key").font(.caption).foregroundStyle(.secondary)
+                            Picker("Key", selection: $keyRoot) {
+                                Text("None").tag("")
+                                ForEach(NoteName.pickerRoots, id: \.self) { root in
+                                    Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
+                                        .tag(root)
+                                }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Scale").font(.caption).foregroundStyle(.secondary)
+                            Picker("Scale", selection: $keyScale) {
+                                ForEach(MusicalScale.allCases) { scale in
+                                    Text(scale.rawValue).tag(scale)
+                                }
+                            }
+                            .disabled(keyRoot.isEmpty)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
                     TextField("Notes (optional)", text: $notes, axis: .vertical)
                         .lineLimit(3...6)
                 } header: {
