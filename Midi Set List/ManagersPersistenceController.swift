@@ -13,7 +13,9 @@ import Foundation
 
 final class PersistenceController {
 
-    static let shared = PersistenceController()
+    /// UI tests launch with -ui-testing: a fresh in-memory store each run, so they never
+    /// touch (or depend on) real data
+    static let shared = PersistenceController(inMemory: ProcessInfo.processInfo.arguments.contains("-ui-testing"))
 
     static let preview: PersistenceController = { PersistenceController(inMemory: true) }()
 
@@ -29,7 +31,7 @@ final class PersistenceController {
 
     init(inMemory: Bool = false) {
         let c = NSPersistentContainer(name: "MidiSetList",
-                                      managedObjectModel: Self.makeModel())
+                                      managedObjectModel: Self.model)
 
         if inMemory {
             c.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
@@ -112,6 +114,10 @@ final class PersistenceController {
     }
 
     // MARK: - Programmatic Core Data Model
+
+    /// Built once and shared: with several stores open (previews, tests), separate model
+    /// copies would each claim Song, SetList… and Core Data couldn't tell which to use
+    static let model: NSManagedObjectModel = makeModel()
 
     static func makeModel() -> NSManagedObjectModel {
 

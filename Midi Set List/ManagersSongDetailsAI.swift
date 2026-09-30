@@ -196,7 +196,7 @@ enum SongDetailsAI {
     }
 
     /// "f♯" → "F#", "Bb" → "Bb"; nil unless it's one of the key picker's spellings
-    private static func normalizedRoot(_ root: String?) -> String? {
+    static func normalizedRoot(_ root: String?) -> String? {
         guard let root = nonEmpty(root), let letter = root.first?.uppercased() else { return nil }
         let accidental = root.dropFirst().first.map { ch -> String in
             switch ch {
@@ -210,7 +210,7 @@ enum SongDetailsAI {
     }
 
     /// Copies the lyrics from the original text, first line through last line, untouched
-    private static func lyricsSpan(in source: String, first: String?, last: String?) -> String? {
+    static func lyricsSpan(in source: String, first: String?, last: String?) -> String? {
         guard let first = nonEmpty(first) else { return nil }
         let lines = source.components(separatedBy: .newlines)
         let key = { (line: String) in line.trimmingCharacters(in: .whitespaces).lowercased() }
