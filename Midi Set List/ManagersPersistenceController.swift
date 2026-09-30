@@ -84,6 +84,8 @@ final class PersistenceController {
 
         c.viewContext.automaticallyMergesChangesFromParent = true
         c.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+
+        BandRole.seedDefaultsIfNeeded(in: c.viewContext)
     }
 
     func save() {
@@ -121,6 +123,8 @@ final class PersistenceController {
         let macroE    = ent("DeviceMacro")
         let oscTargE  = ent("OSCTarget")
         let presetE   = ent("SavedPreset")
+        let partE     = ent("SongPart")
+        let roleE     = ent("BandRole")
 
         songE.properties = [
             attr("id",            .UUIDAttributeType),
@@ -232,6 +236,23 @@ final class PersistenceController {
             attr("commandsData", .binaryDataAttributeType),
         ]
 
+        partE.properties = [
+            attr("id",                  .UUIDAttributeType),
+            attr("name",                .stringAttributeType),
+            attr("lyrics",              .stringAttributeType,    optional: true),
+            attr("pdfFileName",         .stringAttributeType,    optional: true),
+            attr("chartImageNamesData", .stringAttributeType,    optional: true),
+            attr("orderIndexRaw",       .integer32AttributeType, defaultValue: Int32(0)),
+            attr("dateCreated",         .dateAttributeType),
+        ]
+
+        roleE.properties = [
+            attr("id",            .UUIDAttributeType),
+            attr("name",          .stringAttributeType),
+            attr("emoji",         .stringAttributeType,    defaultValue: ""),
+            attr("orderIndexRaw", .integer32AttributeType, defaultValue: Int32(0)),
+        ]
+
         // Song.commandsRaw ↔ MIDICommand.song
         let songCmds = rel("commandsRaw", to: commandE, toMany: true,  delete: .cascadeDeleteRule)
         let cmdSong  = rel("song",         to: songE,    toMany: false, delete: .nullifyDeleteRule)
@@ -262,7 +283,24 @@ final class PersistenceController {
         let macroParents  = rel("parentGroupsRaw", to: macroE, toMany: true, delete: .nullifyDeleteRule)
         link(macroChildren, macroParents)
 
-        songE.properties     += [songCmds, songSLists]
+        // Song.partsRaw ↔ SongPart.song — a song's extra charts go with it
+        let songParts = rel("partsRaw", to: partE, toMany: true,  delete: .cascadeDeleteRule)
+        let partSong  = rel("song",     to: songE, toMany: false, delete: .nullifyDeleteRule)
+        link(songParts, partSong)
+
+        // SongPart.rolesRaw ↔ BandRole.partsRaw — who sees a part (none = everyone)
+        let partRoles = rel("rolesRaw", to: roleE, toMany: true, delete: .nullifyDeleteRule)
+        let roleParts = rel("partsRaw", to: partE, toMany: true, delete: .nullifyDeleteRule)
+        link(partRoles, roleParts)
+
+        // Song.chartRolesRaw ↔ BandRole.chartSongsRaw — who sees the built-in chart
+        let songChartRoles = rel("chartRolesRaw", to: roleE, toMany: true, delete: .nullifyDeleteRule)
+        let roleChartSongs = rel("chartSongsRaw", to: songE, toMany: true, delete: .nullifyDeleteRule)
+        link(songChartRoles, roleChartSongs)
+
+        songE.properties     += [songCmds, songSLists, songParts, songChartRoles]
+        partE.properties     += [partSong, partRoles]
+        roleE.properties     += [roleParts, roleChartSongs]
         commandE.properties  += [cmdSong, cmdSrcMacro]
         setListE.properties  += [slSongs]
         deviceE.properties   += [devCats]
@@ -271,7 +309,7 @@ final class PersistenceController {
 
         let model = NSManagedObjectModel()
         model.entities = [songE, commandE, setListE, deviceE,
-                          categoryE, macroE, oscTargE, presetE]
+                          categoryE, macroE, oscTargE, presetE, partE, roleE]
         return model
     }
 

@@ -34,7 +34,6 @@ struct SongDetailView: View {
     @State private var sendError: String?
     @State private var showingSendError = false
     @State private var showingLyricsPerformance = false
-    @State private var showingEditLyrics = false
     @State private var clockSendTransport = false
 
     // Track if we're in a navigation stack or presented as sheet
@@ -174,67 +173,8 @@ struct SongDetailView: View {
                 }
             }
 
-            // Lyrics/Tabs Section
-            Section {
-                Button {
-                    showingEditLyrics = true
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Lyrics & Sheet Music")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
+            SongChartsSection(song: song) { showingLyricsPerformance = true }
 
-                            if song.pdfFileName != nil {
-                                Label("Sheet music PDF", systemImage: "doc.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else if !song.chartImageNames.isEmpty {
-                                Label("Sheet music: \(song.chartImageNames.count) image\(song.chartImageNames.count == 1 ? "" : "s")",
-                                      systemImage: "photo.on.rectangle")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            if let lyrics = song.lyrics, !lyrics.isEmpty {
-                                Text(lyrics.prefix(100) + (lyrics.count > 100 ? "..." : ""))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            } else if !song.hasSheetMusic {
-                                Text("Add lyrics, tabs, or sheet music (PDF or images)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        
-                        Spacer()
-                        
-                        Image(systemName: "chevron.right")
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                
-                if song.hasLyricsText || song.hasSheetMusic {
-                    Button {
-                        showingLyricsPerformance = true
-                    } label: {
-                        Label("Performance Mode", systemImage: "play.rectangle.fill")
-                            .foregroundStyle(.green)
-                    }
-                }
-            } header: {
-                Text("Performance")
-            } footer: {
-                if !song.hasLyricsText && !song.hasSheetMusic {
-                    Text("Add lyrics or sheet music to enable Performance Mode with auto-scroll")
-                } else if song.hasLyricsText && song.hasSheetMusic {
-                    Text("Performance Mode shows lyrics or sheet music full screen with auto-scroll. Whichever you pick last is remembered for you.")
-                } else {
-                    Text("Performance Mode shows it full screen with auto-scroll for hands-free playing")
-                }
-            }
-            
             SongSnapshotsSection(song: song, selected: $selectedSnapshot,
                                  footerOverride: isSelectMode ? "Select commands for batch operations." : nil) {
                 if !snapshotCommands.isEmpty {
@@ -508,9 +448,6 @@ struct SongDetailView: View {
         }
         .fullScreenCover(isPresented: $showingLyricsPerformance) {
             LyricsPerformanceView(song: song)
-        }
-        .sheet(isPresented: $showingEditLyrics) {
-            EditLyricsView(song: song)
         }
         .onAppear {
             selectedGenres = Set(song.genres)

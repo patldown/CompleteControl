@@ -7,7 +7,7 @@ import CoreData
 import Foundation
 
 @objc(Song)
-class Song: NSManagedObject, Identifiable {
+class Song: NSManagedObject, Identifiable, ChartSource {
 
     // ── Scalar attributes ──────────────────────────────────────────────
     @NSManaged var id: UUID
@@ -185,12 +185,18 @@ class Song: NSManagedObject, Identifiable {
         return s
     }
 
-    // ── Computed properties ────────────────────────────────────────────
-    var pdfFileURL: URL? {
-        guard let filename = pdfFileName else { return nil }
-        return FileManager.default
-            .urls(for: .documentDirectory, in: .userDomainMask).first?
-            .appendingPathComponent(filename)
+    // ── Built-in chart (ChartSource: PDF / image URLs and content checks live there) ──
+    var chartName: String { "Chart" }
+
+    /// Roles the built-in chart is addressed to; empty means everyone
+    var seenBy: [BandRole] {
+        ((value(forKey: "chartRolesRaw") as? NSSet)?.allObjects as? [BandRole] ?? [])
+            .sorted { $0.orderIndex < $1.orderIndex }
+    }
+
+    func setSeenBy(_ roles: [BandRole]) {
+        setValue(NSSet(array: roles), forKey: "chartRolesRaw")
+        dateModified = Date()
     }
 
     // ── Sheet music (a PDF or a set of images) ─────────────────────────
@@ -206,10 +212,6 @@ class Song: NSManagedObject, Identifiable {
         }
     }
 
-    var chartImageURLs: [URL] {
-        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return [] }
-        return chartImageNames.map { docs.appendingPathComponent($0) }
-    }
 
     // ── Reference track (Apple Music) ──────────────────────────────────
     var hasReferenceTrack: Bool { referenceTrackID != nil }
@@ -241,19 +243,8 @@ class Song: NSManagedObject, Identifiable {
         dateModified = Date()
     }
 
-    var hasLyricsText: Bool { !(lyrics ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    var hasSheetMusic: Bool { pdfFileName != nil || !chartImageNames.isEmpty }
-
-    /// What to show on Perform: this person's last choice when the song has both,
-    /// otherwise whichever the song has. Nil when it has neither.
-    func chartMode(preferred: PerformChartMode) -> PerformChartMode? {
-        switch (hasLyricsText, hasSheetMusic) {
-        case (true, true): preferred
-        case (true, false): .lyrics
-        case (false, true): .sheetMusic
-        case (false, false): nil
-        }
-    }
+    /// True when the built-in chart or any part has something to show
+    var hasAnyChart: Bool { chartSources.contains { $0.hasContent } }
 
     /// All commands, grouped by snapshot and then in send order.
     var sortedCommands: [MIDICommand] {

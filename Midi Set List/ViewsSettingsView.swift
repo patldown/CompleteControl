@@ -11,11 +11,14 @@ struct SettingsView: View {
     @ObservedObject private var remote = MIDIRemoteSettings.shared
     @ObservedObject private var prefs = UserPreferences.shared
     @ObservedObject private var pedals = PedalSettings.shared
+    @ObservedObject private var band = BandSettings.shared
+    @FetchRequest(sortDescriptors: [SortDescriptor(\.orderIndexRaw)]) private var roles: FetchedResults<BandRole>
 
     var body: some View {
         NavigationStack {
             List {
                 midiSection
+                bandSection
                 lyricsSection
                 if ai.anyAIAvailable {
                     offlineModeSection
@@ -68,6 +71,28 @@ struct SettingsView: View {
             Text("MIDI & Pedals")
         } footer: {
             Text("MIDI: choose the receive channel and which messages recall snapshots or change songs. Page-turner pedals: Bluetooth pedals that act as a keyboard, for turning pages and more.")
+        }
+    }
+
+    // MARK: - Band
+
+    private var bandSection: some View {
+        Section {
+            NavigationLink {
+                BandSettingsView()
+            } label: {
+                LabeledContent {
+                    Text(band.showsAllParts
+                         ? "All Parts"
+                         : roles.filter { band.myRoleIDs.contains($0.id) }.map(\.name).joined(separator: ", "))
+                } label: {
+                    Label("This Device Plays", systemImage: "person.3")
+                }
+            }
+        } header: {
+            Text("Band")
+        } footer: {
+            Text("Pick your instrument to see just your parts of each song, and whether chords read as capo shapes or concert pitch.")
         }
     }
 

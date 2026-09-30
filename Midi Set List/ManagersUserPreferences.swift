@@ -2,8 +2,10 @@
 //  UserPreferences.swift
 //  Midi Set List
 //
-//  Per-person performance settings. Each song remembers, for each person, whether they
-//  last read its lyrics or sheet music and at what scroll speed. A Settings override
+//  Per-person performance settings. Each chart — a song's own, or one of its parts —
+//  remembers, for each person, whether they last read its lyrics or sheet music and at
+//  what scroll speed. (A song's own chart shares the song's ID, so memory from before
+//  parts existed carries over.) A Settings override
 //  can show one view everywhere without erasing that memory. Stored in iCloud
 //  key-value storage, which belongs to the signed-in Apple ID, so each person keeps
 //  their own even when song data is shared. UserDefaults mirrors every value, so it
@@ -68,7 +70,7 @@ final class UserPreferences: ObservableObject {
             visitChartModes = [:]
         }
     }
-    /// Each song's last view and speeds, for this person, keyed by song ID
+    /// Each chart's last view and speeds, for this person, keyed by chart (song or part) ID
     @Published private(set) var songMemory: [UUID: SongPerformanceMemory] = [:] {
         didSet { storeSongMemory() }
     }
@@ -116,7 +118,7 @@ final class UserPreferences: ObservableObject {
 
     /// The view to show for a song: the override if on, else this person's last choice on
     /// this song, else their most recent choice anywhere. Songs with only one kind show that.
-    func chartMode(for song: Song) -> PerformChartMode? {
+    func chartMode(for song: any ChartSource) -> PerformChartMode? {
         guard song.hasLyricsText && song.hasSheetMusic else { return song.chartMode(preferred: .lyrics) }
         if let override = chartModeOverride {
             return visitChartModes[song.id] ?? override
@@ -124,7 +126,7 @@ final class UserPreferences: ObservableObject {
         return songMemory[song.id]?.chartMode ?? lastChartMode
     }
 
-    func setChartMode(_ mode: PerformChartMode, for song: Song) {
+    func setChartMode(_ mode: PerformChartMode, for song: any ChartSource) {
         if chartModeOverride != nil {
             visitChartModes[song.id] = mode
         } else {
@@ -134,13 +136,13 @@ final class UserPreferences: ObservableObject {
     }
 
     /// True when the override is deciding this song's view
-    func isOverriding(_ song: Song) -> Bool {
+    func isOverriding(_ song: any ChartSource) -> Bool {
         chartModeOverride != nil && song.hasLyricsText && song.hasSheetMusic
     }
 
     // MARK: Speed per song
 
-    func scrollSpeed(for mode: PerformChartMode, song: Song) -> Double {
+    func scrollSpeed(for mode: PerformChartMode, song: any ChartSource) -> Double {
         let memory = songMemory[song.id]
         switch mode {
         case .lyrics: return memory?.lyricsScrollSpeed ?? lyricsScrollSpeed
@@ -148,7 +150,7 @@ final class UserPreferences: ObservableObject {
         }
     }
 
-    func setScrollSpeed(_ speed: Double, for mode: PerformChartMode, song: Song) {
+    func setScrollSpeed(_ speed: Double, for mode: PerformChartMode, song: any ChartSource) {
         let clamped = Self.clampSpeed(speed)
         switch mode {
         case .lyrics: songMemory[song.id, default: SongPerformanceMemory()].lyricsScrollSpeed = clamped

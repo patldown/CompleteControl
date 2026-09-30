@@ -259,10 +259,13 @@ struct AutoScrollingImagesView: UIViewRepresentable {
 
 // MARK: - Shared content
 
-/// Shows a song's lyrics or sheet music with the right auto-scroller. Speed is this
-/// person's last speed on this song, kept separately for lyrics and sheet music.
+/// Shows one chart of a song — its own, or a part — as lyrics or sheet music, with the
+/// right auto-scroller. Speed is this person's last speed on this chart, kept separately
+/// for lyrics and sheet music.
 struct ChartContentView: View {
     @ObservedObject var song: Song
+    /// The chart to show; nil shows the song's own chart
+    var chart: (any ChartSource)? = nil
     let mode: PerformChartMode
     @Binding var isScrolling: Bool
     @Binding var resetTrigger: Bool
@@ -271,43 +274,48 @@ struct ChartContentView: View {
     var pageRequest: PageRequest? = nil
 
     @ObservedObject private var prefs = UserPreferences.shared
+    @ObservedObject private var band = BandSettings.shared
+
+    private var source: any ChartSource { chart ?? song }
 
     private var speed: Binding<Double> {
-        Binding(get: { prefs.scrollSpeed(for: mode, song: song) },
-                set: { prefs.setScrollSpeed($0, for: mode, song: song) })
+        Binding(get: { prefs.scrollSpeed(for: mode, song: source) },
+                set: { prefs.setScrollSpeed($0, for: mode, song: source) })
     }
 
     var body: some View {
         switch mode {
         case .lyrics:
+            // Capo shapes or concert pitch, per this device (Settings › Band)
+            let chords = band.chordRendering(for: song)
             AutoScrollingTextView(
-                text: song.lyrics ?? "",
+                text: source.lyrics ?? "",
                 isScrolling: $isScrolling,
                 scrollSpeed: speed,
                 resetTrigger: $resetTrigger,
                 fontSize: fontSize,
                 insets: insets,
-                transpose: song.transpose,
-                chordsPreferFlats: song.chordsPreferFlats,
+                transpose: chords.transpose,
+                chordsPreferFlats: chords.flats,
                 pageRequest: pageRequest
             )
         case .sheetMusic:
-            if let pdfURL = song.pdfFileURL {
+            if let pdfURL = source.pdfFileURL {
                 AutoScrollingPDFView(url: pdfURL, isScrolling: $isScrolling,
                                      scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest)
             } else {
-                AutoScrollingImagesView(urls: song.chartImageURLs, isScrolling: $isScrolling,
+                AutoScrollingImagesView(urls: source.chartImageURLs, isScrolling: $isScrolling,
                                         scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest)
             }
         }
     }
 }
 
-/// Lyrics / Sheet Music switch, shown when a song has both. Remembers the choice for this
-/// person on this song — or, while the Settings override is on, just for this visit.
+/// Lyrics / Sheet Music switch, shown when a chart has both. Remembers the choice for this
+/// person on this chart — or, while the Settings override is on, just for this visit.
 struct ChartModeMenu: View {
     @ObservedObject private var prefs = UserPreferences.shared
-    @ObservedObject var song: Song
+    let chart: any ChartSource
     let current: PerformChartMode
     var onChange: () -> Void = {}
 
@@ -315,13 +323,13 @@ struct ChartModeMenu: View {
         Menu {
             Picker("Show", selection: Binding(
                 get: { current },
-                set: { prefs.setChartMode($0, for: song); onChange() }
+                set: { prefs.setChartMode($0, for: chart); onChange() }
             )) {
                 ForEach(PerformChartMode.allCases) { mode in
                     Label(mode.title, systemImage: mode.systemImage).tag(mode)
                 }
             }
-            if prefs.isOverriding(song) {
+            if prefs.isOverriding(chart) {
                 Text("Settings is set to always show \(prefs.chartModeOverride?.title ?? ""). A change here lasts for this visit only.")
             }
         } label: {
@@ -330,5 +338,61 @@ struct ChartModeMenu: View {
         .menuIndicator(.hidden)
         .accessibilityLabel("Lyrics or Sheet Music")
         .accessibilityValue(current.title)
+    }
+}
+
+/// Switches between the charts this device sees for a song (the song's own and its
+/// parts). Shown only when there's more than one. Remembers the pick per song.
+struct ChartPartMenu: View {
+    @ObservedObject var song: Song
+    let current: any ChartSource
+    var onChange: () -> Void = {}
+    @ObservedObject private var band = BandSettings.shared
+
+    var body: some View {
+        Menu {
+            Picker("Part", selection: Binding(
+                get: { current.id },
+                set: { id in
+                    if let chart = song.chartSource(id: id) {
+                        band.selectChart(chart, for: song)
+                        onChange()
+                    }
+                }
+            )) {
+                ForEach(band.visibleCharts(for: song), id: \.id) { chart in
+                    Text(chart.seenBy.isEmpty ? chart.chartName : "\(chart.chartName) · \(chart.seenBy.map(\.emoji).joined())")
+                        .tag(chart.id)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "person.2.crop.square.stack")
+                    .font(.caption.weight(.bold))
+                Text(current.chartName)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.18), in: Capsule())
+        }
+        .menuIndicator(.hidden)
+        .accessibilityLabel("Part")
+        .accessibilityValue(current.chartName)
+    }
+}
+
+/// Edits whichever chart is showing: a part, or the song's own chart
+struct ChartEditorSheet: View {
+    @ObservedObject var song: Song
+    let chartID: UUID?
+
+    var body: some View {
+        if let chartID, let part = song.parts.first(where: { $0.id == chartID }) {
+            EditLyricsView(source: part)
+        } else {
+            EditLyricsView(song: song)
+        }
     }
 }
