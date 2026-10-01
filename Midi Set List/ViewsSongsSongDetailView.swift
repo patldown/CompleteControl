@@ -598,6 +598,11 @@ struct SongDetailView: View {
                 get: { song.capoEnabled },
                 set: { song.capoEnabled = $0; saveSong() }
             ))
+            // Stay open, so the capo's options appear as soon as it's turned on
+            .menuActionDismissBehavior(.disabled)
+            if !song.capoEnabled {
+                Text("Turn on to pick the fret and whether it keeps the key")
+            }
             if song.capoEnabled {
                 Picker("Chart Capo Fret", selection: Binding(
                     get: { song.capo },
