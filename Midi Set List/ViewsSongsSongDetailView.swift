@@ -488,34 +488,19 @@ struct SongDetailView: View {
         try? viewContext.save()
     }
 
-    /// Key, Scale, Transpose and Capo on one row — two rows when they don't fit (small
-    /// phones, large text). The capo's settings live in one menu. Below, "sounds in" and
-    /// "capo now / shapes" show only when they tell you something the row doesn't.
+    /// Key, Scale, Transpose, Capo and Sounds In side by side on one row; text shrinks a
+    /// little to fit narrow screens. The capo's settings live in one menu, and "capo now /
+    /// shapes" shows below only when it tells you something the row doesn't.
     private var keySection: some View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 8) {
-                        compactField("Key") { keyMenu }
-                        compactField("Scale") { scaleMenu }
-                        compactField("Transpose") { transposeStepper }
-                        compactField("Capo") { capoMenu }
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .top, spacing: 12) {
-                            compactField("Key") { keyMenu }
-                            compactField("Scale") { scaleMenu }
-                        }
-                        HStack(alignment: .top, spacing: 12) {
-                            compactField("Transpose") { transposeStepper }
-                            compactField("Capo") { capoMenu }
-                        }
-                    }
-                }
-                if let soundsIn = soundsInDetail {
-                    Text(soundsIn)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 6) {
+                    compactField("Key") { keyMenu }
+                    compactField("Scale") { scaleMenu }
+                        .layoutPriority(1)  // the longest names get room first
+                    compactField("Transpose") { transposeStepper }
+                    compactField("Capo") { capoMenu }
+                    compactField("Sounds In") { soundsIn }
                 }
                 if let detail = capoDetail {
                     Text(detail.text)
@@ -577,10 +562,12 @@ struct SongDetailView: View {
         .accessibilityValue((song.originalKey?.scale ?? .major).rawValue)
     }
 
-    /// "Sounds in G Major" once transposing or the capo moves it off the written key
-    private var soundsInDetail: String? {
-        guard let current = song.currentKey, current != song.originalKey else { return nil }
-        return "Sounds in \(current.displayName)"
+    private var soundsIn: some View {
+        Text(song.currentKey?.displayName ?? "—")
+            .foregroundStyle(song.currentKey == nil ? .secondary : .primary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .padding(.vertical, 6)
     }
 
     /// A menu's label as a tinted chip: a roomy tap target whose text shrinks a little
@@ -589,11 +576,11 @@ struct SongDetailView: View {
         HStack(spacing: 4) {
             Text(text)
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .minimumScaleFactor(0.6)
             Image(systemName: "chevron.up.chevron.down")
                 .font(.caption2)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 7)
         .padding(.vertical, 6)
         .background(Color.accentColor.opacity(0.12), in: Capsule())
     }
@@ -603,13 +590,15 @@ struct SongDetailView: View {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var transposeStepper: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 4) {
             Button {
                 song.transpose -= 1
                 saveSong()
@@ -621,7 +610,8 @@ struct SongDetailView: View {
 
             Text(TransposeMenu.offsetLabel(song.transpose))
                 .monospacedDigit()
-                .frame(minWidth: 24)
+                .lineLimit(1)
+                .frame(minWidth: 20)
 
             Button {
                 song.transpose += 1
@@ -632,7 +622,7 @@ struct SongDetailView: View {
             .disabled(song.transpose >= Song.transposeRange.upperBound)
             .accessibilityLabel("Transpose up")
         }
-        .font(.title3)
+        .font(.body)
         // Borderless: several buttons in one list row each need their own tap
         .buttonStyle(.borderless)
         .padding(.vertical, 2)
