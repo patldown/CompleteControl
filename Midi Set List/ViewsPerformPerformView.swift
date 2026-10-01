@@ -423,6 +423,9 @@ private struct PerformSongHeader: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             }
+            if song.bpm != nil {
+                MetronomeControl(song: song)
+            }
             if let notes = song.notes, !notes.isEmpty {
                 Text(notes)
                     .font(.callout)

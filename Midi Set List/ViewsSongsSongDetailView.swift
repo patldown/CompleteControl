@@ -123,6 +123,20 @@ struct SongDetailView: View {
 
             keySection
 
+            // Click track: Perform starts the metronome when this song loads
+            Section {
+                Toggle("Click Track", isOn: Binding(
+                    get: { song.clickEnabled && song.bpm != nil },
+                    set: { enabled in
+                        song.clickEnabled = enabled
+                        if enabled, song.bpm == nil { song.bpm = 120 }
+                        saveSong()
+                    }
+                ))
+            } footer: {
+                Text("Starts the metronome at the song's BPM when it loads in Perform, \(song.beatsPerBar) click\(song.beatsPerBar == 1 ? "" : "s") a bar with beat 1 accented. Each person chooses in Settings whether it plays and whether it just counts in.")
+            }
+
             // MIDI Clock: only the clock — its tempo is the song's BPM above
             Section {
                 Toggle("Send MIDI Clock", isOn: Binding(

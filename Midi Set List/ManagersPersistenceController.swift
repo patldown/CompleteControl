@@ -143,6 +143,7 @@ final class PersistenceController {
             attr("chartImageNamesData", .stringAttributeType, optional: true),
             attr("bpmRaw",        .integer32AttributeType, optional: true),
             attr("midiClockEnabled", .booleanAttributeType, defaultValue: true),
+            attr("clickEnabled",  .booleanAttributeType,   defaultValue: false),
             attr("timeSignature", .stringAttributeType,    optional: true),
             attr("snapshotNamesData", .stringAttributeType, optional: true),
             attr("referenceTrackID",     .stringAttributeType, optional: true),

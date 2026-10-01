@@ -77,6 +77,20 @@ class Song: NSManagedObject, Identifiable, ChartSource {
     /// The tempo to send as MIDI clock, or nil when this song sends none
     var clockBPM: Int? { midiClockEnabled ? bpm : nil }
 
+    /// Click track: Perform starts the metronome when this song loads (needs a BPM)
+    @NSManaged var clickEnabled: Bool
+
+    /// Clicks per bar from the time signature, counting the felt beat: 3 for 3/4, but 2 for
+    /// 6/8, 3 for 9/8 and 4 for 12/8 (BPM is that dotted beat). 4 when there's none.
+    var beatsPerBar: Int {
+        guard let signature = timeSignature, let slash = signature.firstIndex(of: "/"),
+              let top = Int(signature[..<slash]), let bottom = Int(signature[signature.index(after: slash)...]),
+              top > 0
+        else { return 4 }
+        if bottom == 8, top > 3, top % 3 == 0 { return top / 3 }
+        return top
+    }
+
     // ── Key, transpose & capo ──────────────────────────────────────────
     static let transposeRange = -6...6
     static let capoRange = 0...11

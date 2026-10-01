@@ -59,6 +59,10 @@ final class UserPreferences: ObservableObject {
         static let lyricsLeadInLines = "lyricsLeadInLines"
         static let lyricsTextScale = "lyricsTextScale"
         static let lyricsHideChords = "lyricsHideChords"
+        static let metronomeSound = "metronomeSound"
+        static let metronomeVolume = "metronomeVolume"
+        static let metronomeAutoStart = "metronomeAutoStart"
+        static let metronomeCountInOnly = "metronomeCountInOnly"
     }
 
     static let scrollSpeedRange: ClosedRange<Double> = 5...100
@@ -103,6 +107,21 @@ final class UserPreferences: ObservableObject {
     @Published var lyricsHideChords: Bool {
         didSet { store(lyricsHideChords, Key.lyricsHideChords) }
     }
+    /// Metronome: play the click (off = the beat display only)
+    @Published var metronomeSound: Bool {
+        didSet { store(metronomeSound, Key.metronomeSound) }
+    }
+    @Published var metronomeVolume: Double {
+        didSet { store(metronomeVolume, Key.metronomeVolume) }
+    }
+    /// Start the click when a song marked Click Track loads in Perform
+    @Published var metronomeAutoStart: Bool {
+        didSet { store(metronomeAutoStart, Key.metronomeAutoStart) }
+    }
+    /// On those songs, play one bar to count in, then stop
+    @Published var metronomeCountInOnly: Bool {
+        didSet { store(metronomeCountInOnly, Key.metronomeCountInOnly) }
+    }
 
     /// Views picked on Perform while the override is on: kept for this visit only, so the
     /// per-song memory stays exactly as it was
@@ -121,6 +140,10 @@ final class UserPreferences: ObservableObject {
         lyricsLeadInLines = 5
         lyricsTextScale = 1
         lyricsHideChords = false
+        metronomeSound = true
+        metronomeVolume = 0.8
+        metronomeAutoStart = true
+        metronomeCountInOnly = false
         load()
 
         cancellable = NotificationCenter.default
@@ -226,6 +249,18 @@ final class UserPreferences: ObservableObject {
         }
         if let hide = (value(Key.lyricsHideChords) as? NSNumber)?.boolValue {
             lyricsHideChords = hide
+        }
+        if let sound = (value(Key.metronomeSound) as? NSNumber)?.boolValue {
+            metronomeSound = sound
+        }
+        if let volume = (value(Key.metronomeVolume) as? NSNumber)?.doubleValue {
+            metronomeVolume = min(max(volume, 0), 1)
+        }
+        if let auto = (value(Key.metronomeAutoStart) as? NSNumber)?.boolValue {
+            metronomeAutoStart = auto
+        }
+        if let countIn = (value(Key.metronomeCountInOnly) as? NSNumber)?.boolValue {
+            metronomeCountInOnly = countIn
         }
     }
 

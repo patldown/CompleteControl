@@ -8,6 +8,7 @@
 //
 
 import CoreData
+import Darwin
 import Foundation
 import Observation
 
@@ -86,6 +87,7 @@ final class PerformanceSession {
         setList = nil
         songIndex = 0
         activeSnapshot = 0
+        metronome.stop()
         lastError = nil
         onStateChange?()
     }
@@ -122,12 +124,14 @@ final class PerformanceSession {
         let song = list[index]
 
         guard sendCommands else {
+            // The click is this person's own, so it follows the song either way
+            if songChanged { followClock(for: song, moveClock: false) }
             sendTask?.cancel()
             isSending = false
             activeSnapshot = snapshot
             return
         }
-        if songChanged { followClock(for: song) }
+        if songChanged { followClock(for: song, moveClock: true) }
         if snapshot < 0 {
             activeSnapshot = -1
         } else if songChanged || snapshot != activeSnapshot {
@@ -264,12 +268,47 @@ final class PerformanceSession {
     }
 
     /// If the MIDI clock is running, move it to the new song's tempo (or stop it).
-    private func followClock(for song: Song) {
-        guard let midiManager, midiManager.isClockRunning else { return }
-        if let bpm = song.clockBPM {
-            midiManager.startClock(bpm: bpm, sendTransport: midiManager.clockSendsTransport)
-        } else {
-            midiManager.stopClock()
+    /// A song loaded: move a running MIDI clock to its tempo (or stop it), and start the
+    /// click if the song is marked for one — both from the same beat 1. `moveClock` is
+    /// false for Live Follow followers that don't send commands.
+    private func followClock(for song: Song, moveClock: Bool = true) {
+        let prefs = UserPreferences.shared
+        let wantsClick = song.clickEnabled && song.bpm != nil && prefs.metronomeAutoStart
+        let beatOne = mach_absolute_time() + HostTime.ticks(seconds: Metronome.leadIn)
+
+        if moveClock, let midiManager, midiManager.isClockRunning {
+            if let bpm = song.clockBPM {
+                midiManager.startClock(bpm: bpm, sendTransport: midiManager.clockSendsTransport,
+                                       startAt: wantsClick ? beatOne : nil)
+            } else {
+                midiManager.stopClock()
+            }
         }
+
+        if wantsClick, let bpm = song.bpm {
+            metronome.start(bpm: bpm, beatsPerBar: song.beatsPerBar, startAt: beatOne,
+                            countIn: prefs.metronomeCountInOnly)
+        } else {
+            metronome.stop()
+        }
+    }
+
+    // MARK: - Metronome
+
+    var metronome: Metronome { .shared }
+
+    /// Perform's click button: starts the click at the loaded song's tempo, or stops it.
+    /// With MIDI clock already running at that tempo, the click joins the clock's own bars.
+    func toggleMetronome() {
+        if metronome.isRunning {
+            metronome.stop()
+            return
+        }
+        guard let song = activeSong, let bpm = song.bpm else { return }
+        var startAt: UInt64?
+        if let midiManager, midiManager.isClockRunning, midiManager.currentClockBPM == bpm {
+            startAt = midiManager.clockStartHostTime
+        }
+        metronome.start(bpm: bpm, beatsPerBar: song.beatsPerBar, startAt: startAt)
     }
 }

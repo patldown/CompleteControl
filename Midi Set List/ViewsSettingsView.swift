@@ -21,6 +21,7 @@ struct SettingsView: View {
                 midiSection
                 bandSection
                 lyricsSection
+                metronomeSection
                 newSongsSection
                 if ai.anyAIAvailable {
                     offlineModeSection
@@ -95,6 +96,31 @@ struct SettingsView: View {
             Text("Band")
         } footer: {
             Text("Pick your instrument to see just your parts of each song, and whether chords read as capo shapes or concert pitch.")
+        }
+    }
+
+    // MARK: - Metronome
+
+    private var metronomeSection: some View {
+        Section {
+            Toggle("Start on Click Track Songs", isOn: $prefs.metronomeAutoStart)
+            Toggle("Just Count In", isOn: $prefs.metronomeCountInOnly)
+                .disabled(!prefs.metronomeAutoStart)
+            Toggle("Click Sound", isOn: $prefs.metronomeSound)
+            if prefs.metronomeSound {
+                HStack {
+                    Image(systemName: "speaker.fill").foregroundStyle(.secondary)
+                    Slider(value: $prefs.metronomeVolume, in: 0...1)
+                        .onChange(of: prefs.metronomeVolume) { Metronome.shared.applyVolume() }
+                    Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Click Volume")
+            }
+        } header: {
+            Text("Metronome")
+        } footer: {
+            Text("Songs marked Click Track start the click when they load in Perform; Just Count In plays one bar and stops. The Click button on Perform starts it on any song with a BPM, joining MIDI clock's bars when that's running. Turn Click Sound off to see just the beat. For an in-ear click use a wired connection — headphone jack or a USB / Lightning audio interface. Bluetooth and AirPlay add a delay the click can't make up for.")
         }
     }
 
