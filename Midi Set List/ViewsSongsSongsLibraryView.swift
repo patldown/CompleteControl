@@ -5,6 +5,7 @@
 
 import SwiftUI
 import CoreData
+import UniformTypeIdentifiers
 
 // MARK: - Sort option
 
@@ -26,6 +27,8 @@ struct SongsLibraryView: View {
     @State private var showingFilters = false
     @State private var selectedGenreFilters: Set<String> = []
     @State private var sortOption: SongSortOption = .name
+    @State private var showingImporter = false
+    @State private var importMessage: String?
 
     private var isFiltered: Bool { !selectedGenreFilters.isEmpty || sortOption != .name }
 
@@ -99,6 +102,26 @@ struct SongsLibraryView: View {
                     }
                     .foregroundStyle(isFiltered ? .orange : .accentColor)
                 }
+                ToolbarItem(placement: .secondaryAction) {
+                    Button { showingImporter = true } label: {
+                        Label("Import Songs (ChordPro or Text)…", systemImage: "square.and.arrow.down")
+                    }
+                }
+            }
+            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.chordPro, .plainText, .text],
+                          allowsMultipleSelection: true) { result in
+                switch result {
+                case .success(let urls): importSongs(urls)
+                case .failure(let error): importMessage = error.localizedDescription
+                }
+            }
+            .alert("Import Songs", isPresented: Binding(
+                get: { importMessage != nil },
+                set: { if !$0 { importMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                if let importMessage { Text(importMessage) }
             }
             .sheet(isPresented: $showingAddSong) {
                 AddSongView()
@@ -130,6 +153,20 @@ struct SongsLibraryView: View {
                         .buttonStyle(.bordered)
                     }
                 }
+            }
+        }
+    }
+
+    private func importSongs(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        Task {
+            do {
+                let summary = try await ProcessingHUD.run("Importing \(urls.count) Song\(urls.count == 1 ? "" : "s")…") {
+                    try ChordPro.importFiles(urls, context: viewContext)
+                }
+                importMessage = summary.message
+            } catch {
+                importMessage = "Nothing was imported. \(error.localizedDescription)"
             }
         }
     }

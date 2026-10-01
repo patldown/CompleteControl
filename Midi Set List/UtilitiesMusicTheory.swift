@@ -149,6 +149,24 @@ enum ChordEngine {
         return shift(root) + quality + (bass.map { "/" + shift($0) } ?? "")
     }
 
+    /// A chord line's chords and the column (in characters) each starts at; nil when the
+    /// line isn't a chord line. Neutral tokens (| x2 N.C.) are skipped.
+    static func chordLineTokens(_ line: String) -> [(column: Int, chord: String)]? {
+        let ns = line as NSString
+        let tokens = tokenPattern.matches(in: line, range: NSRange(location: 0, length: ns.length))
+        let words = tokens.map { ns.substring(with: $0.range) }
+        func core(_ w: String) -> String {
+            w.count > 2 && w.hasPrefix("(") && w.hasSuffix(")") ? String(w.dropFirst().dropLast()) : w
+        }
+        let flags = words.map { isChord(core($0)) }
+        guard !words.isEmpty, flags.contains(true), zip(words, flags).allSatisfy({ $1 || isNeutral($0) })
+        else { return nil }
+        return zip(tokens, words).enumerated().compactMap { index, pair in
+            guard flags[index], let range = Range(pair.0.range, in: line) else { return nil }
+            return (line.distance(from: line.startIndex, to: range.lowerBound), core(pair.1))
+        }
+    }
+
     struct Rendered {
         var text: String
         /// UTF-16 ranges of recognised chords in `text`

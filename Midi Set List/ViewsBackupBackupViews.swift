@@ -128,6 +128,56 @@ struct ShareItemButton: View {
     }
 }
 
+// MARK: - Export as ChordPro
+
+/// Exports songs as ChordPro files (one per song) for other chord apps, via the share sheet
+struct ChordProExportButton: View {
+    let songs: [Song]
+    var title = "Export as ChordPro…"
+
+    @State private var readyFiles: ReadyFiles?
+    @State private var errorMessage: String?
+
+    private struct ReadyFiles: Identifiable {
+        let id = UUID()
+        let urls: [URL]
+    }
+
+    var body: some View {
+        Button {
+            Task { await prepare() }
+        } label: {
+            Label(title, systemImage: "doc.text")
+        }
+        .disabled(songs.isEmpty)
+        .sheet(item: $readyFiles) { files in
+            ActivityShareSheet(items: files.urls)
+                .presentationDetents([.medium, .large])
+                .ignoresSafeArea()
+        }
+        .alert("Couldn't Export", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let errorMessage { Text(errorMessage) }
+        }
+    }
+
+    @MainActor
+    private func prepare() async {
+        do {
+            let urls = try await ProcessingHUD.run("Preparing ChordPro…") {
+                try ChordPro.writeFiles(for: songs)
+            }
+            readyFiles = ReadyFiles(urls: urls)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
 // MARK: - Settings section
 
 struct BackupSection: View {

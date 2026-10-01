@@ -143,6 +143,9 @@ struct SetListDetailView: View {
             ToolbarItem(placement: .secondaryAction) {
                 ShareItemButton(object: setList, kindName: "Set List", itemName: setList.name)
             }
+            ToolbarItem(placement: .secondaryAction) {
+                ChordProExportButton(songs: setList.songs, title: "Export Songs as ChordPro…")
+            }
             // Hidden when no AI is available
             if ai.isAvailable(.setListAssistant) {
                 ToolbarItem(placement: .primaryAction) {

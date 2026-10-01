@@ -357,6 +357,7 @@ struct SongDetailView: View {
             ToolbarItem(placement: .secondaryAction) {
                 Menu {
                     ShareItemButton(object: song, kindName: "Song", itemName: song.name)
+                    ChordProExportButton(songs: [song])
                     Divider()
 
                     Button {
