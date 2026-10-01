@@ -488,46 +488,51 @@ struct SongDetailView: View {
         try? viewContext.save()
     }
 
-    /// Key, Scale, Transpose, Capo and Sounds In side by side. The capo's
+    /// Key and Scale side by side; Transpose, Capo and Sounds In below them. The capo's
     /// settings live in one menu, and "capo now / shapes" shows only when it tells you
     /// something the row doesn't.
     private var keySection: some View {
         Section {
+            HStack(alignment: .top, spacing: 12) {
+                compactField("Key") {
+                    Picker("Key", selection: Binding(
+                        get: { song.keyRoot ?? "" },
+                        set: { root in
+                            song.originalKey = root.isEmpty
+                                ? nil
+                                : MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
+                            saveSong()
+                        }
+                    )) {
+                        Text("None").tag("")
+                        ForEach(NoteName.pickerRoots, id: \.self) { root in
+                            Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
+                                .tag(root)
+                        }
+                    }
+                    // Full width for the picker's label, so it's never cut off
+                    .fixedSize()
+                }
+                compactField("Scale") {
+                    Picker("Scale", selection: Binding(
+                        get: { song.originalKey?.scale ?? .major },
+                        set: { scale in
+                            guard let key = song.originalKey else { return }
+                            song.originalKey = MusicalKey(root: key.root, scale: scale)
+                            saveSong()
+                        }
+                    )) {
+                        ForEach(MusicalScale.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .disabled(song.originalKey == nil)
+                    .fixedSize()
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    compactField("Key") {
-                        Picker("Key", selection: Binding(
-                            get: { song.keyRoot ?? "" },
-                            set: { root in
-                                song.originalKey = root.isEmpty
-                                    ? nil
-                                    : MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
-                                saveSong()
-                            }
-                        )) {
-                            Text("None").tag("")
-                            ForEach(NoteName.pickerRoots, id: \.self) { root in
-                                Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
-                                    .tag(root)
-                            }
-                        }
-                        // Full width for the picker's label, so it's never cut off
-                        .fixedSize()
-                    }
-                    compactField("Scale") {
-                        Picker("Scale", selection: Binding(
-                            get: { song.originalKey?.scale ?? .major },
-                            set: { scale in
-                                guard let key = song.originalKey else { return }
-                                song.originalKey = MusicalKey(root: key.root, scale: scale)
-                                saveSong()
-                            }
-                        )) {
-                            ForEach(MusicalScale.allCases) { Text($0.rawValue).tag($0) }
-                        }
-                        .disabled(song.originalKey == nil)
-                        .fixedSize()
-                    }
+                HStack(alignment: .top, spacing: 12) {
                     compactField("Transpose") { transposeStepper }
                     compactField("Capo") { capoMenu }
                     compactField("Sounds In") {
@@ -536,8 +541,6 @@ struct SongDetailView: View {
                             .padding(.vertical, 6)
                     }
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
                 if let detail = capoDetail {
                     Text(detail.text)
                         .font(.caption)
