@@ -164,6 +164,24 @@ struct ChordDisplayTests {
         #expect(ChordEngine.transpose("G", by: 2, flats: false) == "A")
         #expect(ChordEngine.transpose("Em", by: 2, flats: false) == "F#m")
     }
+
+    @Test func chordEngine_hideChordsLeavesJustTheWords() {
+        let text = "[Chorus]\nD        C         G\nSweet Home Alabama\n\n[G]Where the [C]skies are blue"
+        let shown = ChordEngine.render(text, transpose: 0, flats: nil)
+        #expect(shown.text == text)
+        let hidden = ChordEngine.render(text, transpose: 0, flats: nil, hideChords: true)
+        #expect(hidden.text == "[Chorus]\nSweet Home Alabama\n\nWhere the skies are blue")
+        #expect(hidden.chordRanges.isEmpty)
+    }
+
+    @Test func lyricsFit_shrinksOnlyForLongLines() {
+        let short = AutoScrollingTextView.fittedFontSize(for: "Short line", maxSize: 24, width: 600)
+        #expect(short == 24)
+        let long = String(repeating: "x", count: 80)
+        let fitted = AutoScrollingTextView.fittedFontSize(for: "a\n" + long, maxSize: 24, width: 600)
+        #expect(fitted < 24)
+        #expect(fitted >= AutoScrollingTextView.minimumFittedFontSize)
+    }
 }
 
 // MARK: - Sharing parts and roles

@@ -156,14 +156,16 @@ enum ChordEngine {
     }
 
     /// Finds chords — whole chord lines and inline [G] — transposes them, and keeps chord
-    /// lines lined up over the lyric below.
-    static func render(_ text: String, transpose semitones: Int, flats: Bool?) -> Rendered {
+    /// lines lined up over the lyric below. `hideChords` leaves just the words: chord lines
+    /// are dropped and inline [G] chords removed (for singers who don't need them).
+    static func render(_ text: String, transpose semitones: Int, flats: Bool?, hideChords: Bool = false) -> Rendered {
         var output = ""
         var ranges: [NSRange] = []
         var outLength = 0  // UTF-16 length of `output`
+        var emittedLines = 0
 
         let lines = text.components(separatedBy: "\n")
-        for (i, line) in lines.enumerated() {
+        for line in lines {
             let ns = line as NSString
             let tokens = tokenPattern.matches(in: line, range: NSRange(location: 0, length: ns.length))
             let words = tokens.map { ns.substring(with: $0.range) }
@@ -175,6 +177,13 @@ enum ChordEngine {
             let chordFlags = words.map { isChord(core($0)) }
             let isChordLine = !words.isEmpty && chordFlags.contains(true)
                 && zip(words, chordFlags).allSatisfy { $1 || isNeutral($0) }
+
+            if hideChords && isChordLine { continue }
+            if emittedLines > 0 {
+                output += "\n"
+                outLength += 1
+            }
+            emittedLines += 1
 
             var lineOut = ""
             if isChordLine {
@@ -206,22 +215,19 @@ enum ChordEngine {
                     let inner = ns.substring(with: m.range(at: 1))
                     guard isChord(inner) else { continue }
                     lineOut += ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor))
+                    cursor = m.range.location + m.range.length
+                    if hideChords { continue }
                     let moved = transpose(inner, by: semitones, flats: flats) ?? inner
                     lineOut += "["
                     ranges.append(NSRange(location: outLength + (lineOut as NSString).length,
                                           length: (moved as NSString).length))
                     lineOut += moved + "]"
-                    cursor = m.range.location + m.range.length
                 }
                 lineOut += ns.substring(from: cursor)
             }
 
             output += lineOut
             outLength += (lineOut as NSString).length
-            if i < lines.count - 1 {
-                output += "\n"
-                outLength += 1
-            }
         }
         return Rendered(text: output, chordRanges: ranges)
     }

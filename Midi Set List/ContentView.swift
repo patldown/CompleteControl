@@ -56,10 +56,12 @@ struct ContentView: View {
         .liveFollowPrompts()
         .environment(navigation)
         .onOpenURL { url in
-            do {
-                pendingImport = PendingImport(archive: try DataArchiveImporter.read(url))
-            } catch {
-                importError = error.localizedDescription
+            Task {
+                do {
+                    pendingImport = PendingImport(archive: try await DataArchiveImporter.readShowingProgress(url))
+                } catch {
+                    importError = error.localizedDescription
+                }
             }
         }
         .sheet(item: $pendingImport) { ImportReviewSheet(archive: $0.archive) }

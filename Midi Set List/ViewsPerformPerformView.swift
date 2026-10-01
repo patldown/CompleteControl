@@ -474,6 +474,18 @@ private struct PerformSnapshotStrip: View {
     @ObservedObject private var remote = MIDIRemoteSettings.shared
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if performance.snapshotsLocked {
+                Label("The leader controls snapshots", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+            }
+            strip
+        }
+    }
+
+    private var strip: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -509,6 +521,9 @@ private struct PerformSnapshotStrip: View {
     private func snapshotButton(_ index: Int, proxy: ScrollViewProxy) -> some View {
         let isActive = performance.isActive(snapshot: index, of: song)
         let count = song.commands(inSnapshot: index).count
+        // Following: greyed out, with the leader's live snapshot still marked
+        let locked = performance.snapshotsLocked
+        let activeColor = locked ? Color.gray : Color.accentColor
         return Button {
             let previous = performance.activeSnapshot
             performance.selectSnapshot(index)
@@ -543,15 +558,18 @@ private struct PerformSnapshotStrip: View {
             .foregroundStyle(isActive ? Color.white : Color.primary)
             .frame(width: 128, alignment: .topLeading)
             .padding(8)
-            .background(isActive ? Color.accentColor : Color(.secondarySystemBackground),
+            .background(isActive ? activeColor : Color(.secondarySystemBackground),
                         in: RoundedRectangle(cornerRadius: 10))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(isActive ? Color.clear : Color.secondary.opacity(0.2))
             )
+            .opacity(locked && !isActive ? 0.45 : 1)
         }
         .buttonStyle(.plain)
+        .disabled(locked)
         .accessibilityAddTraits(isActive ? .isSelected : [])
+        .accessibilityHint(locked ? "The leader controls snapshots" : "")
     }
 }
 

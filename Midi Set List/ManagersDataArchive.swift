@@ -75,7 +75,7 @@ nonisolated struct DataArchive: Codable {
     }
 }
 
-enum DataArchiveError: LocalizedError {
+nonisolated enum DataArchiveError: LocalizedError {
     case notAnArchive
     case newerVersion(Int)
     case noObjects
@@ -298,7 +298,8 @@ enum DataArchiveImporter {
         var existingTotal: Int { lines.reduce(0) { $0 + $1.existing } }
     }
 
-    static func read(_ url: URL) throws -> DataArchive {
+    /// Safe to call off the main thread — decoding a big backup takes a moment
+    nonisolated static func read(_ url: URL) throws -> DataArchive {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         let data = try Data(contentsOf: url)

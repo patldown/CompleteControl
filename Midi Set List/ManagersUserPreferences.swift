@@ -57,10 +57,15 @@ final class UserPreferences: ObservableObject {
         static let lyricsScrollSpeed = "performLyricsScrollSpeed"
         static let sheetMusicScrollSpeed = "performSheetMusicScrollSpeed"
         static let lyricsLeadInLines = "lyricsLeadInLines"
+        static let lyricsTextScale = "lyricsTextScale"
+        static let lyricsHideChords = "lyricsHideChords"
     }
 
     static let scrollSpeedRange: ClosedRange<Double> = 5...100
     static let leadInLinesRange = 0...10
+    /// Lyrics size relative to the size that fits the longest line (1 = fits exactly)
+    static let lyricsTextScaleRange: ClosedRange<Double> = 0.5...2.5
+    static let lyricsTextScaleStep = 0.1
 
     /// Settings override: show this view on every song that has it. Nil = each song
     /// shows what this person last used on it. Turning it off brings those back untouched.
@@ -89,6 +94,15 @@ final class UserPreferences: ObservableObject {
     @Published var lyricsLeadInLines: Int {
         didSet { store(lyricsLeadInLines, Key.lyricsLeadInLines) }
     }
+    /// Lyrics start at the largest size that fits the longest line without wrapping; this
+    /// person's size up or down from there, used everywhere lyrics are performed
+    @Published var lyricsTextScale: Double {
+        didSet { store(lyricsTextScale, Key.lyricsTextScale) }
+    }
+    /// Show just the words: chord lines and inline [G] chords are hidden (for singers)
+    @Published var lyricsHideChords: Bool {
+        didSet { store(lyricsHideChords, Key.lyricsHideChords) }
+    }
 
     /// Views picked on Perform while the override is on: kept for this visit only, so the
     /// per-song memory stays exactly as it was
@@ -105,6 +119,8 @@ final class UserPreferences: ObservableObject {
         lyricsScrollSpeed = 20
         sheetMusicScrollSpeed = 20
         lyricsLeadInLines = 5
+        lyricsTextScale = 1
+        lyricsHideChords = false
         load()
 
         cancellable = NotificationCenter.default
@@ -158,6 +174,19 @@ final class UserPreferences: ObservableObject {
         }
     }
 
+    // MARK: Lyrics size
+
+    /// Steps the lyrics size up (+1) or down (-1)
+    func stepLyricsTextScale(_ direction: Int) {
+        // Rounded to tenths so repeated steps don't drift (1.0, 1.1, 1.2…)
+        let stepped = ((lyricsTextScale + Double(direction) * Self.lyricsTextScaleStep) * 10).rounded() / 10
+        lyricsTextScale = Self.clampTextScale(stepped)
+    }
+
+    static func clampTextScale(_ scale: Double) -> Double {
+        min(max(scale, lyricsTextScaleRange.lowerBound), lyricsTextScaleRange.upperBound)
+    }
+
     private static func clampSpeed(_ speed: Double) -> Double {
         min(max(speed, scrollSpeedRange.lowerBound), scrollSpeedRange.upperBound)
     }
@@ -191,6 +220,12 @@ final class UserPreferences: ObservableObject {
         }
         if let lines = (value(Key.lyricsLeadInLines) as? NSNumber)?.intValue {
             lyricsLeadInLines = min(max(lines, Self.leadInLinesRange.lowerBound), Self.leadInLinesRange.upperBound)
+        }
+        if let scale = (value(Key.lyricsTextScale) as? NSNumber)?.doubleValue {
+            lyricsTextScale = Self.clampTextScale(scale)
+        }
+        if let hide = (value(Key.lyricsHideChords) as? NSNumber)?.boolValue {
+            lyricsHideChords = hide
         }
     }
 

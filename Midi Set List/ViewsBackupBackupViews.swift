@@ -108,15 +108,19 @@ struct ShareItemButton: View {
             let objectID = object.objectID
             let title = "\(kindName): \(itemName)"
             let fileName = "\(kindName) - \(itemName).msl"
-            // Build archive on a background Core Data context so the main thread stays free
-            let bgContext = PersistenceController.shared.newBackgroundContext()
-            let archive = try await bgContext.perform {
-                try DataArchiveExporter.share([bgContext.object(with: objectID)], title: title)
+            // The button sits in a menu that closes on tap, so its own "Preparing…" label
+            // is never seen; the card shows the work is happening
+            let url = try await ProcessingHUD.run("Preparing \(kindName)…") {
+                // Build archive on a background Core Data context so the main thread stays free
+                let bgContext = PersistenceController.shared.newBackgroundContext()
+                let archive = try await bgContext.perform {
+                    try DataArchiveExporter.share([bgContext.object(with: objectID)], title: title)
+                }
+                // JSON encoding + file write is also off the main thread
+                return try await Task.detached(priority: .userInitiated) {
+                    try DataArchiveExporter.write(archive, fileName: fileName)
+                }.value
             }
-            // JSON encoding + file write is also off the main thread
-            let url = try await Task.detached(priority: .userInitiated) {
-                try DataArchiveExporter.write(archive, fileName: fileName)
-            }.value
             readyFile = ReadyFile(url: url)
         } catch {
             errorMessage = error.localizedDescription
@@ -180,8 +184,10 @@ struct BackupSection: View {
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                do { pendingImport = PendingImport(archive: try DataArchiveImporter.read(url)) }
-                catch { errorMessage = error.localizedDescription }
+                Task {
+                    do { pendingImport = PendingImport(archive: try await DataArchiveImporter.readShowingProgress(url)) }
+                    catch { errorMessage = error.localizedDescription }
+                }
             case .failure(let error):
                 errorMessage = error.localizedDescription
             }
@@ -201,14 +207,14 @@ struct BackupSection: View {
     private func exportFullBackup() async {
         isPreparingBackup = true
         defer { isPreparingBackup = false }
-        // Let the spinner appear before the work starts
-        try? await Task.sleep(for: .milliseconds(80))
         do {
-            let archive = try DataArchiveExporter.fullBackup(context: PersistenceController.shared.viewContext)
-            let fileName = ArchiveFile.fullBackup().fileName
-            let url = try await Task.detached(priority: .userInitiated) {
-                try DataArchiveExporter.write(archive, fileName: fileName)
-            }.value
+            let url = try await ProcessingHUD.run("Preparing Backup…") {
+                let archive = try DataArchiveExporter.fullBackup(context: PersistenceController.shared.viewContext)
+                let fileName = ArchiveFile.fullBackup().fileName
+                return try await Task.detached(priority: .userInitiated) {
+                    try DataArchiveExporter.write(archive, fileName: fileName)
+                }.value
+            }
             readyBackup = ReadyFile(url: url)
         } catch {
             errorMessage = "Couldn't make the backup: \(error.localizedDescription)"
@@ -225,6 +231,17 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - Reading a file to import
+
+extension DataArchiveImporter {
+    /// Reads and decodes an archive off the main thread with the processing card showing
+    static func readShowingProgress(_ url: URL) async throws -> DataArchive {
+        try await ProcessingHUD.run("Opening File…") {
+            try await Task.detached(priority: .userInitiated) { try read(url) }.value
+        }
+    }
 }
 
 // MARK: - Import review
@@ -326,11 +343,15 @@ struct ImportReviewSheet: View {
     }
 
     private func run(_ mode: DataArchiveImporter.Mode) {
-        do {
-            let count = try DataArchiveImporter.apply(archive, mode: mode, context: viewContext)
-            result = "Imported \(count) item\(count == 1 ? "" : "s")"
-        } catch {
-            errorMessage = error.localizedDescription
+        Task {
+            do {
+                let count = try await ProcessingHUD.run(mode == .replaceAll ? "Restoring Backup…" : "Importing…") {
+                    try DataArchiveImporter.apply(archive, mode: mode, context: viewContext)
+                }
+                result = "Imported \(count) item\(count == 1 ? "" : "s")"
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

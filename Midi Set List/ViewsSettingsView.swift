@@ -116,11 +116,24 @@ struct SettingsView: View {
                         .monospacedDigit()
                 }
             }
+
+            Stepper {
+                LabeledContent("Lyrics Text Size") {
+                    Text(prefs.lyricsTextScale == 1 ? "Fits Longest Line" : "\(Int((prefs.lyricsTextScale * 100).rounded()))%")
+                        .monospacedDigit()
+                }
+            } onIncrement: {
+                prefs.stepLyricsTextScale(1)
+            } onDecrement: {
+                prefs.stepLyricsTextScale(-1)
+            }
+
+            Toggle("Hide Chords", isOn: $prefs.lyricsHideChords)
         } header: {
             Text("Your Performance Settings")
         } footer: {
             Text(prefs.chartModeOverride == nil
-                 ? "For songs with both lyrics and sheet music, each song opens in the view you last used on it, at your last speed. These are yours alone and follow your Apple ID, so someone sharing your songs keeps their own. New songs start at the speeds above."
+                 ? "For songs with both lyrics and sheet music, each song opens in the view you last used on it, at your last speed. Lyrics start at the largest size that fits the longest line without wrapping; size them up or down from there. Hide Chords shows just the words, for singers. These are yours alone and follow your Apple ID, so someone sharing your songs keeps their own. New songs start at the speeds above."
                  : "Every song with \(prefs.chartModeOverride?.title.lowercased() ?? "") shows it. Your remembered view for each song is kept — switch back to Remember Per Song to use it again.")
         }
     }

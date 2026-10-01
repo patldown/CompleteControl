@@ -145,12 +145,17 @@ final class PerformanceSession {
         recall(snapshot: index, of: song)
     }
 
+    /// Following a leader (without the override): only the leader changes snapshots
+    var snapshotsLocked: Bool { LiveFollowSession.shared.snapshotsLocked }
+
     func nextSnapshot() {
+        guard !snapshotsLocked else { return }
         guard let song = activeSong, activeSnapshot < song.snapshotCount - 1 else { return }
         recall(snapshot: activeSnapshot + 1, of: song)
     }
 
     func previousSnapshot() {
+        guard !snapshotsLocked else { return }
         guard activeSong != nil, activeSnapshot > 0 else { return }
         selectSnapshot(activeSnapshot - 1)
     }
@@ -199,6 +204,13 @@ final class PerformanceSession {
         guard let action = settings.action(for: message) else {
             record(message, "No action assigned")
             return
+        }
+
+        switch action {
+        case .snapshot, .nextSnapshot, .previousSnapshot:
+            if snapshotsLocked { return record(message, "\(action.displayName) — the leader controls snapshots") }
+        case .nextSong, .previousSong:
+            break
         }
 
         switch action {

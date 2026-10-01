@@ -32,6 +32,8 @@ struct GeneratedSongDetails {
     var scale: String
     @Guide(description: "Tempo in beats per minute. 0 if not stated and not confidently known.")
     var bpm: Int
+    @Guide(description: "Time signature like 4/4, 3/4 or 6/8. Empty if not stated and not confidently known.")
+    var timeSignature: String
     @Guide(description: "Genres, only from the allowed list. Empty if unsure.")
     var genres: [String]
     @Guide(description: "The first line of the lyrics or chord chart, copied exactly from the text. Empty if the text has no lyrics.")
@@ -47,6 +49,8 @@ struct SongDetails {
     var artist: String?
     var key: MusicalKey?
     var bpm: Int?
+    /// "4/4", "6/8"…; nil when nothing obvious (Create Song then uses 4/4)
+    var timeSignature: String?
     var genres: [String] = []
     var lyrics: String?
 }
@@ -92,6 +96,8 @@ enum SongDetailsAI {
         is written, give the song's well-known key only if you are confident; otherwise leave empty. \
         Write sharps as # and flats as b.
         - bpm: a tempo written in the text, or the song's well-known tempo if you are confident. 0 otherwise.
+        - timeSignature: one written in the text (e.g. "6/8"), or the song's well-known time signature \
+        if you are confident. Empty otherwise.
         - genres: only from this list: \(Song.predefinedGenres.joined(separator: ", ")).
         - lyricsFirstLine and lyricsLastLine: if the text contains lyrics or a chord chart, copy its \
         first and last lines EXACTLY as they appear (including chord lines). Skip headings like \
@@ -103,7 +109,7 @@ enum SongDetailsAI {
     static let jsonFormat = """
 
         Respond ONLY with a JSON object — no markdown fences, no explanation:
-        {"title": "", "artist": "", "keyRoot": "", "scale": "", "bpm": 0, "genres": [], "lyricsFirstLine": "", "lyricsLastLine": ""}
+        {"title": "", "artist": "", "keyRoot": "", "scale": "", "bpm": 0, "timeSignature": "", "genres": [], "lyricsFirstLine": "", "lyricsLastLine": ""}
         """
 
     private struct Raw: Decodable {
@@ -112,12 +118,14 @@ enum SongDetailsAI {
         var keyRoot: String?
         var scale: String?
         var bpm: Int?
+        var timeSignature: String?
         var genres: [String]?
         var lyricsFirstLine: String?
         var lyricsLastLine: String?
 
         init(_ g: GeneratedSongDetails) {
             title = g.title; artist = g.artist; keyRoot = g.keyRoot; scale = g.scale; bpm = g.bpm
+            timeSignature = g.timeSignature
             genres = g.genres; lyricsFirstLine = g.lyricsFirstLine; lyricsLastLine = g.lyricsLastLine
         }
     }
@@ -174,6 +182,7 @@ enum SongDetailsAI {
         details.title = nonEmpty(raw.title)
         details.artist = nonEmpty(raw.artist)
         if let bpm = raw.bpm, (20...300).contains(bpm) { details.bpm = bpm }
+        details.timeSignature = normalizedTimeSignature(raw.timeSignature)
 
         if let root = normalizedRoot(raw.keyRoot) {
             let scale = raw.scale.flatMap { name in
@@ -193,6 +202,13 @@ enum SongDetailsAI {
     private static func nonEmpty(_ text: String?) -> String? {
         let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// "6/8" or " 6 / 8 " → "6/8"; nil unless it's one of the song editor's time signatures
+    static func normalizedTimeSignature(_ text: String?) -> String? {
+        guard let text = nonEmpty(text) else { return nil }
+        let compact = text.filter { !$0.isWhitespace }
+        return TimeSignatureAppEnum(rawValue: compact)?.rawValue
     }
 
     /// "f♯" → "F#", "Bb" → "Bb"; nil unless it's one of the key picker's spellings
