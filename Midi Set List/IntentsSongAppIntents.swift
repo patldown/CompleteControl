@@ -4,6 +4,7 @@
 //
 
 import AppIntents
+import UniformTypeIdentifiers
 import CoreData
 import Foundation
 
