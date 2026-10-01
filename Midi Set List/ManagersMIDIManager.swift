@@ -486,7 +486,7 @@ class MIDIManager {
     /// Time from starting the clock to its first pulse, so the first one can be stamped ahead
     static let clockLeadIn: Double = 0.03
     /// How early each pulse is handed to CoreMIDI
-    private static let clockLookahead: Double = 0.005
+    private nonisolated static let clockLookahead: Double = 0.005
 
     /// One running clock's stop flag, shared with its thread
     nonisolated final class ClockRun: Sendable {
