@@ -488,20 +488,56 @@ struct SongDetailView: View {
         try? viewContext.save()
     }
 
-    /// Key, Scale, Transpose, Capo and Sounds In side by side on one row; text shrinks a
-    /// little to fit narrow screens. The capo's settings live in one menu, and "capo now /
-    /// shapes" shows below only when it tells you something the row doesn't.
+    /// Key, Scale, Transpose, Capo and Sounds In side by side. The capo's
+    /// settings live in one menu, and "capo now / shapes" shows only when it tells you
+    /// something the row doesn't.
     private var keySection: some View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 6) {
-                    compactField("Key") { keyMenu }
-                    compactField("Scale") { scaleMenu }
-                        .layoutPriority(1)  // the longest names get room first
+                HStack(alignment: .top, spacing: 8) {
+                    compactField("Key") {
+                        Picker("Key", selection: Binding(
+                            get: { song.keyRoot ?? "" },
+                            set: { root in
+                                song.originalKey = root.isEmpty
+                                    ? nil
+                                    : MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
+                                saveSong()
+                            }
+                        )) {
+                            Text("None").tag("")
+                            ForEach(NoteName.pickerRoots, id: \.self) { root in
+                                Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
+                                    .tag(root)
+                            }
+                        }
+                        // Full width for the picker's label, so it's never cut off
+                        .fixedSize()
+                    }
+                    compactField("Scale") {
+                        Picker("Scale", selection: Binding(
+                            get: { song.originalKey?.scale ?? .major },
+                            set: { scale in
+                                guard let key = song.originalKey else { return }
+                                song.originalKey = MusicalKey(root: key.root, scale: scale)
+                                saveSong()
+                            }
+                        )) {
+                            ForEach(MusicalScale.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        .disabled(song.originalKey == nil)
+                        .fixedSize()
+                    }
                     compactField("Transpose") { transposeStepper }
                     compactField("Capo") { capoMenu }
-                    compactField("Sounds In") { soundsIn }
+                    compactField("Sounds In") {
+                        Text(song.currentKey?.displayName ?? "—")
+                            .foregroundStyle(song.currentKey == nil ? .secondary : .primary)
+                            .padding(.vertical, 6)
+                    }
                 }
+                .pickerStyle(.menu)
+                .labelsHidden()
                 if let detail = capoDetail {
                     Text(detail.text)
                         .font(.caption)
@@ -515,90 +551,18 @@ struct SongDetailView: View {
         }
     }
 
-    private static func prettyRoot(_ root: String) -> String {
-        root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭")
-    }
-
-    private var keyMenu: some View {
-        Menu {
-            Picker("Key", selection: Binding(
-                get: { song.keyRoot ?? "" },
-                set: { root in
-                    song.originalKey = root.isEmpty
-                        ? nil
-                        : MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
-                    saveSong()
-                }
-            )) {
-                Text("None").tag("")
-                ForEach(NoteName.pickerRoots, id: \.self) { root in
-                    Text(Self.prettyRoot(root)).tag(root)
-                }
-            }
-        } label: {
-            menuChip(song.keyRoot.map(Self.prettyRoot) ?? "None")
-        }
-        .accessibilityLabel("Key")
-        .accessibilityValue(song.keyRoot.map(Self.prettyRoot) ?? "None")
-    }
-
-    private var scaleMenu: some View {
-        Menu {
-            Picker("Scale", selection: Binding(
-                get: { song.originalKey?.scale ?? .major },
-                set: { scale in
-                    guard let key = song.originalKey else { return }
-                    song.originalKey = MusicalKey(root: key.root, scale: scale)
-                    saveSong()
-                }
-            )) {
-                ForEach(MusicalScale.allCases) { Text($0.rawValue).tag($0) }
-            }
-        } label: {
-            menuChip((song.originalKey?.scale ?? .major).rawValue)
-        }
-        .disabled(song.originalKey == nil)
-        .accessibilityLabel("Scale")
-        .accessibilityValue((song.originalKey?.scale ?? .major).rawValue)
-    }
-
-    private var soundsIn: some View {
-        Text(song.currentKey?.displayName ?? "—")
-            .foregroundStyle(song.currentKey == nil ? .secondary : .primary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
-            .padding(.vertical, 6)
-    }
-
-    /// A menu's label as a tinted chip: a roomy tap target whose text shrinks a little
-    /// before it would ever be cut off
-    private func menuChip(_ text: String) -> some View {
-        HStack(spacing: 4) {
-            Text(text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.caption2)
-        }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 6)
-        .background(Color.accentColor.opacity(0.12), in: Capsule())
-    }
-
     private func compactField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var transposeStepper: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 10) {
             Button {
                 song.transpose -= 1
                 saveSong()
@@ -610,8 +574,7 @@ struct SongDetailView: View {
 
             Text(TransposeMenu.offsetLabel(song.transpose))
                 .monospacedDigit()
-                .lineLimit(1)
-                .frame(minWidth: 20)
+                .frame(minWidth: 24)
 
             Button {
                 song.transpose += 1
@@ -622,7 +585,7 @@ struct SongDetailView: View {
             .disabled(song.transpose >= Song.transposeRange.upperBound)
             .accessibilityLabel("Transpose up")
         }
-        .font(.body)
+        .font(.title3)
         // Borderless: several buttons in one list row each need their own tap
         .buttonStyle(.borderless)
         .padding(.vertical, 2)
@@ -651,7 +614,13 @@ struct SongDetailView: View {
                 ))
             }
         } label: {
-            menuChip(capoSummary)
+            HStack(spacing: 4) {
+                Text(capoSummary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+            }
+            .padding(.vertical, 6)
         }
         .accessibilityLabel("Capo")
         .accessibilityValue(capoSummary)
