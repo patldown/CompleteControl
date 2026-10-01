@@ -488,55 +488,30 @@ struct SongDetailView: View {
         try? viewContext.save()
     }
 
-    /// Key and Scale side by side; Transpose, Capo and Sounds In below them. The capo's
-    /// settings live in one menu, and "capo now / shapes" shows only when it tells you
-    /// something the row doesn't.
+    /// Key (root and scale in one menu), Transpose and Capo on one row — Key on its own row
+    /// when they don't fit (large text). The capo's settings live in one menu. Below, "sounds
+    /// in" and "capo now / shapes" show only when they tell you something the row doesn't.
     private var keySection: some View {
         Section {
-            HStack(alignment: .top, spacing: 12) {
-                compactField("Key") {
-                    Picker("Key", selection: Binding(
-                        get: { song.keyRoot ?? "" },
-                        set: { root in
-                            song.originalKey = root.isEmpty
-                                ? nil
-                                : MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
-                            saveSong()
-                        }
-                    )) {
-                        Text("None").tag("")
-                        ForEach(NoteName.pickerRoots, id: \.self) { root in
-                            Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
-                                .tag(root)
-                        }
-                    }
-                }
-                compactField("Scale") {
-                    Picker("Scale", selection: Binding(
-                        get: { song.originalKey?.scale ?? .major },
-                        set: { scale in
-                            guard let key = song.originalKey else { return }
-                            song.originalKey = MusicalKey(root: key.root, scale: scale)
-                            saveSong()
-                        }
-                    )) {
-                        ForEach(MusicalScale.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    .disabled(song.originalKey == nil)
-                }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 12) {
-                    compactField("Transpose") { transposeStepper }
-                    compactField("Capo") { capoMenu }
-                    compactField("Sounds In") {
-                        Text(song.currentKey?.displayName ?? "—")
-                            .foregroundStyle(song.currentKey == nil ? .secondary : .primary)
-                            .padding(.vertical, 6)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 12) {
+                        compactField("Key") { keyMenu }
+                        compactField("Transpose") { transposeStepper }
+                        compactField("Capo") { capoMenu }
                     }
+                    VStack(alignment: .leading, spacing: 10) {
+                        compactField("Key") { keyMenu }
+                        HStack(alignment: .top, spacing: 12) {
+                            compactField("Transpose") { transposeStepper }
+                            compactField("Capo") { capoMenu }
+                        }
+                    }
+                }
+                if let soundsIn = soundsInDetail {
+                    Text(soundsIn)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 if let detail = capoDetail {
                     Text(detail.text)
@@ -549,6 +524,66 @@ struct SongDetailView: View {
         } footer: {
             Text("Transpose moves the chords in the lyrics without changing the saved lyrics. With the capo keeping the original key, transposing down gives easier shapes and moves the capo up, so the audience hears the same key.")
         }
+    }
+
+    /// Root and scale in one menu, each its own submenu; reads "F♯ Minor"
+    private var keyMenu: some View {
+        Menu {
+            Picker("Key", selection: Binding(
+                get: { song.keyRoot ?? "" },
+                set: { root in
+                    song.originalKey = root.isEmpty
+                        ? nil
+                        : MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
+                    saveSong()
+                }
+            )) {
+                Text("None").tag("")
+                ForEach(NoteName.pickerRoots, id: \.self) { root in
+                    Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
+                        .tag(root)
+                }
+            }
+            .pickerStyle(.menu)
+            if song.originalKey != nil {
+                Picker("Scale", selection: Binding(
+                    get: { song.originalKey?.scale ?? .major },
+                    set: { scale in
+                        guard let key = song.originalKey else { return }
+                        song.originalKey = MusicalKey(root: key.root, scale: scale)
+                        saveSong()
+                    }
+                )) {
+                    ForEach(MusicalScale.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.menu)
+            }
+        } label: {
+            menuChip(song.originalKey?.displayName ?? "None")
+        }
+        .accessibilityLabel("Key")
+        .accessibilityValue(song.originalKey?.displayName ?? "None")
+    }
+
+    /// "Sounds in G Major" once transposing or the capo moves it off the written key
+    private var soundsInDetail: String? {
+        guard let current = song.currentKey, current != song.originalKey else { return nil }
+        return "Sounds in \(current.displayName)"
+    }
+
+    /// A menu's label as a tinted chip: a roomy tap target whose text shrinks a little
+    /// before it would ever be cut off
+    private func menuChip(_ text: String) -> some View {
+        HStack(spacing: 4) {
+            Text(text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.caption2)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.12), in: Capsule())
     }
 
     private func compactField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -614,13 +649,7 @@ struct SongDetailView: View {
                 ))
             }
         } label: {
-            HStack(spacing: 4) {
-                Text(capoSummary)
-                    .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2)
-            }
-            .padding(.vertical, 6)
+            menuChip(capoSummary)
         }
         .accessibilityLabel("Capo")
         .accessibilityValue(capoSummary)
