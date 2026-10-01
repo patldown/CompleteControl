@@ -488,20 +488,24 @@ struct SongDetailView: View {
         try? viewContext.save()
     }
 
-    /// Key (root and scale in one menu), Transpose and Capo on one row — Key on its own row
-    /// when they don't fit (large text). The capo's settings live in one menu. Below, "sounds
-    /// in" and "capo now / shapes" show only when they tell you something the row doesn't.
+    /// Key, Scale, Transpose and Capo on one row — two rows when they don't fit (small
+    /// phones, large text). The capo's settings live in one menu. Below, "sounds in" and
+    /// "capo now / shapes" show only when they tell you something the row doesn't.
     private var keySection: some View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
                 ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 12) {
+                    HStack(alignment: .top, spacing: 8) {
                         compactField("Key") { keyMenu }
+                        compactField("Scale") { scaleMenu }
                         compactField("Transpose") { transposeStepper }
                         compactField("Capo") { capoMenu }
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        compactField("Key") { keyMenu }
+                        HStack(alignment: .top, spacing: 12) {
+                            compactField("Key") { keyMenu }
+                            compactField("Scale") { scaleMenu }
+                        }
                         HStack(alignment: .top, spacing: 12) {
                             compactField("Transpose") { transposeStepper }
                             compactField("Capo") { capoMenu }
@@ -526,7 +530,10 @@ struct SongDetailView: View {
         }
     }
 
-    /// Root and scale in one menu, each its own submenu; reads "F♯ Minor"
+    private static func prettyRoot(_ root: String) -> String {
+        root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭")
+    }
+
     private var keyMenu: some View {
         Menu {
             Picker("Key", selection: Binding(
@@ -540,29 +547,34 @@ struct SongDetailView: View {
             )) {
                 Text("None").tag("")
                 ForEach(NoteName.pickerRoots, id: \.self) { root in
-                    Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
-                        .tag(root)
+                    Text(Self.prettyRoot(root)).tag(root)
                 }
-            }
-            .pickerStyle(.menu)
-            if song.originalKey != nil {
-                Picker("Scale", selection: Binding(
-                    get: { song.originalKey?.scale ?? .major },
-                    set: { scale in
-                        guard let key = song.originalKey else { return }
-                        song.originalKey = MusicalKey(root: key.root, scale: scale)
-                        saveSong()
-                    }
-                )) {
-                    ForEach(MusicalScale.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.menu)
             }
         } label: {
-            menuChip(song.originalKey?.displayName ?? "None")
+            menuChip(song.keyRoot.map(Self.prettyRoot) ?? "None")
         }
         .accessibilityLabel("Key")
-        .accessibilityValue(song.originalKey?.displayName ?? "None")
+        .accessibilityValue(song.keyRoot.map(Self.prettyRoot) ?? "None")
+    }
+
+    private var scaleMenu: some View {
+        Menu {
+            Picker("Scale", selection: Binding(
+                get: { song.originalKey?.scale ?? .major },
+                set: { scale in
+                    guard let key = song.originalKey else { return }
+                    song.originalKey = MusicalKey(root: key.root, scale: scale)
+                    saveSong()
+                }
+            )) {
+                ForEach(MusicalScale.allCases) { Text($0.rawValue).tag($0) }
+            }
+        } label: {
+            menuChip((song.originalKey?.scale ?? .major).rawValue)
+        }
+        .disabled(song.originalKey == nil)
+        .accessibilityLabel("Scale")
+        .accessibilityValue((song.originalKey?.scale ?? .major).rawValue)
     }
 
     /// "Sounds in G Major" once transposing or the capo moves it off the written key
@@ -581,7 +593,7 @@ struct SongDetailView: View {
             Image(systemName: "chevron.up.chevron.down")
                 .font(.caption2)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(Color.accentColor.opacity(0.12), in: Capsule())
     }
