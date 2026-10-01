@@ -39,7 +39,7 @@ struct SongDetailView: View {
     // Track if we're in a navigation stack or presented as sheet
     var isInSheet: Bool = false
 
-    private let timeSignatures = ["2/4", "3/4", "4/4", "5/4", "6/8", "7/8", "9/8", "12/8"]
+    private let timeSignatures = SongDefaults.timeSignatures
     
     private let clipboard = CommandClipboard.shared
     

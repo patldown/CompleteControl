@@ -13,6 +13,7 @@ struct SettingsView: View {
     @ObservedObject private var pedals = PedalSettings.shared
     @ObservedObject private var band = BandSettings.shared
     @FetchRequest(sortDescriptors: [SortDescriptor(\.orderIndexRaw)]) private var roles: FetchedResults<BandRole>
+    @AppStorage(SongDefaults.timeSignatureKey) private var defaultTimeSignature = ""
 
     var body: some View {
         NavigationStack {
@@ -20,6 +21,7 @@ struct SettingsView: View {
                 midiSection
                 bandSection
                 lyricsSection
+                newSongsSection
                 if ai.anyAIAvailable {
                     offlineModeSection
                     apiKeysSection
@@ -93,6 +95,21 @@ struct SettingsView: View {
             Text("Band")
         } footer: {
             Text("Pick your instrument to see just your parts of each song, and whether chords read as capo shapes or concert pitch.")
+        }
+    }
+
+    // MARK: - New songs
+
+    private var newSongsSection: some View {
+        Section {
+            Picker("Default Time Signature", selection: $defaultTimeSignature) {
+                Text("None").tag("")
+                ForEach(SongDefaults.timeSignatures, id: \.self) { Text($0).tag($0) }
+            }
+        } header: {
+            Text("New Songs")
+        } footer: {
+            Text("Used when a new song's time signature isn't known — in the New Song form, and in the Create Song shortcut when you leave it empty and AI isn't confident. None leaves it unset.")
         }
     }
 

@@ -6,6 +6,18 @@
 import CoreData
 import Foundation
 
+/// What a new song starts with when nothing more specific is known. Set in Settings.
+nonisolated enum SongDefaults {
+    static let timeSignatureKey = "defaultTimeSignature"
+    static let timeSignatures = ["2/4", "3/4", "4/4", "5/4", "6/8", "7/8", "9/8", "12/8"]
+
+    /// Time signature for new songs; nil (the default) leaves it unset
+    static var timeSignature: String? {
+        let value = UserDefaults.standard.string(forKey: timeSignatureKey) ?? ""
+        return timeSignatures.contains(value) ? value : nil
+    }
+}
+
 @objc(Song)
 class Song: NSManagedObject, Identifiable, ChartSource {
 

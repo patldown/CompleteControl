@@ -19,9 +19,10 @@ struct AddSongView: View {
     @State private var keyRoot = ""
     @State private var keyScale: MusicalScale = .major
     @State private var bpm: Int?
-    @State private var timeSignature = ""
+    /// Starts at the Settings default, if one is set
+    @State private var timeSignature = SongDefaults.timeSignature ?? ""
 
-    private let timeSignatures = ["2/4", "3/4", "4/4", "5/4", "6/8", "7/8", "9/8", "12/8"]
+    private let timeSignatures = SongDefaults.timeSignatures
     @State private var selectedTemplate: MIDICommandTemplate?
     @State private var showingTemplates = false
     @State private var showingGenrePicker = false

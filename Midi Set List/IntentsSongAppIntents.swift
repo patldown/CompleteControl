@@ -92,9 +92,9 @@ struct CreateSongIntent: AppIntent {
     @Parameter(title: "BPM", description: "Tempo in beats per minute, used for MIDI clock. Leave empty to skip.")
     var bpm: Int?
 
-    @Parameter(title: "Time Signature", description: "Beats per bar, e.g. 4/4, 3/4 or 6/8. Defaults to 4/4.",
-               default: .fourFour)
-    var timeSignature: TimeSignatureAppEnum
+    @Parameter(title: "Time Signature",
+               description: "Beats per bar, e.g. 4/4, 3/4 or 6/8. Leave empty to use the default from Settings, if one is set.")
+    var timeSignature: TimeSignatureAppEnum?
 
     @Parameter(title: "Key", description: "Root note of the song's key, e.g. A or F♯. Leave empty to skip.")
     var keyRoot: KeyRootAppEnum?
@@ -133,7 +133,7 @@ struct CreateSongIntent: AppIntent {
             details.title = name
             details.artist = artist
             details.bpm = bpm
-            details.timeSignature = timeSignature.rawValue
+            details.timeSignature = timeSignature?.rawValue
             details.key = keyRoot.map { MusicalKey(root: $0.rawValue, scale: keyScale?.scale ?? .major) }
 
         case .text:
@@ -159,12 +159,13 @@ struct CreateSongIntent: AppIntent {
         }
 
         guard let title = details.title else { throw SongDetailsError.noTitle }
+        // Not given and AI wasn't confident: the Settings default, else left unset
+        if details.timeSignature == nil { details.timeSignature = SongDefaults.timeSignature }
         let result = details
         let entity = try await MainActor.run {
             let ctx = PersistenceController.shared.viewContext
-            // No obvious time signature means 4/4 — by far the most common
             let song = Song.create(name: title, artist: result.artist, lyrics: result.lyrics, bpm: result.bpm,
-                                   timeSignature: result.timeSignature ?? TimeSignatureAppEnum.fourFour.rawValue, in: ctx)
+                                   timeSignature: result.timeSignature, in: ctx)
             song.originalKey = result.key
             if !result.genres.isEmpty { song.setGenres(result.genres) }
             try ctx.save()
@@ -180,7 +181,7 @@ struct CreateSongIntent: AppIntent {
         var parts: [String] = []
         if let key = details.key { parts.append(key.displayName) }
         if let bpm = details.bpm { parts.append("\(bpm) BPM") }
-        parts.append(details.timeSignature ?? TimeSignatureAppEnum.fourFour.rawValue)
+        if let timeSignature = details.timeSignature { parts.append(timeSignature) }
         if !details.genres.isEmpty { parts.append(details.genres.joined(separator: "/")) }
         if details.lyrics != nil { parts.append("with lyrics") }
         return parts.isEmpty ? text + "." : text + " — " + parts.joined(separator: ", ") + "."

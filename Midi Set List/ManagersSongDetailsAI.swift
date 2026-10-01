@@ -32,7 +32,7 @@ struct GeneratedSongDetails {
     var scale: String
     @Guide(description: "Tempo in beats per minute. 0 if not stated and not confidently known.")
     var bpm: Int
-    @Guide(description: "Time signature like 4/4, 3/4 or 6/8. Empty if not stated and not confidently known.")
+    @Guide(description: "Time signature like 4/4, 3/4 or 6/8, from the text or from knowing the song. Empty if not confident.")
     var timeSignature: String
     @Guide(description: "Genres, only from the allowed list. Empty if unsure.")
     var genres: [String]
@@ -49,7 +49,7 @@ struct SongDetails {
     var artist: String?
     var key: MusicalKey?
     var bpm: Int?
-    /// "4/4", "6/8"…; nil when nothing obvious (Create Song then uses 4/4)
+    /// "4/4", "6/8"…; nil when not written and the AI wasn't confident
     var timeSignature: String?
     var genres: [String] = []
     var lyrics: String?
@@ -96,8 +96,10 @@ enum SongDetailsAI {
         is written, give the song's well-known key only if you are confident; otherwise leave empty. \
         Write sharps as # and flats as b.
         - bpm: a tempo written in the text, or the song's well-known tempo if you are confident. 0 otherwise.
-        - timeSignature: one written in the text (e.g. "6/8"), or the song's well-known time signature \
-        if you are confident. Empty otherwise.
+        - timeSignature: one written in the text (e.g. "6/8"). If none is written but you recognise \
+        the song, give its time signature from what you know of it — most well-known pop and rock \
+        songs are 4/4; waltzes and many ballads are 3/4 or 6/8. If you don't recognise the song or \
+        aren't confident, leave it empty — never guess.
         - genres: only from this list: \(Song.predefinedGenres.joined(separator: ", ")).
         - lyricsFirstLine and lyricsLastLine: if the text contains lyrics or a chord chart, copy its \
         first and last lines EXACTLY as they appear (including chord lines). Skip headings like \
