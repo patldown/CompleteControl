@@ -23,7 +23,7 @@ class SetList: NSManagedObject, Identifiable {
 
     /// Songs in their persisted display order.
     var songs: [Song] {
-        let all = (songsRaw.allObjects as? [Song]) ?? []
+        let all = (songsRaw.allObjects as? [Song] ?? []).filter { !$0.isDeleted && $0.managedObjectContext != nil }
         let ids = decodedOrderIDs
         guard !ids.isEmpty else {
             return all.sorted { $0.dateCreated < $1.dateCreated }

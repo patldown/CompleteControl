@@ -34,6 +34,9 @@ struct Midi_Set_ListApp: App {
                     performance.activityLog = activityLog
                     let session = performance
                     midiManager.onRemoteMessage = { message in session.handle(message) }
+                    // Live Follow: the leader broadcasts every song / snapshot change
+                    LiveFollowSession.shared.performance = performance
+                    performance.onStateChange = { LiveFollowSession.shared.leaderStateChanged() }
                     MidiSetListShortcuts.updateAppShortcutParameters()
                 }
         }

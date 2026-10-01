@@ -399,9 +399,10 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Midi-Set-List-Info.plist";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Set List plays reference tracks and creates playlists from your set lists in Apple Music.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "idi Set List connects to MIDI and OSC devices on your local network.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Midi Set List connects to MIDI and OSC devices, and to bandmates for Live Follow, on your local network.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Set List uses the microphone for keyboard dictation.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -446,9 +447,10 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Midi-Set-List-Info.plist";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Set List plays reference tracks and creates playlists from your set lists in Apple Music.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "idi Set List connects to MIDI and OSC devices on your local network.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Midi Set List connects to MIDI and OSC devices, and to bandmates for Live Follow, on your local network.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Set List uses the microphone for keyboard dictation.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;

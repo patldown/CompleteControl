@@ -94,6 +94,9 @@ private struct PerformSetListPicker: View {
         .navigationTitle("Perform")
         .offlineStatusBadge()
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                LiveFollowButton()
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showingBTMIDI = true
@@ -145,6 +148,15 @@ private struct PerformPlayingView: View {
     @State private var showingBTMIDI = false
     /// Lyrics fill the window; the snapshot strip stays above them
     @State private var lyricsExpanded = false
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    /// Edges full view extends past the safe area to. Not the sides of a landscape iPhone,
+    /// where the notch or Dynamic Island would cover the start of each line.
+    private var fullViewEdges: Edge.Set {
+        let landscapePhone = verticalSizeClass == .compact && horizontalSizeClass != .regular
+        return landscapePhone ? .bottom : [.bottom, .horizontal]
+    }
     @State private var panelCommand: LyricsPanelCommand?
 
     var body: some View {
@@ -171,6 +183,9 @@ private struct PerformPlayingView: View {
                                    command: panelCommand)
                     .id(song.objectID)  // new song, fresh scroll position
                     .padding(.horizontal, lyricsExpanded ? 0 : 16)
+                    // Full view runs to the screen's edges: under the home indicator, and to
+                    // the sides where there's no notch in the way (iPad, or iPhone portrait)
+                    .ignoresSafeArea(edges: lyricsExpanded ? fullViewEdges : [])
                     .overlay {
                         if lyricsExpanded { songArrows(songs: songs) }
                     }
@@ -190,6 +205,9 @@ private struct PerformPlayingView: View {
             }
         }
         .animation(.default, value: lyricsExpanded)
+        // Full view also takes the status bar's strip, and dims the home indicator
+        .statusBarHidden(lyricsExpanded)
+        .persistentSystemOverlays(lyricsExpanded ? .hidden : .automatic)
         // Bluetooth page-turner pedals arrive as key presses
         .background(PedalKeyCatcher(onKey: handlePedal).frame(width: 0, height: 0))
         .toolbar(lyricsExpanded ? .hidden : .visible, for: .navigationBar)
@@ -222,6 +240,9 @@ private struct PerformPlayingView: View {
                 } label: {
                     Label("Songs", systemImage: "list.number")
                 }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                LiveFollowButton()
             }
             ToolbarItem(placement: .secondaryAction) {
                 Button {

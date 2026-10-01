@@ -34,7 +34,6 @@ struct SongDetailView: View {
     @State private var sendError: String?
     @State private var showingSendError = false
     @State private var showingLyricsPerformance = false
-    @State private var showingEditLyrics = false
     @State private var clockSendTransport = false
 
     // Track if we're in a navigation stack or presented as sheet
@@ -47,34 +46,69 @@ struct SongDetailView: View {
     var body: some View {
         List(selection: $selectedCommands) {
             Section("Song Information") {
-                LabeledContent("Name") {
-                    TextField("Song Name", text: Binding(
-                        get: { song.name },
-                        set: { song.name = $0 }
-                    ))
-                    .multilineTextAlignment(.trailing)
-                }
-                
-                LabeledContent("Artist") {
-                    TextField("Artist", text: Binding(
-                        get: { song.artist ?? "" },
-                        set: { song.artist = $0.isEmpty ? nil : $0 }
-                    ))
-                    .multilineTextAlignment(.trailing)
-                }
-
-                Button {
-                    showingGenrePicker = true
-                } label: {
-                    LabeledContent("Genre") {
-                        Text(selectedGenres.isEmpty
-                             ? "Unspecified"
-                             : selectedGenres.sorted().joined(separator: ", "))
-                            .foregroundStyle(selectedGenres.isEmpty ? .secondary : .primary)
-                            .multilineTextAlignment(.trailing)
+                // Name and Artist side by side, above Genre / BPM / Time Sig.
+                HStack(alignment: .top, spacing: 12) {
+                    compactField("Name") {
+                        TextField("Song Name", text: Binding(
+                            get: { song.name },
+                            set: { song.name = $0 }
+                        ))
+                        .font(.headline)
+                        .padding(.vertical, 6)
+                    }
+                    compactField("Artist") {
+                        TextField("Artist", text: Binding(
+                            get: { song.artist ?? "" },
+                            set: { song.artist = $0.isEmpty ? nil : $0 }
+                        ))
+                        .padding(.vertical, 6)
                     }
                 }
-                .foregroundStyle(.primary)
+
+                // Genre, BPM and time signature side by side; BPM and time signature are
+                // the song's own, whether or not it sends MIDI clock
+                HStack(alignment: .top, spacing: 12) {
+                    compactField("Genre") {
+                        Button {
+                            showingGenrePicker = true
+                        } label: {
+                            Text(selectedGenres.isEmpty ? "None" : selectedGenres.sorted().joined(separator: ", "))
+                                .foregroundStyle(selectedGenres.isEmpty ? .secondary : .primary)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 6)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    compactField("BPM") {
+                        TextField("—", value: Binding<Int?>(
+                            get: { song.bpm },
+                            set: { newBPM in
+                                song.bpm = newBPM.map { max(20, min(300, $0)) }
+                                if let bpm = song.clockBPM, midiManager.isClockRunning {
+                                    midiManager.startClock(bpm: bpm, sendTransport: clockSendTransport)
+                                } else if song.clockBPM == nil, midiManager.isClockRunning {
+                                    midiManager.stopClock()
+                                }
+                            }
+                        ), format: .number)
+                        .keyboardType(.numberPad)
+                        .monospacedDigit()
+                        .padding(.vertical, 6)
+                    }
+                    compactField("Time Sig.") {
+                        Picker("Time Signature", selection: Binding(
+                            get: { song.timeSignature ?? "" },
+                            set: { song.timeSignature = $0.isEmpty ? nil : $0; saveSong() }
+                        )) {
+                            Text("—").tag("")
+                            ForEach(timeSignatures, id: \.self) { Text($0).tag($0) }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                    }
+                }
 
                 LabeledContent("Notes") {
                     TextField("Notes", text: Binding(
@@ -84,191 +118,83 @@ struct SongDetailView: View {
                     .multilineTextAlignment(.trailing)
                 }
             }
-            
+
+            ReferenceTrackSection(song: song)
+
             keySection
 
-            // MIDI Clock Section
+            // MIDI Clock: only the clock — its tempo is the song's BPM above
             Section {
-                Toggle("Enable MIDI Clock", isOn: Binding(
-                    get: { song.bpm != nil },
+                Toggle("Send MIDI Clock", isOn: Binding(
+                    get: { song.midiClockEnabled && song.bpm != nil },
                     set: { enabled in
+                        song.midiClockEnabled = enabled
                         if enabled {
-                            song.bpm = 120
-                            if song.timeSignature == nil { song.timeSignature = "4/4" }
+                            if song.bpm == nil { song.bpm = 120 }
                         } else {
                             midiManager.stopClock()
-                            song.bpm = nil
                         }
+                        saveSong()
                     }
                 ))
 
-                if song.bpm != nil {
-                    LabeledContent("BPM") {
-                        TextField("20–300", value: Binding(
-                            get: { song.bpm ?? 120 },
-                            set: { newBPM in
-                                let clamped = max(20, min(300, newBPM))
-                                song.bpm = clamped
-                                if midiManager.isClockRunning {
-                                    midiManager.startClock(bpm: clamped, sendTransport: clockSendTransport)
-                                }
-                            }
-                        ), format: .number)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 70)
-                        .monospacedDigit()
-                    }
+                if let clockBPM = song.clockBPM, midiManager.isInitialized {
+                    Toggle("Send Start / Stop", isOn: $clockSendTransport)
+                        .disabled(midiManager.isClockRunning)
 
-                    Picker("Time Signature", selection: Binding(
-                        get: { song.timeSignature ?? "4/4" },
-                        set: { song.timeSignature = $0 }
-                    )) {
-                        ForEach(timeSignatures, id: \.self) { sig in
-                            Text(sig).tag(sig)
+                    Button {
+                        if midiManager.isClockRunning {
+                            midiManager.stopClock()
+                        } else {
+                            midiManager.startClock(bpm: clockBPM, sendTransport: clockSendTransport)
                         }
-                    }
-
-                    if midiManager.isInitialized {
-                        Toggle("Send Start / Stop", isOn: $clockSendTransport)
-                            .disabled(midiManager.isClockRunning)
-
-                        Button {
+                    } label: {
+                        HStack {
+                            Image(systemName: midiManager.isClockRunning ? "stop.fill" : "metronome")
+                            Text(midiManager.isClockRunning ? "Stop Clock" : "Start Clock")
                             if midiManager.isClockRunning {
-                                midiManager.stopClock()
-                            } else {
-                                midiManager.startClock(bpm: song.bpm ?? 120, sendTransport: clockSendTransport)
+                                Spacer()
+                                Text("\(midiManager.currentClockBPM) BPM")
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.8))
                             }
-                        } label: {
-                            HStack {
-                                Image(systemName: midiManager.isClockRunning ? "stop.fill" : "metronome")
-                                Text(midiManager.isClockRunning ? "Stop Clock" : "Start Clock")
-                                if midiManager.isClockRunning {
-                                    Spacer()
-                                    Text("\(midiManager.currentClockBPM) BPM")
-                                        .font(.caption)
-                                        .foregroundStyle(.white.opacity(0.8))
-                                }
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(midiManager.isClockRunning ? .red : .green)
-                        .disabled(midiManager.availableDevices.isEmpty)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(midiManager.isClockRunning ? .red : .green)
+                    .disabled(midiManager.availableDevices.isEmpty)
                 }
             } header: {
                 Text("MIDI Clock")
             } footer: {
-                if song.bpm == nil {
-                    Text("Enable to send MIDI clock pulses to connected devices.")
+                if song.clockBPM == nil {
+                    Text("Sends clock pulses at the song's BPM so connected gear follows its tempo.")
                 } else if midiManager.availableDevices.isEmpty {
                     Text("No MIDI devices found. Make sure your device is connected.")
                 } else {
                     Text(clockSendTransport
-                         ? "Sends 24 PPQN + Start/Stop to all available devices. Time signature is display-only."
-                         : "Sends 24 PPQN tempo only — no Start/Stop. Devices sync to tempo but play/stop independently.")
+                         ? "Sends 24 PPQN at \(song.bpm ?? 120) BPM + Start/Stop to all available devices."
+                         : "Sends 24 PPQN at \(song.bpm ?? 120) BPM, tempo only — devices sync to tempo but play/stop independently.")
                 }
             }
 
-            // Lyrics/Tabs Section
-            Section {
-                Button {
-                    showingEditLyrics = true
-                } label: {
+            SongChartsSection(song: song) { showingLyricsPerformance = true }
+
+            SongSnapshotsSection(song: song, selected: $selectedSnapshot,
+                                 footerOverride: isSelectMode ? "Select commands for batch operations." : nil) {
+                if !snapshotCommands.isEmpty {
                     HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Lyrics & Sheet Music")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-
-                            if song.pdfFileName != nil {
-                                Label("Sheet music PDF", systemImage: "doc.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else if !song.chartImageNames.isEmpty {
-                                Label("Sheet music: \(song.chartImageNames.count) image\(song.chartImageNames.count == 1 ? "" : "s")",
-                                      systemImage: "photo.on.rectangle")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            if let lyrics = song.lyrics, !lyrics.isEmpty {
-                                Text(lyrics.prefix(100) + (lyrics.count > 100 ? "..." : ""))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            } else if !song.hasSheetMusic {
-                                Text("Add lyrics, tabs, or sheet music (PDF or images)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        
+                        Text("\(song.snapshotName(selectedSnapshot)) Commands")
                         Spacer()
-                        
-                        Image(systemName: "chevron.right")
-                            .foregroundStyle(.tertiary)
+                        Text(isSelectMode ? "\(selectedCommands.count) selected" : "\(snapshotCommands.count)")
                     }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
                 }
-                
-                if song.hasLyricsText || song.hasSheetMusic {
-                    Button {
-                        showingLyricsPerformance = true
-                    } label: {
-                        Label("Performance Mode", systemImage: "play.rectangle.fill")
-                            .foregroundStyle(.green)
-                    }
-                }
-            } header: {
-                Text("Performance")
-            } footer: {
-                if !song.hasLyricsText && !song.hasSheetMusic {
-                    Text("Add lyrics or sheet music to enable Performance Mode with auto-scroll")
-                } else if song.hasLyricsText && song.hasSheetMusic {
-                    Text("Performance Mode shows lyrics or sheet music full screen with auto-scroll. Whichever you pick last is remembered for you.")
-                } else {
-                    Text("Performance Mode shows it full screen with auto-scroll for hands-free playing")
-                }
-            }
-            
-            SongSnapshotsSection(song: song, selected: $selectedSnapshot)
 
-            // Send Section — shown whenever the selected snapshot has commands
-            if !snapshotCommands.isEmpty {
-                Section {
-                    Button {
-                        Task { await sendAllCommands() }
-                    } label: {
-                        HStack {
-                            if isSendingCommands {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "paperplane.fill")
-                            }
-                            Text("Send \(song.snapshotName(selectedSnapshot))")
-                            Spacer()
-                            if !midiManager.connectedDevices.isEmpty {
-                                Text("\(midiManager.connectedDevices.count) MIDI")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .disabled(!canSendAny)
-                } header: {
-                    Text("MIDI / OSC")
-                } footer: {
-                    if canSendAny {
-                        Text("Sends this snapshot's \(snapshotCommands.count) command(s) in sequence.")
-                    } else {
-                        Text("Connect a MIDI device or an OSC target to send commands.")
-                    }
-                }
-            }
-            
-            Section {
                 ForEach(snapshotCommands) { command in
                     Button {
                         if isSelectMode {
@@ -346,27 +272,47 @@ struct SongDetailView: View {
                         Label("Quick Add", systemImage: "bolt.fill")
                     }
                 } label: {
-                    Label("Add Command", systemImage: "plus.circle.fill")
+                    Label("Add to \(song.snapshotName(selectedSnapshot))", systemImage: "plus.circle.fill")
                 }
-            } header: {
-                HStack {
-                    Text("\(song.snapshotName(selectedSnapshot)) Commands")
-                    Spacer()
-                    if isSelectMode {
-                        Text("\(selectedCommands.count) selected")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("\(snapshotCommands.count)")
+
+                if !snapshotCommands.isEmpty {
+                    Button {
+                        Task { await sendAllCommands() }
+                    } label: {
+                        HStack {
+                            if isSendingCommands {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "paperplane.fill")
+                            }
+                            Text("Send \(song.snapshotName(selectedSnapshot))")
+                            Spacer()
+                            if !canSendAny && !isSendingCommands {
+                                Text("No MIDI or OSC connected")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if !midiManager.connectedDevices.isEmpty {
+                                Text("\(midiManager.connectedDevices.count) MIDI")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .disabled(!canSendAny)
+                }
+
+                Toggle(isOn: Binding(
+                    get: { song.sendsSnapshotOnLoad },
+                    set: { song.sendsSnapshotOnLoad = $0; saveSong() }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Send \(song.snapshotName(0)) When Song Loads")
+                        Text(song.sendsSnapshotOnLoad
+                             ? "In Perform, loading this song sends its first snapshot."
+                             : "In Perform, nothing is sent until you tap a snapshot or press a pedal.")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                }
-            } footer: {
-                if isSelectMode {
-                    Text("Select commands for batch operations.")
-                } else if snapshotCommands.isEmpty {
-                    Text("Add macros, macro groups or commands to this snapshot with Add Command.")
-                } else {
-                    Text("Commands are sent in order from top to bottom. Tap to edit, swipe left to delete, swipe right to send/duplicate. Long-press and drag to reorder.")
                 }
             }
         }
@@ -510,15 +456,15 @@ struct SongDetailView: View {
         .fullScreenCover(isPresented: $showingLyricsPerformance) {
             LyricsPerformanceView(song: song)
         }
-        .sheet(isPresented: $showingEditLyrics) {
-            EditLyricsView(song: song)
-        }
         .onAppear {
             selectedGenres = Set(song.genres)
             // MIDI snapshot recalls act on the open song when no set list is playing
             performance.focus(song)
         }
-        .onDisappear { performance.unfocus(song) }
+        .onDisappear {
+            performance.unfocus(song)
+            AppleMusicReference.shared.stop()
+        }
         .onChange(of: selectedSnapshot) { _, _ in selectedCommands.removeAll() }
         .onChange(of: selectedGenres) { _, newValue in
             song.setGenres(Array(newValue))
@@ -542,102 +488,161 @@ struct SongDetailView: View {
         try? viewContext.save()
     }
 
+    /// Key and Scale side by side; Transpose, Capo and Sounds In below them. The capo's
+    /// settings live in one menu, and "capo now / shapes" shows only when it tells you
+    /// something the row doesn't.
     private var keySection: some View {
         Section {
-            Picker("Key", selection: Binding(
-                get: { song.keyRoot ?? "" },
-                set: { root in
-                    if root.isEmpty {
-                        song.originalKey = nil
-                    } else {
-                        song.originalKey = MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
-                    }
-                    saveSong()
-                }
-            )) {
-                Text("None").tag("")
-                ForEach(NoteName.pickerRoots, id: \.self) { root in
-                    Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
-                        .tag(root)
-                }
-            }
-
-            if let key = song.originalKey {
-                Picker("Scale", selection: Binding(
-                    get: { key.scale },
-                    set: { song.originalKey = MusicalKey(root: key.root, scale: $0); saveSong() }
-                )) {
-                    ForEach(MusicalScale.allCases) { scale in
-                        Text(scale.rawValue).tag(scale)
-                    }
-                }
-            }
-
-            Stepper(value: Binding(
-                get: { song.transpose },
-                set: { song.transpose = $0; saveSong() }
-            ), in: Song.transposeRange) {
-                LabeledContent("Transpose") {
-                    Text(song.transpose == 0 ? "Original" : "\(TransposeMenu.offsetLabel(song.transpose)) semitones")
-                        .monospacedDigit()
-                }
-            }
-
-            Toggle("Capo", isOn: Binding(
-                get: { song.capoEnabled },
-                set: { song.capoEnabled = $0; saveSong() }
-            ))
-
-            if song.capoEnabled {
-                Stepper(value: Binding(
-                    get: { song.capo },
-                    set: { song.capo = $0; saveSong() }
-                ), in: Song.capoRange) {
-                    LabeledContent("Chart Capo Fret") {
-                        Text(song.capo == 0 ? "None" : "\(song.capo)")
-                            .monospacedDigit()
-                    }
-                }
-
-                Toggle(isOn: Binding(
-                    get: { song.capoKeepsKey },
-                    set: { song.capoKeepsKey = $0; saveSong() }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Capo Keeps Original Key")
-                        Text(song.capoKeepsKey
-                             ? "Transpose changes the chord shapes; the capo moves to keep the key."
-                             : "Transpose changes the key; the capo stays put.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if song.transpose != 0 || song.capo != 0 {
-                    LabeledContent("Capo Now") {
-                        if let fret = song.effectiveCapo {
-                            Text(fret == 0 ? "None" : "Fret \(fret)")
-                        } else {
-                            Text("Out of range — transpose the other way")
-                                .foregroundStyle(.orange)
+            HStack(alignment: .top, spacing: 12) {
+                compactField("Key") {
+                    Picker("Key", selection: Binding(
+                        get: { song.keyRoot ?? "" },
+                        set: { root in
+                            song.originalKey = root.isEmpty
+                                ? nil
+                                : MusicalKey(root: root, scale: song.originalKey?.scale ?? .major)
+                            saveSong()
+                        }
+                    )) {
+                        Text("None").tag("")
+                        ForEach(NoteName.pickerRoots, id: \.self) { root in
+                            Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
+                                .tag(root)
                         }
                     }
                 }
-            }
-
-            if song.originalKey != nil, song.transpose != 0 || song.capoEnabled {
-                if let key = song.currentKey {
-                    LabeledContent("Sounds In", value: key.displayName)
+                compactField("Scale") {
+                    Picker("Scale", selection: Binding(
+                        get: { song.originalKey?.scale ?? .major },
+                        set: { scale in
+                            guard let key = song.originalKey else { return }
+                            song.originalKey = MusicalKey(root: key.root, scale: scale)
+                            saveSong()
+                        }
+                    )) {
+                        ForEach(MusicalScale.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .disabled(song.originalKey == nil)
                 }
-                if song.capoEnabled, let shapes = song.chordShapeKey {
-                    LabeledContent("Chord Shapes In", value: shapes.displayName)
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 12) {
+                    compactField("Transpose") { transposeStepper }
+                    compactField("Capo") { capoMenu }
+                    compactField("Sounds In") {
+                        Text(song.currentKey?.displayName ?? "—")
+                            .foregroundStyle(song.currentKey == nil ? .secondary : .primary)
+                            .padding(.vertical, 6)
+                    }
+                }
+                if let detail = capoDetail {
+                    Text(detail.text)
+                        .font(.caption)
+                        .foregroundStyle(detail.isWarning ? .orange : .secondary)
                 }
             }
         } header: {
             Text("Key & Capo")
         } footer: {
-            Text("Set the key the song sounds in. Transpose shifts the chords in the lyrics without changing the saved lyrics. With Capo on and Capo Keeps Original Key, transposing down gives easier shapes and moves the capo up to match, so the audience hears the same key. Turn it off to really change the key and set the capo yourself.")
+            Text("Transpose moves the chords in the lyrics without changing the saved lyrics. With the capo keeping the original key, transposing down gives easier shapes and moves the capo up, so the audience hears the same key.")
         }
+    }
+
+    private func compactField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var transposeStepper: some View {
+        HStack(spacing: 10) {
+            Button {
+                song.transpose -= 1
+                saveSong()
+            } label: {
+                Image(systemName: "minus.circle.fill")
+            }
+            .disabled(song.transpose <= Song.transposeRange.lowerBound)
+            .accessibilityLabel("Transpose down")
+
+            Text(TransposeMenu.offsetLabel(song.transpose))
+                .monospacedDigit()
+                .frame(minWidth: 24)
+
+            Button {
+                song.transpose += 1
+                saveSong()
+            } label: {
+                Image(systemName: "plus.circle.fill")
+            }
+            .disabled(song.transpose >= Song.transposeRange.upperBound)
+            .accessibilityLabel("Transpose up")
+        }
+        .font(.title3)
+        // Borderless: several buttons in one list row each need their own tap
+        .buttonStyle(.borderless)
+        .padding(.vertical, 2)
+    }
+
+    /// Capo on / off, the fret the chart is written for, and whether it keeps the key
+    private var capoMenu: some View {
+        Menu {
+            Toggle("Use a Capo", isOn: Binding(
+                get: { song.capoEnabled },
+                set: { song.capoEnabled = $0; saveSong() }
+            ))
+            if song.capoEnabled {
+                Picker("Chart Capo Fret", selection: Binding(
+                    get: { song.capo },
+                    set: { song.capo = $0; saveSong() }
+                )) {
+                    ForEach(Array(Song.capoRange), id: \.self) { fret in
+                        Text(fret == 0 ? "No Capo on Chart" : "Fret \(fret)").tag(fret)
+                    }
+                }
+                .pickerStyle(.menu)
+                Toggle("Keeps Original Key", isOn: Binding(
+                    get: { song.capoKeepsKey },
+                    set: { song.capoKeepsKey = $0; saveSong() }
+                ))
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(capoSummary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+            }
+            .padding(.vertical, 6)
+        }
+        .accessibilityLabel("Capo")
+        .accessibilityValue(capoSummary)
+    }
+
+    private var capoSummary: String {
+        guard song.capoEnabled else { return "Off" }
+        return song.capo == 0 ? "On" : "Fret \(song.capo)"
+    }
+
+    /// "Capo now: fret 4 · G shapes" when transposing moves the capo or changes the shapes
+    private var capoDetail: (text: String, isWarning: Bool)? {
+        guard song.capoEnabled, song.transpose != 0 || song.capo != 0 else { return nil }
+        guard let fret = song.effectiveCapo else {
+            return ("Capo out of range — transpose the other way", true)
+        }
+        var parts = [fret == 0 ? "No capo now" : "Capo now: fret \(fret)"]
+        if let shapes = song.chordShapeKey, song.originalKey != nil {
+            parts.append("\(shapes.displayName) shapes")
+        }
+        if !song.capoKeepsKey { parts.append("key changes with transpose") }
+        return (parts.joined(separator: " · "), false)
     }
 
     private var snapshotCommands: [MIDICommand] {

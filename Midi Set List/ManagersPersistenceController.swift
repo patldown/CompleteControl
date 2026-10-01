@@ -13,7 +13,9 @@ import Foundation
 
 final class PersistenceController {
 
-    static let shared = PersistenceController()
+    /// UI tests launch with -ui-testing: a fresh in-memory store each run, so they never
+    /// touch (or depend on) real data
+    static let shared = PersistenceController(inMemory: ProcessInfo.processInfo.arguments.contains("-ui-testing"))
 
     static let preview: PersistenceController = { PersistenceController(inMemory: true) }()
 
@@ -29,7 +31,7 @@ final class PersistenceController {
 
     init(inMemory: Bool = false) {
         let c = NSPersistentContainer(name: "MidiSetList",
-                                      managedObjectModel: Self.makeModel())
+                                      managedObjectModel: Self.model)
 
         if inMemory {
             c.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
@@ -84,6 +86,8 @@ final class PersistenceController {
 
         c.viewContext.automaticallyMergesChangesFromParent = true
         c.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+
+        BandRole.seedDefaultsIfNeeded(in: c.viewContext)
     }
 
     func save() {
@@ -111,6 +115,10 @@ final class PersistenceController {
 
     // MARK: - Programmatic Core Data Model
 
+    /// Built once and shared: with several stores open (previews, tests), separate model
+    /// copies would each claim Song, SetList… and Core Data couldn't tell which to use
+    static let model: NSManagedObjectModel = makeModel()
+
     static func makeModel() -> NSManagedObjectModel {
 
         let songE     = ent("Song")
@@ -121,6 +129,8 @@ final class PersistenceController {
         let macroE    = ent("DeviceMacro")
         let oscTargE  = ent("OSCTarget")
         let presetE   = ent("SavedPreset")
+        let partE     = ent("SongPart")
+        let roleE     = ent("BandRole")
 
         songE.properties = [
             attr("id",            .UUIDAttributeType),
@@ -132,13 +142,20 @@ final class PersistenceController {
             attr("pdfFileName",   .stringAttributeType,    optional: true),
             attr("chartImageNamesData", .stringAttributeType, optional: true),
             attr("bpmRaw",        .integer32AttributeType, optional: true),
+            attr("midiClockEnabled", .booleanAttributeType, defaultValue: true),
             attr("timeSignature", .stringAttributeType,    optional: true),
             attr("snapshotNamesData", .stringAttributeType, optional: true),
+            attr("referenceTrackID",     .stringAttributeType, optional: true),
+            attr("referenceTrackTitle",  .stringAttributeType, optional: true),
+            attr("referenceTrackArtist", .stringAttributeType, optional: true),
+            attr("referenceTrackURL",    .stringAttributeType, optional: true),
+            attr("referenceTrackDurationRaw", .doubleAttributeType, optional: true),
             attr("keyRoot",       .stringAttributeType,    optional: true),
             attr("keyScaleRaw",   .stringAttributeType,    optional: true),
             attr("transposeRaw",  .integer16AttributeType, defaultValue: Int16(0)),
             attr("capoEnabled",   .booleanAttributeType,   defaultValue: false),
             attr("capoKeepsKey",  .booleanAttributeType,   defaultValue: true),
+            attr("sendsSnapshotOnLoad", .booleanAttributeType, defaultValue: true),
             attr("capoRaw",       .integer16AttributeType, defaultValue: Int16(0)),
             attr("dateCreated",   .dateAttributeType),
             attr("dateModified",  .dateAttributeType),
@@ -226,6 +243,23 @@ final class PersistenceController {
             attr("commandsData", .binaryDataAttributeType),
         ]
 
+        partE.properties = [
+            attr("id",                  .UUIDAttributeType),
+            attr("name",                .stringAttributeType),
+            attr("lyrics",              .stringAttributeType,    optional: true),
+            attr("pdfFileName",         .stringAttributeType,    optional: true),
+            attr("chartImageNamesData", .stringAttributeType,    optional: true),
+            attr("orderIndexRaw",       .integer32AttributeType, defaultValue: Int32(0)),
+            attr("dateCreated",         .dateAttributeType),
+        ]
+
+        roleE.properties = [
+            attr("id",            .UUIDAttributeType),
+            attr("name",          .stringAttributeType),
+            attr("emoji",         .stringAttributeType,    defaultValue: ""),
+            attr("orderIndexRaw", .integer32AttributeType, defaultValue: Int32(0)),
+        ]
+
         // Song.commandsRaw ↔ MIDICommand.song
         let songCmds = rel("commandsRaw", to: commandE, toMany: true,  delete: .cascadeDeleteRule)
         let cmdSong  = rel("song",         to: songE,    toMany: false, delete: .nullifyDeleteRule)
@@ -256,7 +290,24 @@ final class PersistenceController {
         let macroParents  = rel("parentGroupsRaw", to: macroE, toMany: true, delete: .nullifyDeleteRule)
         link(macroChildren, macroParents)
 
-        songE.properties     += [songCmds, songSLists]
+        // Song.partsRaw ↔ SongPart.song — a song's extra charts go with it
+        let songParts = rel("partsRaw", to: partE, toMany: true,  delete: .cascadeDeleteRule)
+        let partSong  = rel("song",     to: songE, toMany: false, delete: .nullifyDeleteRule)
+        link(songParts, partSong)
+
+        // SongPart.rolesRaw ↔ BandRole.partsRaw — who sees a part (none = everyone)
+        let partRoles = rel("rolesRaw", to: roleE, toMany: true, delete: .nullifyDeleteRule)
+        let roleParts = rel("partsRaw", to: partE, toMany: true, delete: .nullifyDeleteRule)
+        link(partRoles, roleParts)
+
+        // Song.chartRolesRaw ↔ BandRole.chartSongsRaw — who sees the built-in chart
+        let songChartRoles = rel("chartRolesRaw", to: roleE, toMany: true, delete: .nullifyDeleteRule)
+        let roleChartSongs = rel("chartSongsRaw", to: songE, toMany: true, delete: .nullifyDeleteRule)
+        link(songChartRoles, roleChartSongs)
+
+        songE.properties     += [songCmds, songSLists, songParts, songChartRoles]
+        partE.properties     += [partSong, partRoles]
+        roleE.properties     += [roleParts, roleChartSongs]
         commandE.properties  += [cmdSong, cmdSrcMacro]
         setListE.properties  += [slSongs]
         deviceE.properties   += [devCats]
@@ -265,7 +316,7 @@ final class PersistenceController {
 
         let model = NSManagedObjectModel()
         model.entities = [songE, commandE, setListE, deviceE,
-                          categoryE, macroE, oscTargE, presetE]
+                          categoryE, macroE, oscTargE, presetE, partE, roleE]
         return model
     }
 

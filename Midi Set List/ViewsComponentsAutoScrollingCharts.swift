@@ -21,7 +21,12 @@ struct PageRequest: Equatable {
     let direction: Int
 }
 
-/// Drives a UIScrollView downward at a steady speed (points per second at 60 fps).
+/// Drives a UIScrollView downward at a steady speed, in points per second.
+///
+/// The position is tracked unrounded in `exactY` and advanced by real frame time.
+/// UIScrollView snaps contentOffset to whole pixels, so adding a fraction of a point to
+/// contentOffset itself each frame loses the fraction: slow speeds never moved, and a
+/// range of faster speeds all snapped to the same one-pixel step.
 class AutoScroller: NSObject {
     weak var scrollView: UIScrollView?
     /// For views whose scroll view only exists after layout, such as PDFView's
@@ -32,6 +37,19 @@ class AutoScroller: NSObject {
     private var displayLink: CADisplayLink?
     private var currentSpeed: Double = 0
 
+    // Live Follow: the chart this scroll view shows, so a leader can report its position
+    // and followers showing the same chart can move to it
+    private var liveChartID: UUID?
+    private var offsetObservation: NSKeyValueObservation?
+    private weak var observedScrollView: UIScrollView?
+    private var liveScrollObserver: NSObjectProtocol?
+    private var isApplyingRemoteScroll = false
+    /// Unrounded scroll position; nil until the first frame reads the real offset
+    private var exactY: Double?
+    /// What was last applied, to notice when the person drags the chart themselves
+    private var lastAppliedY: CGFloat?
+    private var lastTimestamp: CFTimeInterval?
+
     private var target: UIScrollView? {
         if scrollView == nil { scrollView = findScrollView?() }
         return scrollView
@@ -40,7 +58,7 @@ class AutoScroller: NSObject {
     func startScrolling(speed: Double) {
         currentSpeed = speed
         if displayLink == nil {
-            displayLink = CADisplayLink(target: self, selector: #selector(scroll))
+            displayLink = CADisplayLink(target: self, selector: #selector(scroll(_:)))
             displayLink?.add(to: .main, forMode: .common)
         }
     }
@@ -48,6 +66,9 @@ class AutoScroller: NSObject {
     func stopScrolling() {
         displayLink?.invalidate()
         displayLink = nil
+        exactY = nil
+        lastAppliedY = nil
+        lastTimestamp = nil
     }
 
     func scrollToTop() {
@@ -56,20 +77,34 @@ class AutoScroller: NSObject {
                                     animated: true)
     }
 
-    @objc private func scroll() {
+    @objc private func scroll(_ link: CADisplayLink) {
         guard let scrollView = target else { return }
 
-        var offset = scrollView.contentOffset
-        offset.y += CGFloat(currentSpeed / 60.0)
+        // Real time since the last frame, so ProMotion (120 Hz) runs at the same speed as 60 Hz.
+        // Capped so a stall (app in background, heavy layout) doesn't jump the chart.
+        let elapsed = lastTimestamp.map { min(link.timestamp - $0, 0.1) } ?? 0
+        lastTimestamp = link.timestamp
 
-        let minOffset = -scrollView.adjustedContentInset.top
-        let maxOffset = max(minOffset, scrollView.contentSize.height - scrollView.bounds.height
-                                       + scrollView.adjustedContentInset.bottom)
-        if offset.y >= maxOffset {
-            offset.y = maxOffset
-            stopScrolling()
+        // Start from, or pick up after, wherever the chart really is — e.g. after a drag
+        let current = scrollView.contentOffset.y
+        if exactY == nil || lastAppliedY.map({ abs(current - $0) > 1 }) ?? true
+            || scrollView.isDragging || scrollView.isDecelerating {
+            exactY = Double(current)
         }
-        scrollView.setContentOffset(offset, animated: false)
+        guard !scrollView.isDragging, !scrollView.isDecelerating, var y = exactY else { return }
+
+        y += currentSpeed * elapsed
+
+        let minOffset = Double(-scrollView.adjustedContentInset.top)
+        let maxOffset = max(minOffset, Double(scrollView.contentSize.height - scrollView.bounds.height
+                                              + scrollView.adjustedContentInset.bottom))
+        let reachedEnd = y >= maxOffset
+        y = min(max(y, minOffset), maxOffset)
+        exactY = y
+
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: CGFloat(y)), animated: false)
+        lastAppliedY = scrollView.contentOffset.y
+        if reachedEnd { stopScrolling() }
     }
 
     /// Scrolls most of a screen up or down, keeping a few lines of overlap for your place
@@ -100,8 +135,60 @@ class AutoScroller: NSObject {
         }
     }
 
+    // MARK: Live Follow scrolling
+
+    /// Call on each update with the chart shown; safe to repeat
+    func attachLiveScroll(chartID: UUID?) {
+        liveChartID = chartID
+        guard let scrollView = target else { return }
+        if observedScrollView !== scrollView {
+            observedScrollView = scrollView
+            offsetObservation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] view, _ in
+                MainActor.assumeIsolated { self?.reportLiveScroll(view) }
+            }
+        }
+        if liveScrollObserver == nil {
+            liveScrollObserver = NotificationCenter.default.addObserver(
+                forName: LiveFollowSession.scrollNotification, object: nil, queue: .main
+            ) { [weak self] note in
+                let chartID = note.userInfo?["chartID"] as? UUID
+                let fraction = note.userInfo?["fraction"] as? Double
+                MainActor.assumeIsolated { self?.applyLiveScroll(chartID: chartID, fraction: fraction) }
+            }
+        }
+    }
+
+    private func scrollRange(_ scrollView: UIScrollView) -> ClosedRange<CGFloat> {
+        let minOffset = -scrollView.adjustedContentInset.top
+        let maxOffset = max(minOffset, scrollView.contentSize.height - scrollView.bounds.height
+                                       + scrollView.adjustedContentInset.bottom)
+        return minOffset...maxOffset
+    }
+
+    private func reportLiveScroll(_ scrollView: UIScrollView) {
+        guard let liveChartID, !isApplyingRemoteScroll else { return }
+        let range = scrollRange(scrollView)
+        let span = range.upperBound - range.lowerBound
+        guard span > 0 else { return }
+        let fraction = Double((scrollView.contentOffset.y - range.lowerBound) / span)
+        LiveFollowSession.shared.reportScroll(chartID: liveChartID, fraction: min(max(fraction, 0), 1))
+    }
+
+    private func applyLiveScroll(chartID: UUID?, fraction: Double?) {
+        guard let chartID, chartID == liveChartID, let fraction, let scrollView = target,
+              !scrollView.isDragging else { return }
+        let range = scrollRange(scrollView)
+        let y = range.lowerBound + (range.upperBound - range.lowerBound) * CGFloat(fraction)
+        guard abs(y - scrollView.contentOffset.y) > 2 else { return }
+        isApplyingRemoteScroll = true
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: y), animated: true)
+        isApplyingRemoteScroll = false
+    }
+
     deinit {
         stopScrolling()
+        offsetObservation?.invalidate()
+        if let liveScrollObserver { NotificationCenter.default.removeObserver(liveScrollObserver) }
     }
 }
 
@@ -113,11 +200,12 @@ struct AutoScrollingPDFView: UIViewRepresentable {
     @Binding var scrollSpeed: Double
     @Binding var resetTrigger: Bool
     var pageRequest: PageRequest? = nil
+    /// The chart shown, for Live Follow scrolling
+    var liveChartID: UUID? = nil
 
     func makeUIView(context: Context) -> PDFView {
-        let pdfView = PDFView()
+        let pdfView = FitWidthPDFView()
         pdfView.backgroundColor = .black
-        pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
         pdfView.document = PDFDocument(url: url)
@@ -132,10 +220,12 @@ struct AutoScrollingPDFView: UIViewRepresentable {
     func updateUIView(_ pdfView: PDFView, context: Context) {
         if pdfView.document?.documentURL != url {
             pdfView.document = PDFDocument(url: url)
+            (pdfView as? FitWidthPDFView)?.refit()
             context.coordinator.scrollView = nil
         }
         context.coordinator.sync(isScrolling: isScrolling, speed: scrollSpeed, resetTrigger: resetTrigger,
                                  pageRequest: pageRequest)
+        context.coordinator.attachLiveScroll(chartID: liveChartID)
     }
 
     func makeCoordinator() -> AutoScroller { AutoScroller() }
@@ -153,6 +243,44 @@ struct AutoScrollingPDFView: UIViewRepresentable {
     }
 }
 
+/// Scales pages to fill the view's width, like the image charts. PDFView's autoScales
+/// fits the whole page instead, so a portrait page on a landscape iPad sat between wide
+/// black bars. Refits when the view changes width (rotation, full view, window resizing);
+/// pinch zoom still goes up to 4×.
+final class FitWidthPDFView: PDFView {
+    private var fittedWidth: CGFloat = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        pageShadowsEnabled = false
+        pageBreakMargins = UIEdgeInsets(top: 0, left: 0, bottom: 8, right: 0)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    /// Fit again on the next layout, e.g. after the document changes
+    func refit() {
+        fittedWidth = 0
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0, abs(bounds.width - fittedWidth) > 0.5,
+              let page = document?.page(at: 0) else { return }
+        let pageWidth = page.bounds(for: displayBox).width
+        guard pageWidth > 0 else { return }
+        fittedWidth = bounds.width
+        let fit = bounds.width / pageWidth
+        autoScales = false
+        minScaleFactor = fit
+        maxScaleFactor = fit * 4
+        scaleFactor = fit
+    }
+}
+
 // MARK: - Images
 
 /// Sheet-music pages as images, stacked top to bottom at full width. Pinch to zoom.
@@ -162,6 +290,8 @@ struct AutoScrollingImagesView: UIViewRepresentable {
     @Binding var scrollSpeed: Double
     @Binding var resetTrigger: Bool
     var pageRequest: PageRequest? = nil
+    /// The chart shown, for Live Follow scrolling
+    var liveChartID: UUID? = nil
 
     func makeUIView(context: Context) -> UIScrollView {
         let scrollView = UIScrollView()
@@ -198,6 +328,7 @@ struct AutoScrollingImagesView: UIViewRepresentable {
         }
         context.coordinator.sync(isScrolling: isScrolling, speed: scrollSpeed, resetTrigger: resetTrigger,
                                  pageRequest: pageRequest)
+        context.coordinator.attachLiveScroll(chartID: liveChartID)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -232,10 +363,13 @@ struct AutoScrollingImagesView: UIViewRepresentable {
 
 // MARK: - Shared content
 
-/// Shows a song's lyrics or sheet music with the right auto-scroller. Speed is this
-/// person's last speed on this song, kept separately for lyrics and sheet music.
+/// Shows one chart of a song — its own, or a part — as lyrics or sheet music, with the
+/// right auto-scroller. Speed is this person's last speed on this chart, kept separately
+/// for lyrics and sheet music.
 struct ChartContentView: View {
     @ObservedObject var song: Song
+    /// The chart to show; nil shows the song's own chart
+    var chart: (any ChartSource)? = nil
     let mode: PerformChartMode
     @Binding var isScrolling: Bool
     @Binding var resetTrigger: Bool
@@ -244,43 +378,51 @@ struct ChartContentView: View {
     var pageRequest: PageRequest? = nil
 
     @ObservedObject private var prefs = UserPreferences.shared
+    @ObservedObject private var band = BandSettings.shared
+
+    private var source: any ChartSource { chart ?? song }
 
     private var speed: Binding<Double> {
-        Binding(get: { prefs.scrollSpeed(for: mode, song: song) },
-                set: { prefs.setScrollSpeed($0, for: mode, song: song) })
+        Binding(get: { prefs.scrollSpeed(for: mode, song: source) },
+                set: { prefs.setScrollSpeed($0, for: mode, song: source) })
     }
 
     var body: some View {
         switch mode {
         case .lyrics:
+            // Capo shapes or concert pitch, per this device (Settings › Band)
+            let chords = band.chordRendering(for: song)
             AutoScrollingTextView(
-                text: song.lyrics ?? "",
+                text: source.lyrics ?? "",
                 isScrolling: $isScrolling,
                 scrollSpeed: speed,
                 resetTrigger: $resetTrigger,
                 fontSize: fontSize,
                 insets: insets,
-                transpose: song.transpose,
-                chordsPreferFlats: song.chordsPreferFlats,
-                pageRequest: pageRequest
+                transpose: chords.transpose,
+                chordsPreferFlats: chords.flats,
+                pageRequest: pageRequest,
+                liveChartID: source.id
             )
         case .sheetMusic:
-            if let pdfURL = song.pdfFileURL {
+            if let pdfURL = source.pdfFileURL {
                 AutoScrollingPDFView(url: pdfURL, isScrolling: $isScrolling,
-                                     scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest)
+                                     scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest,
+                                     liveChartID: source.id)
             } else {
-                AutoScrollingImagesView(urls: song.chartImageURLs, isScrolling: $isScrolling,
-                                        scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest)
+                AutoScrollingImagesView(urls: source.chartImageURLs, isScrolling: $isScrolling,
+                                        scrollSpeed: speed, resetTrigger: $resetTrigger, pageRequest: pageRequest,
+                                        liveChartID: source.id)
             }
         }
     }
 }
 
-/// Lyrics / Sheet Music switch, shown when a song has both. Remembers the choice for this
-/// person on this song — or, while the Settings override is on, just for this visit.
+/// Lyrics / Sheet Music switch, shown when a chart has both. Remembers the choice for this
+/// person on this chart — or, while the Settings override is on, just for this visit.
 struct ChartModeMenu: View {
     @ObservedObject private var prefs = UserPreferences.shared
-    @ObservedObject var song: Song
+    let chart: any ChartSource
     let current: PerformChartMode
     var onChange: () -> Void = {}
 
@@ -288,13 +430,13 @@ struct ChartModeMenu: View {
         Menu {
             Picker("Show", selection: Binding(
                 get: { current },
-                set: { prefs.setChartMode($0, for: song); onChange() }
+                set: { prefs.setChartMode($0, for: chart); onChange() }
             )) {
                 ForEach(PerformChartMode.allCases) { mode in
                     Label(mode.title, systemImage: mode.systemImage).tag(mode)
                 }
             }
-            if prefs.isOverriding(song) {
+            if prefs.isOverriding(chart) {
                 Text("Settings is set to always show \(prefs.chartModeOverride?.title ?? ""). A change here lasts for this visit only.")
             }
         } label: {
@@ -303,5 +445,61 @@ struct ChartModeMenu: View {
         .menuIndicator(.hidden)
         .accessibilityLabel("Lyrics or Sheet Music")
         .accessibilityValue(current.title)
+    }
+}
+
+/// Switches between the charts this device sees for a song (the song's own and its
+/// parts). Shown only when there's more than one. Remembers the pick per song.
+struct ChartPartMenu: View {
+    @ObservedObject var song: Song
+    let current: any ChartSource
+    var onChange: () -> Void = {}
+    @ObservedObject private var band = BandSettings.shared
+
+    var body: some View {
+        Menu {
+            Picker("Part", selection: Binding(
+                get: { current.id },
+                set: { id in
+                    if let chart = song.chartSource(id: id) {
+                        band.selectChart(chart, for: song)
+                        onChange()
+                    }
+                }
+            )) {
+                ForEach(band.visibleCharts(for: song), id: \.id) { chart in
+                    Text(chart.seenBy.isEmpty ? chart.chartName : "\(chart.chartName) · \(chart.seenBy.map(\.emoji).joined())")
+                        .tag(chart.id)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "person.2.crop.square.stack")
+                    .font(.caption.weight(.bold))
+                Text(current.chartName)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.18), in: Capsule())
+        }
+        .menuIndicator(.hidden)
+        .accessibilityLabel("Part")
+        .accessibilityValue(current.chartName)
+    }
+}
+
+/// Edits whichever chart is showing: a part, or the song's own chart
+struct ChartEditorSheet: View {
+    @ObservedObject var song: Song
+    let chartID: UUID?
+
+    var body: some View {
+        if let chartID, let part = song.parts.first(where: { $0.id == chartID }) {
+            EditLyricsView(source: part)
+        } else {
+            EditLyricsView(song: song)
+        }
     }
 }

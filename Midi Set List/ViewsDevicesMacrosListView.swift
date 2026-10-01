@@ -43,6 +43,10 @@ struct MacrosListView: View {
         }
         .navigationTitle(category.name)
         .toolbar {
+            // Edit: always top right, first of the buttons there, on every screen
+            if !category.macros.isEmpty {
+                ToolbarItem(placement: .primaryAction) { EditButton() }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { showingAddMacro = true } label: { Image(systemName: "plus") }
             }
@@ -58,7 +62,6 @@ struct MacrosListView: View {
                 }
             }
             if !category.macros.isEmpty {
-                ToolbarItem(placement: .navigationBarLeading) { EditButton() }
                 ToolbarItem(placement: .secondaryAction) {
                     ShareItemButton(object: category, kindName: "Macro Group", itemName: category.name)
                 }

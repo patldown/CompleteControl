@@ -18,6 +18,10 @@ struct AddSongView: View {
     @State private var notes = ""
     @State private var keyRoot = ""
     @State private var keyScale: MusicalScale = .major
+    @State private var bpm: Int?
+    @State private var timeSignature = ""
+
+    private let timeSignatures = ["2/4", "3/4", "4/4", "5/4", "6/8", "7/8", "9/8", "12/8"]
     @State private var selectedTemplate: MIDICommandTemplate?
     @State private var showingTemplates = false
     @State private var showingGenrePicker = false
@@ -26,39 +30,74 @@ struct AddSongView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Song Name", text: $name)
-                    TextField("Artist (optional)", text: $artist)
-                    Button {
-                        showingGenrePicker = true
-                    } label: {
-                        HStack {
-                            Text("Genre")
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            Text(selectedGenres.isEmpty
-                                 ? "Unspecified"
-                                 : selectedGenres.sorted().joined(separator: ", "))
-                                .foregroundStyle(selectedGenres.isEmpty ? .secondary : .primary)
-                                .multilineTextAlignment(.trailing)
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
+                    // Laid out like the song editor: Name | Artist, Genre | BPM | Time Sig.,
+                    // Key | Scale. Only the name is required.
+                    HStack(alignment: .top, spacing: 12) {
+                        field("Name") {
+                            TextField("Song Name", text: $name)
+                                .font(.headline)
+                        }
+                        field("Artist") {
+                            TextField("Optional", text: $artist)
                         }
                     }
-                    Picker("Key", selection: $keyRoot) {
-                        Text("None").tag("")
-                        ForEach(NoteName.pickerRoots, id: \.self) { root in
-                            Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
-                                .tag(root)
+
+                    HStack(alignment: .top, spacing: 12) {
+                        field("Genre") {
+                            Button {
+                                showingGenrePicker = true
+                            } label: {
+                                Text(selectedGenres.isEmpty ? "None" : selectedGenres.sorted().joined(separator: ", "))
+                                    .foregroundStyle(selectedGenres.isEmpty ? .secondary : .primary)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        field("BPM") {
+                            TextField("Optional", value: Binding<Int?>(
+                                get: { bpm },
+                                set: { bpm = $0.map { max(20, min(300, $0)) } }
+                            ), format: .number)
+                            .keyboardType(.numberPad)
+                            .monospacedDigit()
+                        }
+                        field("Time Sig.") {
+                            Picker("Time Signature", selection: $timeSignature) {
+                                Text("—").tag("")
+                                ForEach(timeSignatures, id: \.self) { Text($0).tag($0) }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
                         }
                     }
-                    if !keyRoot.isEmpty {
-                        Picker("Scale", selection: $keyScale) {
-                            ForEach(MusicalScale.allCases) { scale in
-                                Text(scale.rawValue).tag(scale)
+                    // Key and Scale side by side, as in the song editor
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Key").font(.caption).foregroundStyle(.secondary)
+                            Picker("Key", selection: $keyRoot) {
+                                Text("None").tag("")
+                                ForEach(NoteName.pickerRoots, id: \.self) { root in
+                                    Text(root.replacingOccurrences(of: "#", with: "♯").replacingOccurrences(of: "b", with: "♭"))
+                                        .tag(root)
+                                }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Scale").font(.caption).foregroundStyle(.secondary)
+                            Picker("Scale", selection: $keyScale) {
+                                ForEach(MusicalScale.allCases) { scale in
+                                    Text(scale.rawValue).tag(scale)
+                                }
+                            }
+                            .disabled(keyRoot.isEmpty)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
                     TextField("Notes (optional)", text: $notes, axis: .vertical)
                         .lineLimit(3...6)
                 } header: {
@@ -122,6 +161,14 @@ struct AddSongView: View {
         }
     }
     
+    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func addSong() {
         let song = Song.create(
             name: name,
@@ -129,6 +176,10 @@ struct AddSongView: View {
             notes: notes.isEmpty ? nil : notes,
             in: viewContext
         )
+        // Set after creating, so the tempo doesn't switch MIDI clock on; that's its own
+        // switch in the song editor
+        song.bpm = bpm
+        song.timeSignature = timeSignature.isEmpty ? nil : timeSignature
         song.setGenres(Array(selectedGenres))
         if !keyRoot.isEmpty { song.originalKey = MusicalKey(root: keyRoot, scale: keyScale) }
         if let template = selectedTemplate {

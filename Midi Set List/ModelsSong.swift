@@ -7,7 +7,7 @@ import CoreData
 import Foundation
 
 @objc(Song)
-class Song: NSManagedObject, Identifiable {
+class Song: NSManagedObject, Identifiable, ChartSource {
 
     // ── Scalar attributes ──────────────────────────────────────────────
     @NSManaged var id: UUID
@@ -22,6 +22,17 @@ class Song: NSManagedObject, Identifiable {
     @NSManaged var timeSignature: String?
     /// JSON-encoded [String] of snapshot names, one per snapshot ("" = default name).
     @NSManaged var snapshotNamesData: String?
+    /// Apple Music reference track: catalog ID plus what's shown without a network lookup
+    @NSManaged var referenceTrackID: String?
+    @NSManaged var referenceTrackTitle: String?
+    @NSManaged var referenceTrackArtist: String?
+    @NSManaged var referenceTrackURL: String?
+    @NSManaged private var referenceTrackDurationRaw: NSNumber?
+    /// Length of the reference recording in seconds; helps AI plan sets to a running time
+    var referenceTrackDuration: TimeInterval? {
+        get { referenceTrackDurationRaw?.doubleValue }
+        set { referenceTrackDurationRaw = newValue.map { NSNumber(value: $0) } }
+    }
     @NSManaged var dateCreated: Date
     @NSManaged var dateModified: Date
 
@@ -34,14 +45,25 @@ class Song: NSManagedObject, Identifiable {
     /// True: the capo moves to keep the song in its original key as the chords are transposed.
     /// False: transposing changes the key and the capo stays where it's set.
     @NSManaged var capoKeepsKey: Bool
+    /// Send Snapshot 1 when the song is loaded in Perform. Off: the song loads with no
+    /// snapshot live, and the first pedal press (or tap) sends one.
+    @NSManaged var sendsSnapshotOnLoad: Bool
     @NSManaged private var capoRaw: Int16
 
-    // bpm is stored as NSNumber? so nil means "no clock"
+    /// The song's tempo; nil when not set. It's part of the song whether or not the clock runs.
     @NSManaged private var bpmRaw: NSNumber?
     var bpm: Int? {
         get { bpmRaw?.intValue }
         set { bpmRaw = newValue.map { NSNumber(value: $0) } }
     }
+
+    /// Send MIDI clock at the song's BPM. Before this switch existed, having a BPM meant the
+    /// clock was on — the stored default (true) keeps those songs as they were, and songs
+    /// without a BPM have no clock either way.
+    @NSManaged var midiClockEnabled: Bool
+
+    /// The tempo to send as MIDI clock, or nil when this song sends none
+    var clockBPM: Int? { midiClockEnabled ? bpm : nil }
 
     // ── Key, transpose & capo ──────────────────────────────────────────
     static let transposeRange = -6...6
@@ -165,18 +187,26 @@ class Song: NSManagedObject, Identifiable {
         s.notes = notes
         s.lyrics = lyrics
         s.bpmRaw = bpm.map { NSNumber(value: $0) }
+        // As before the switch existed: a song made with a tempo sends clock at it
+        s.midiClockEnabled = bpm != nil
         s.timeSignature = timeSignature
         s.dateCreated = Date()
         s.dateModified = Date()
         return s
     }
 
-    // ── Computed properties ────────────────────────────────────────────
-    var pdfFileURL: URL? {
-        guard let filename = pdfFileName else { return nil }
-        return FileManager.default
-            .urls(for: .documentDirectory, in: .userDomainMask).first?
-            .appendingPathComponent(filename)
+    // ── Built-in chart (ChartSource: PDF / image URLs and content checks live there) ──
+    var chartName: String { "Chart" }
+
+    /// Roles the built-in chart is addressed to; empty means everyone
+    var seenBy: [BandRole] {
+        ((value(forKey: "chartRolesRaw") as? NSSet)?.allObjects as? [BandRole] ?? [])
+            .sorted { $0.orderIndex < $1.orderIndex }
+    }
+
+    func setSeenBy(_ roles: [BandRole]) {
+        setValue(NSSet(array: roles), forKey: "chartRolesRaw")
+        dateModified = Date()
     }
 
     // ── Sheet music (a PDF or a set of images) ─────────────────────────
@@ -192,24 +222,39 @@ class Song: NSManagedObject, Identifiable {
         }
     }
 
-    var chartImageURLs: [URL] {
-        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return [] }
-        return chartImageNames.map { docs.appendingPathComponent($0) }
+
+    // ── Reference track (Apple Music) ──────────────────────────────────
+    var hasReferenceTrack: Bool { referenceTrackID != nil }
+
+    var referenceTrack: ReferenceTrack? {
+        guard let referenceTrackID else { return nil }
+        return ReferenceTrack(id: referenceTrackID,
+                              title: referenceTrackTitle ?? name,
+                              artist: referenceTrackArtist ?? artist ?? "",
+                              url: referenceTrackURL.flatMap(URL.init(string:)),
+                              duration: referenceTrackDuration)
     }
 
-    var hasLyricsText: Bool { !(lyrics ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    var hasSheetMusic: Bool { pdfFileName != nil || !chartImageNames.isEmpty }
-
-    /// What to show on Perform: this person's last choice when the song has both,
-    /// otherwise whichever the song has. Nil when it has neither.
-    func chartMode(preferred: PerformChartMode) -> PerformChartMode? {
-        switch (hasLyricsText, hasSheetMusic) {
-        case (true, true): preferred
-        case (true, false): .lyrics
-        case (false, true): .sheetMusic
-        case (false, false): nil
-        }
+    func linkReferenceTrack(_ track: ReferenceTrack) {
+        referenceTrackID = track.id
+        referenceTrackTitle = track.title
+        referenceTrackArtist = track.artist
+        referenceTrackURL = track.url?.absoluteString
+        referenceTrackDuration = track.duration
+        dateModified = Date()
     }
+
+    func unlinkReferenceTrack() {
+        referenceTrackID = nil
+        referenceTrackTitle = nil
+        referenceTrackArtist = nil
+        referenceTrackURL = nil
+        referenceTrackDuration = nil
+        dateModified = Date()
+    }
+
+    /// True when the built-in chart or any part has something to show
+    var hasAnyChart: Bool { chartSources.contains { $0.hasContent } }
 
     /// All commands, grouped by snapshot and then in send order.
     var sortedCommands: [MIDICommand] {

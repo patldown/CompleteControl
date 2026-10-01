@@ -4,8 +4,8 @@
 //
 //  Created by Patrick Downey on 9/25/26.
 //
-//  Everything about how gear is connected, in one tab: Bluetooth pairing and pedals,
-//  MIDI outputs and inputs, and OSC / network devices such as mixers.
+//  Everything about how gear is connected, in one tab: MIDI (status, inputs, then
+//  outputs), Bluetooth pairing and pedals, and OSC / network devices such as mixers.
 //
 
 import SwiftUI
@@ -50,6 +50,14 @@ struct ConnectionsView: View {
                         }
                     }
                     
+                    if !midiManager.connectedDevices.isEmpty {
+                        Button {
+                            showingTestSheet = true
+                        } label: {
+                            Label("Test Connection", systemImage: "waveform")
+                        }
+                    }
+
                     if let lastCommand = midiManager.lastSentCommand {
                         LabeledContent("Last Sent") {
                             Text(lastCommand)
@@ -58,63 +66,9 @@ struct ConnectionsView: View {
                         }
                     }
                 } header: {
-                    Text("Status")
+                    Text("MIDI")
                 }
 
-                Section {
-                    Button {
-                        showingBTMIDI = true
-                    } label: {
-                        Label("Pair Bluetooth MIDI Device", systemImage: "wave.3.right")
-                    }
-                    NavigationLink {
-                        PedalSettingsView()
-                    } label: {
-                        LabeledContent {
-                            Text(pedals.isEnabled ? "On" : "Off")
-                        } label: {
-                            Label("Page-Turner Pedals", systemImage: "shoe.2")
-                        }
-                    }
-                } header: {
-                    Text("Bluetooth")
-                } footer: {
-                    Text("Bluetooth MIDI gear — foot controllers, keyboards — pairs here, then shows under MIDI Outputs and Inputs. Page-turner pedals pair in the device's Bluetooth settings.")
-                }
-                
-                Section {
-                    ForEach(midiManager.availableDevices) { device in
-                        DeviceRowView(
-                            device: device,
-                            isConnected: midiManager.isConnected(device)
-                        ) {
-                            midiManager.toggleConnection(for: device)
-                        }
-                    }
-                    
-                    if midiManager.availableDevices.isEmpty {
-                        ContentUnavailableView {
-                            Label("No Devices Found", systemImage: "cable.connector")
-                        } description: {
-                            Text("Make sure your MIDI devices are connected and powered on")
-                        } actions: {
-                            Button("Scan Again") {
-                                midiManager.scanForDevices()
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }
-                } header: {
-                    HStack {
-                        Text("MIDI Outputs")
-                        Spacer()
-                        Text("\(midiManager.availableDevices.count)")
-                            .foregroundStyle(.secondary)
-                    }
-                } footer: {
-                    Text("Tap a device to connect or disconnect. Connected devices receive MIDI commands.")
-                }
-                
                 Section {
                     ForEach(midiManager.availableSources) { source in
                         Label {
@@ -152,6 +106,60 @@ struct ConnectionsView: View {
                 }
 
                 Section {
+                    ForEach(midiManager.availableDevices) { device in
+                        DeviceRowView(
+                            device: device,
+                            isConnected: midiManager.isConnected(device)
+                        ) {
+                            midiManager.toggleConnection(for: device)
+                        }
+                    }
+                    
+                    if midiManager.availableDevices.isEmpty {
+                        ContentUnavailableView {
+                            Label("No Devices Found", systemImage: "cable.connector")
+                        } description: {
+                            Text("Make sure your MIDI devices are connected and powered on")
+                        } actions: {
+                            Button("Scan Again") {
+                                midiManager.scanForDevices()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("MIDI Outputs")
+                        Spacer()
+                        Text("\(midiManager.availableDevices.count)")
+                            .foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("Tap a device to connect or disconnect. Connected devices receive MIDI commands.")
+                }
+
+                Section {
+                    Button {
+                        showingBTMIDI = true
+                    } label: {
+                        Label("Pair Bluetooth MIDI Device", systemImage: "wave.3.right")
+                    }
+                    NavigationLink {
+                        PedalSettingsView()
+                    } label: {
+                        LabeledContent {
+                            Text(pedals.isEnabled ? "On" : "Off")
+                        } label: {
+                            Label("Page-Turner Pedals", systemImage: "shoe.2")
+                        }
+                    }
+                } header: {
+                    Text("Bluetooth")
+                } footer: {
+                    Text("Bluetooth MIDI gear — foot controllers, keyboards — pairs here, then shows under MIDI Inputs and Outputs above. Page-turner pedals pair in the device's Bluetooth settings.")
+                }
+
+                Section {
                     ForEach(oscTargets) { target in
                         OSCTargetRow(target: target)
                             .swipeActions(edge: .leading) {
@@ -178,18 +186,6 @@ struct ConnectionsView: View {
                         Text("Mixers and other network gear, such as a Behringer XR18 or X32. Last sent: \(address)")
                     } else {
                         Text("Mixers and other network gear, such as a Behringer XR18 or X32. Swipe a device to edit or delete it.")
-                    }
-                }
-
-                if !midiManager.connectedDevices.isEmpty {
-                    Section {
-                        Button {
-                            showingTestSheet = true
-                        } label: {
-                            Label("Test Connection", systemImage: "waveform")
-                        }
-                    } header: {
-                        Text("Testing")
                     }
                 }
             }

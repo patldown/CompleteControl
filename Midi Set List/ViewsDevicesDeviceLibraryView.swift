@@ -43,15 +43,16 @@ struct DeviceLibraryView: View {
             .offlineStatusBadge()
             .performShortcut()
             .toolbar {
+                // Edit: always top right, first of the buttons there, on every screen
+                if !instruments.isEmpty {
+                    ToolbarItem(placement: .primaryAction) { EditButton() }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showingAddInstrument = true
                     } label: {
                         Label("Add MIDI Instrument", systemImage: "plus")
                     }
-                }
-                if !instruments.isEmpty {
-                    ToolbarItem(placement: .navigationBarLeading) { EditButton() }
                 }
             }
             .sheet(isPresented: $showingAddInstrument) {

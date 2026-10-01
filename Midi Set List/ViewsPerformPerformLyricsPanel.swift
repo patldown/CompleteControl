@@ -5,6 +5,7 @@
 //  Lyrics or sheet music shown inline on the Perform screen, below the snapshots. It
 //  can auto-scroll in place, or expand to fill the app window while the snapshot strip
 //  stays reachable above it. When a song has both, this person's last choice is shown.
+//  Shows the chart for this device's band roles; a switcher appears when there are several.
 //
 
 import SwiftUI
@@ -26,21 +27,24 @@ struct PerformLyricsPanel: View {
     var command: LyricsPanelCommand?
 
     @ObservedObject private var prefs = UserPreferences.shared
+    @ObservedObject private var band = BandSettings.shared
     @State private var isAutoScrolling = false
     @State private var resetTrigger = false
     @State private var showingEditLyrics = false
     @State private var pageRequest: PageRequest?
 
-    private var mode: PerformChartMode? { prefs.chartMode(for: song) }
+    /// The chart for this device's roles (or the one picked in the switcher)
+    private var chart: (any ChartSource)? { band.currentChart(for: song) }
+    private var mode: PerformChartMode? { chart.flatMap { prefs.chartMode(for: $0) } }
     private var cornerRadius: CGFloat { isExpanded ? 0 : 14 }
 
     var body: some View {
         Group {
-            if let mode {
+            if let mode, let chart {
                 VStack(spacing: 0) {
-                    controlBar(mode)
+                    controlBar(mode, chart: chart)
                     ChartContentView(
-                        song: song, mode: mode,
+                        song: song, chart: chart, mode: mode,
                         isScrolling: $isAutoScrolling, resetTrigger: $resetTrigger,
                         fontSize: isExpanded ? 24 : 19,
                         insets: isExpanded
@@ -57,7 +61,7 @@ struct PerformLyricsPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingEditLyrics) {
-            EditLyricsView(song: song)
+            ChartEditorSheet(song: song, chartID: chart?.id)
         }
         .onChange(of: command) { _, command in
             guard let command else { return }
@@ -73,7 +77,7 @@ struct PerformLyricsPanel: View {
 
     // MARK: Controls
 
-    private func controlBar(_ mode: PerformChartMode) -> some View {
+    private func controlBar(_ mode: PerformChartMode, chart: any ChartSource) -> some View {
         HStack(spacing: 12) {
             Button {
                 isAutoScrolling = false
@@ -90,8 +94,12 @@ struct PerformLyricsPanel: View {
 
             Spacer(minLength: 0)
 
-            if song.hasLyricsText && song.hasSheetMusic {
-                ChartModeMenu(song: song, current: mode) { isAutoScrolling = false }
+            if band.visibleCharts(for: song).count > 1 {
+                ChartPartMenu(song: song, current: chart) { isAutoScrolling = false }
+            }
+
+            if chart.hasLyricsText && chart.hasSheetMusic {
+                ChartModeMenu(chart: chart, current: mode) { isAutoScrolling = false }
             }
 
             if mode == .lyrics {
@@ -105,7 +113,7 @@ struct PerformLyricsPanel: View {
                 Label("Reset to Top", systemImage: "arrow.up.to.line")
             }
 
-            speedControl(mode)
+            speedControl(mode, chart: chart)
 
             Button {
                 isAutoScrolling.toggle()
@@ -133,12 +141,12 @@ struct PerformLyricsPanel: View {
         .background(Color.white.opacity(0.08))
     }
 
-    private func speedControl(_ mode: PerformChartMode) -> some View {
-        let speed = prefs.scrollSpeed(for: mode, song: song)
+    private func speedControl(_ mode: PerformChartMode, chart: any ChartSource) -> some View {
+        let speed = prefs.scrollSpeed(for: mode, song: chart)
         let range = UserPreferences.scrollSpeedRange
         return HStack(spacing: 6) {
             Button {
-                prefs.setScrollSpeed(speed - 5, for: mode, song: song)
+                prefs.setScrollSpeed(speed - 5, for: mode, song: chart)
             } label: {
                 Label("Slower", systemImage: "minus")
             }
@@ -150,7 +158,7 @@ struct PerformLyricsPanel: View {
                 .accessibilityLabel("Scroll speed \(Int(speed))")
 
             Button {
-                prefs.setScrollSpeed(speed + 5, for: mode, song: song)
+                prefs.setScrollSpeed(speed + 5, for: mode, song: chart)
             } label: {
                 Label("Faster", systemImage: "plus")
             }

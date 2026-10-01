@@ -15,18 +15,23 @@ struct LyricsPerformanceView: View {
     @ObservedObject var song: Song
 
     @ObservedObject private var prefs = UserPreferences.shared
+    @ObservedObject private var band = BandSettings.shared
     @State private var isAutoScrolling = false
     @State private var showControls = true
     @State private var showingEditLyrics = false
     @State private var resetTrigger = false
     @State private var pageRequest: PageRequest?
 
-    /// Lyrics or sheet music — this person's last choice on this song when it has both
-    private var mode: PerformChartMode { prefs.chartMode(for: song) ?? .lyrics }
+    /// The chart for this device's band roles, or the one picked in the switcher
+    private var chart: any ChartSource { band.currentChart(for: song) ?? song }
+
+    /// Lyrics or sheet music — this person's last choice on this chart when it has both
+    private var mode: PerformChartMode { prefs.chartMode(for: chart) ?? .lyrics }
+    private var hasChart: Bool { prefs.chartMode(for: chart) != nil }
 
     private var scrollSpeed: Binding<Double> {
-        Binding(get: { prefs.scrollSpeed(for: mode, song: song) },
-                set: { prefs.setScrollSpeed($0, for: mode, song: song) })
+        Binding(get: { prefs.scrollSpeed(for: mode, song: chart) },
+                set: { prefs.setScrollSpeed($0, for: mode, song: chart) })
     }
 
     var body: some View {
@@ -39,14 +44,14 @@ struct LyricsPerformanceView: View {
             }
 
             Group {
-                if prefs.chartMode(for: song) == nil {
+                if !hasChart {
                     Text("No lyrics or sheet music yet.\n\nTap Edit to add lyrics, a PDF or images.")
                         .font(.title3)
                         .foregroundStyle(.white.opacity(0.7))
                         .multilineTextAlignment(.center)
                         .padding()
                 } else {
-                    ChartContentView(song: song, mode: mode,
+                    ChartContentView(song: song, chart: chart, mode: mode,
                                      isScrolling: $isAutoScrolling, resetTrigger: $resetTrigger,
                                      pageRequest: pageRequest)
                 }
@@ -59,7 +64,7 @@ struct LyricsPerformanceView: View {
                 }
             }
 
-            if showControls && prefs.chartMode(for: song) != nil {
+            if showControls && hasChart {
                 bottomControls
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -70,7 +75,7 @@ struct LyricsPerformanceView: View {
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .sheet(isPresented: $showingEditLyrics) {
-            EditLyricsView(song: song)
+            ChartEditorSheet(song: song, chartID: chart.id)
         }
     }
 
@@ -98,10 +103,15 @@ struct LyricsPerformanceView: View {
 
             Spacer()
 
-            if song.hasLyricsText && song.hasSheetMusic {
+            if band.visibleCharts(for: song).count > 1 {
+                ChartPartMenu(song: song, current: chart) { isAutoScrolling = false }
+                    .foregroundStyle(.white)
+            }
+
+            if chart.hasLyricsText && chart.hasSheetMusic {
                 Picker("Show", selection: Binding(
                     get: { mode },
-                    set: { isAutoScrolling = false; prefs.setChartMode($0, for: song) }
+                    set: { isAutoScrolling = false; prefs.setChartMode($0, for: chart) }
                 )) {
                     ForEach(PerformChartMode.allCases) { mode in
                         Text(mode.title).tag(mode)
@@ -192,6 +202,8 @@ struct AutoScrollingTextView: UIViewRepresentable {
     var chordsPreferFlats: Bool? = nil
     /// Turn-the-page requests, e.g. from a page-turner pedal
     var pageRequest: PageRequest? = nil
+    /// The chart shown, for Live Follow scrolling
+    var liveChartID: UUID? = nil
     /// Blank lines above the lyrics come from this person's preferences
     @ObservedObject private var prefs = UserPreferences.shared
 
@@ -279,6 +291,7 @@ struct AutoScrollingTextView: UIViewRepresentable {
         } else {
             context.coordinator.stopScrolling()
         }
+        context.coordinator.attachLiveScroll(chartID: liveChartID)
     }
 
     func makeCoordinator() -> Coordinator {

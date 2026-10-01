@@ -44,7 +44,8 @@ final class PerformanceSession {
     /// The song MIDI snapshot triggers act on.
     var activeSong: Song? { currentSong ?? focusedSong }
 
-    /// Last snapshot recalled on `activeSong` (0-based).
+    /// Last snapshot recalled on `activeSong` (0-based); -1 when a song loaded without
+    /// sending one (see Song.sendsSnapshotOnLoad), so "next snapshot" goes to Snapshot 1.
     private(set) var activeSnapshot = 0
 
     // ── Feedback for the UI ───────────────────────────────────────────
@@ -65,9 +66,14 @@ final class PerformanceSession {
     private var sendTask: Task<Void, Never>?
     private let settings = MIDIRemoteSettings.shared
 
+    /// Called whenever the set list, song or live snapshot changes — Live Follow's
+    /// leader broadcasts it to the band
+    var onStateChange: (() -> Void)?
+
     // MARK: - Set list playback
 
-    /// Starts a set list: loads the first song (or `index`) and sends its Snapshot 1.
+    /// Starts a set list: loads the first song (or `index`) and sends its Snapshot 1
+    /// unless the song has that turned off.
     func play(_ setList: SetList, startAt index: Int = 0) {
         self.setList = setList
         activityLog?.log("Perform: started \"\(setList.name)\"", direction: .system)
@@ -81,6 +87,7 @@ final class PerformanceSession {
         songIndex = 0
         activeSnapshot = 0
         lastError = nil
+        onStateChange?()
     }
 
     func goToSong(_ index: Int) {
@@ -89,7 +96,43 @@ final class PerformanceSession {
         songIndex = index
         let song = list[index]
         followClock(for: song)
-        recall(snapshot: 0, of: song)
+        if song.sendsSnapshotOnLoad {
+            recall(snapshot: 0, of: song)
+        } else {
+            sendTask?.cancel()
+            isSending = false
+            lastError = nil
+            activeSnapshot = -1
+            onStateChange?()
+        }
+    }
+
+    /// Live Follow: move to the leader's set list, song and snapshot. With `sendCommands`
+    /// off (the default) nothing is sent — the leader's gear is already being driven,
+    /// and a follower sending too would double every change on shared equipment.
+    func follow(_ setList: SetList, songIndex index: Int, snapshot: Int, sendCommands: Bool) {
+        if self.setList?.objectID != setList.objectID {
+            self.setList = setList
+            activityLog?.log("Perform: following \"\(setList.name)\"", direction: .system)
+        }
+        let list = songs
+        guard list.indices.contains(index) else { return }
+        let songChanged = index != songIndex
+        songIndex = index
+        let song = list[index]
+
+        guard sendCommands else {
+            sendTask?.cancel()
+            isSending = false
+            activeSnapshot = snapshot
+            return
+        }
+        if songChanged { followClock(for: song) }
+        if snapshot < 0 {
+            activeSnapshot = -1
+        } else if songChanged || snapshot != activeSnapshot {
+            recall(snapshot: snapshot, of: song)
+        }
     }
 
     func nextSong() { if hasNextSong { goToSong(songIndex + 1) } }
@@ -192,6 +235,7 @@ final class PerformanceSession {
         lastError = nil
         sendTask?.cancel()
         isSending = false
+        onStateChange?()
         guard let midiManager, !song.commands(inSnapshot: index).isEmpty else { return }
 
         isSending = true
@@ -210,7 +254,7 @@ final class PerformanceSession {
     /// If the MIDI clock is running, move it to the new song's tempo (or stop it).
     private func followClock(for song: Song) {
         guard let midiManager, midiManager.isClockRunning else { return }
-        if let bpm = song.bpm {
+        if let bpm = song.clockBPM {
             midiManager.startClock(bpm: bpm, sendTransport: midiManager.clockSendsTransport)
         } else {
             midiManager.stopClock()

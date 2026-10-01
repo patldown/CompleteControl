@@ -10,10 +10,11 @@ import CoreData
 import UniformTypeIdentifiers
 import PhotosUI
 
-struct EditLyricsView: View {
+/// Edits a chart's lyrics and sheet music — a song's built-in chart or one of its parts
+struct EditLyricsView<Source: NSManagedObject & ChartSource>: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var song: Song
+    @ObservedObject var source: Source
 
     @State private var lyricsText: String
     @State private var showingFilePicker = false
@@ -22,9 +23,9 @@ struct EditLyricsView: View {
     @State private var isImportingImages = false
     @FocusState private var isEditorFocused: Bool
 
-    init(song: Song) {
-        self.song = song
-        _lyricsText = State(initialValue: song.lyrics ?? "")
+    init(source: Source) {
+        self.source = source
+        _lyricsText = State(initialValue: source.lyrics ?? "")
     }
 
     var body: some View {
@@ -43,16 +44,16 @@ struct EditLyricsView: View {
 
                 // Sheet music row: one PDF, or a set of images (adding one replaces the other)
                 HStack {
-                    if song.pdfFileName != nil {
+                    if source.pdfFileName != nil {
                         Image(systemName: "doc.fill")
                             .foregroundStyle(.red)
                         Text("Sheet music PDF attached")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    } else if !song.chartImageNames.isEmpty {
+                    } else if !source.chartImageNames.isEmpty {
                         Image(systemName: "photo.on.rectangle")
                             .foregroundStyle(.blue)
-                        let count = song.chartImageNames.count
+                        let count = source.chartImageNames.count
                         Text("Sheet music: \(count) image\(count == 1 ? "" : "s")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -67,9 +68,9 @@ struct EditLyricsView: View {
                     if isImportingImages {
                         ProgressView().controlSize(.small)
                     }
-                    Menu(song.hasSheetMusic ? "Change" : "Attach") {
+                    Menu(source.hasSheetMusic ? "Change" : "Attach") {
                         PhotosPicker(selection: $photoItems, maxSelectionCount: 40, matching: .images) {
-                            Label(song.chartImageNames.isEmpty ? "Images from Photos" : "Add Images from Photos",
+                            Label(source.chartImageNames.isEmpty ? "Images from Photos" : "Add Images from Photos",
                                   systemImage: "photo.on.rectangle")
                         }
                         Button {
@@ -79,7 +80,7 @@ struct EditLyricsView: View {
                         }
                     }
                     .font(.caption)
-                    if song.hasSheetMusic {
+                    if source.hasSheetMusic {
                         Button("Remove") {
                             removeSheetMusic()
                         }
@@ -106,7 +107,7 @@ struct EditLyricsView: View {
                     .scrollContentBackground(.hidden)
                     .background(Color(.systemBackground))
             }
-            .navigationTitle("Lyrics & Sheet Music")
+            .navigationTitle(source is Song ? "Lyrics & Sheet Music" : source.chartName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -175,7 +176,7 @@ struct EditLyricsView: View {
     }
 
     private func saveLyrics() {
-        song.lyrics = lyricsText.isEmpty ? nil : lyricsText
+        source.lyrics = lyricsText.isEmpty ? nil : lyricsText
         try? viewContext.save()
         dismiss()
     }
@@ -184,7 +185,7 @@ struct EditLyricsView: View {
         let accessed = sourceURL.startAccessingSecurityScopedResource()
         defer { if accessed { sourceURL.stopAccessingSecurityScopedResource() } }
 
-        let filename = "\(song.id.uuidString).pdf"
+        let filename = "\(source.id.uuidString).pdf"
         guard let docDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
         let destURL = docDir.appendingPathComponent(filename)
 
@@ -194,7 +195,7 @@ struct EditLyricsView: View {
             }
             try FileManager.default.copyItem(at: sourceURL, to: destURL)
             removeImages()  // a PDF replaces any sheet-music images
-            song.pdfFileName = filename
+            source.pdfFileName = filename
             pdfError = nil
             try? viewContext.save()
         } catch {
@@ -203,15 +204,15 @@ struct EditLyricsView: View {
     }
 
     private func removePDF() {
-        if let url = song.pdfFileURL {
+        if let url = source.pdfFileURL {
             try? FileManager.default.removeItem(at: url)
         }
-        song.pdfFileName = nil
+        source.pdfFileName = nil
     }
 
     private func removeImages() {
-        song.chartImageURLs.forEach { try? FileManager.default.removeItem(at: $0) }
-        song.chartImageNames = []
+        source.chartImageURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+        source.chartImageNames = []
     }
 
     private func removeSheetMusic() {
@@ -224,11 +225,11 @@ struct EditLyricsView: View {
     /// down so pages stay sharp without filling the device.
     private func addImages(_ datas: [Data]) {
         guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        var names = song.chartImageNames
+        var names = source.chartImageNames
         var failed = 0
         for data in datas {
             guard let image = UIImage(data: data), let jpeg = Self.pageJPEG(image) else { failed += 1; continue }
-            let name = "\(song.id.uuidString)-page-\(UUID().uuidString).jpg"
+            let name = "\(source.id.uuidString)-page-\(UUID().uuidString).jpg"
             do {
                 try jpeg.write(to: docs.appendingPathComponent(name), options: .atomic)
                 names.append(name)
@@ -236,12 +237,12 @@ struct EditLyricsView: View {
                 failed += 1
             }
         }
-        guard names != song.chartImageNames else {
+        guard names != source.chartImageNames else {
             if failed > 0 { pdfError = "Could not add \(failed) image\(failed == 1 ? "" : "s")." }
             return
         }
         removePDF()  // images replace a sheet-music PDF
-        song.chartImageNames = names
+        source.chartImageNames = names
         pdfError = failed > 0 ? "\(failed) image\(failed == 1 ? "" : "s") could not be added." : nil
         try? viewContext.save()
     }
@@ -258,6 +259,10 @@ struct EditLyricsView: View {
         }
         return resized.jpegData(compressionQuality: 0.85)
     }
+}
+
+extension EditLyricsView where Source == Song {
+    init(song: Song) { self.init(source: song) }
 }
 
 #Preview {

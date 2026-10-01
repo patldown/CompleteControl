@@ -2,19 +2,22 @@
 //  SongSnapshotsSection.swift
 //  Midi Set List
 //
-//  The snapshot strip at the top of a song's command list. Each snapshot is its
-//  own group of macros / macro groups / commands; the list below shows whichever
-//  snapshot is selected here.
+//  One container for a song's snapshots: the strip of snapshot cards on top, and
+//  under it whatever the caller passes as `content` — the selected snapshot's
+//  macros / commands and the buttons to add or send them.
 //
 
 import SwiftUI
 import CoreData
 
-struct SongSnapshotsSection: View {
+struct SongSnapshotsSection<Content: View>: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(PerformanceSession.self) private var performance
     @ObservedObject var song: Song
     @Binding var selected: Int
+    /// Replaces the usual hint under the section (e.g. while selecting commands)
+    var footerOverride: String?
+    @ViewBuilder var content: Content
     @ObservedObject private var remote = MIDIRemoteSettings.shared
 
     @State private var renamingIndex: Int?
@@ -35,6 +38,8 @@ struct SongSnapshotsSection: View {
                 .padding(.vertical, 4)
             }
             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
+            content
         } header: {
             HStack {
                 Text("Snapshots")
@@ -43,7 +48,7 @@ struct SongSnapshotsSection: View {
                     .foregroundStyle(.secondary)
             }
         } footer: {
-            Text(footerText)
+            Text(footerOverride ?? footerText)
         }
         .alert("Rename Snapshot", isPresented: Binding(
             get: { renamingIndex != nil },
@@ -87,7 +92,7 @@ struct SongSnapshotsSection: View {
     }
 
     private var footerText: String {
-        var text = "Snapshot 1 is sent when the song loads. Tap a snapshot to edit it; long-press to rename, duplicate, delete or learn its MIDI pedal."
+        var text = "Tap a snapshot to see its commands. Long-press it to rename, duplicate, delete or learn its MIDI pedal. Commands send top to bottom; drag to reorder."
         if !song.canAddSnapshot && song.snapshotCount < Song.maxSnapshots {
             text += " Add something to Snapshot 1 to unlock more snapshots."
         }

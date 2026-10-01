@@ -84,6 +84,7 @@ enum AITask: String, CaseIterable {
     case bulkCheck       = "task_bulk_check"
     case bulkSplit       = "task_bulk_split"
     case setListAssistant = "task_set_list_assistant"
+    case songDetails     = "task_song_details"
 
     var displayName: String {
         switch self {
@@ -93,6 +94,7 @@ enum AITask: String, CaseIterable {
         case .bulkCheck:       return "Detect Bulk Requests"
         case .bulkSplit:       return "Split Bulk Requests"
         case .setListAssistant: return "Set List Assistant"
+        case .songDetails:     return "Song Details (Shortcut)"
         }
     }
 }
