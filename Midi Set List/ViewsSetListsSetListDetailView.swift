@@ -24,7 +24,10 @@ struct SetListDetailView: View {
     @State private var showingPlaylist = false
     
     var body: some View {
-        List {
+        let songs = setList.songs
+        let commandCount = songs.reduce(0) { $0 + $1.commands.count }
+
+        return List {
             Section("Information") {
                 LabeledContent("Name") {
                     TextField("Set List Name", text: Binding(
@@ -33,7 +36,7 @@ struct SetListDetailView: View {
                     ))
                     .multilineTextAlignment(.trailing)
                 }
-                
+
                 LabeledContent("Notes") {
                     TextField("Notes", text: Binding(
                         get: { setList.notes ?? "" },
@@ -41,13 +44,13 @@ struct SetListDetailView: View {
                     ), axis: .vertical)
                     .multilineTextAlignment(.trailing)
                 }
-                
-                LabeledContent("Songs", value: "\(setList.songs.count)")
-                LabeledContent("Commands", value: "\(setList.totalCommandCount)")
+
+                LabeledContent("Songs", value: "\(songs.count)")
+                LabeledContent("Commands", value: "\(commandCount)")
             }
-            
+
             // MIDI Send Section for entire set list
-            if !setList.songs.isEmpty && midiManager.isInitialized {
+            if !songs.isEmpty && midiManager.isInitialized {
                 Section {
                     Button {
                         Task {
@@ -63,7 +66,7 @@ struct SetListDetailView: View {
                             Text("Send Entire Set List")
                             Spacer()
                             if !midiManager.connectedDevices.isEmpty {
-                                Text("\(setList.totalCommandCount) cmd")
+                                Text("\(commandCount) cmd")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }

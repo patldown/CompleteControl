@@ -102,20 +102,23 @@ struct SetListRowView: View {
     let setList: SetList
     
     var body: some View {
+        let songs = setList.songs
+        let commandCount = songs.reduce(0) { $0 + $1.commands.count }
+
         VStack(alignment: .leading, spacing: 6) {
             Text(setList.name)
                 .font(.headline)
-            
+
             HStack(spacing: 12) {
-                Label("\(setList.songs.count)", systemImage: "music.note")
+                Label("\(songs.count)", systemImage: "music.note")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                
-                if setList.totalCommandCount > 0 {
+
+                if commandCount > 0 {
                     Text("•")
                         .foregroundStyle(.secondary)
-                    
-                    Label("\(setList.totalCommandCount)", systemImage: "command")
+
+                    Label("\(commandCount)", systemImage: "command")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

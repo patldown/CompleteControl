@@ -11,6 +11,45 @@
 		<key>UIImageRespectsSafeAreaInsets</key>
 		<false/>
 	</dict>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.patrick-downey.midi-set-list.archive</string>
+			<key>UTTypeDescription</key>
+			<string>Midi Set List Archive</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>msl</string>
+				</array>
+				<key>public.mime-type</key>
+				<string>application/json</string>
+			</dict>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Midi Set List Archive</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.patrick-downey.midi-set-list.archive</string>
+			</array>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>msl</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_apple-midi._udp</string>

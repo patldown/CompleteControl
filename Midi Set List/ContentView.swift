@@ -10,6 +10,13 @@ import CoreData
 
 struct ContentView: View {
     @State private var navigation = AppNavigation()
+    @State private var pendingImport: PendingImport?
+    @State private var importError: String?
+
+    private struct PendingImport: Identifiable {
+        let id = UUID()
+        let archive: DataArchive
+    }
 
     var body: some View {
         TabView(selection: $navigation.selectedTab) {
@@ -48,6 +55,22 @@ struct ContentView: View {
         .floatingPerformShortcut(navigation)
         .liveFollowPrompts()
         .environment(navigation)
+        .onOpenURL { url in
+            do {
+                pendingImport = PendingImport(archive: try DataArchiveImporter.read(url))
+            } catch {
+                importError = error.localizedDescription
+            }
+        }
+        .sheet(item: $pendingImport) { ImportReviewSheet(archive: $0.archive) }
+        .alert("Couldn't Open File", isPresented: Binding(
+            get: { importError != nil },
+            set: { if !$0 { importError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let importError { Text(importError) }
+        }
     }
 }
 

@@ -11,6 +11,10 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+extension UTType {
+    static let midiSetListArchive = UTType(exportedAs: "com.patrick-downey.midi-set-list.archive")
+}
+
 // MARK: - Exportable archive (built only when the user picks a destination)
 
 /// A backup or shared item as a file. The JSON is built when the share sheet
@@ -61,12 +65,61 @@ struct ShareItemButton: View {
     let kindName: String      // e.g. "Set List"
     let itemName: String
 
+    @State private var isPreparing = false
+    @State private var readyFile: ReadyFile?
+    @State private var errorMessage: String?
+
+    private struct ReadyFile: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
+
     var body: some View {
-        ShareLink(
-            item: ArchiveFile.share(object, kindName: kindName, itemName: itemName),
-            preview: SharePreview("\(kindName): \(itemName)")
-        ) {
-            Label("Share \(kindName)…", systemImage: "square.and.arrow.up")
+        Button {
+            Task { await prepare() }
+        } label: {
+            if isPreparing {
+                Label("Preparing…", systemImage: "hourglass")
+            } else {
+                Label("Share \(kindName)…", systemImage: "square.and.arrow.up")
+            }
+        }
+        .disabled(isPreparing)
+        .sheet(item: $readyFile) { file in
+            ActivityShareSheet(items: [file.url])
+                .presentationDetents([.medium, .large])
+                .ignoresSafeArea()
+        }
+        .alert("Couldn't Share", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let errorMessage { Text(errorMessage) }
+        }
+    }
+
+    @MainActor
+    private func prepare() async {
+        isPreparing = true
+        defer { isPreparing = false }
+        do {
+            let objectID = object.objectID
+            let title = "\(kindName): \(itemName)"
+            let fileName = "\(kindName) - \(itemName).msl"
+            // Build archive on a background Core Data context so the main thread stays free
+            let bgContext = PersistenceController.shared.newBackgroundContext()
+            let archive = try await bgContext.perform {
+                try DataArchiveExporter.share([bgContext.object(with: objectID)], title: title)
+            }
+            // JSON encoding + file write is also off the main thread
+            let url = try await Task.detached(priority: .userInitiated) {
+                try DataArchiveExporter.write(archive, fileName: fileName)
+            }.value
+            readyFile = ReadyFile(url: url)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }
@@ -123,7 +176,7 @@ struct BackupSection: View {
                 .presentationDetents([.medium, .large])
                 .ignoresSafeArea()
         }
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.json], allowsMultipleSelection: false) { result in
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.midiSetListArchive, .json], allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
