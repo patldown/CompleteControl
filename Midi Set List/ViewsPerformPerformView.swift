@@ -219,8 +219,7 @@ private struct PerformPlayingView: View {
                 Button(role: .destructive) {
                     performance.stop()
                 } label: {
-                    Label("End", systemImage: "stop.fill")
-                        .labelStyle(.titleAndIcon)
+                    Label("End Set", systemImage: "stop.fill")
                 }
                 .tint(.red)
             }

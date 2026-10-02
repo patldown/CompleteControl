@@ -186,6 +186,7 @@ struct BackupSection: View {
     @State private var errorMessage: String?
     @State private var isPreparingBackup = false
     @State private var readyBackup: ReadyFile?
+    @State private var showBackupSavedBanner = false
 
     struct ReadyFile: Identifiable {
         let id = UUID()
@@ -226,9 +227,16 @@ struct BackupSection: View {
         }
         .sheet(item: $pendingImport) { ImportReviewSheet(archive: $0.archive) }
         .sheet(item: $readyBackup) { file in
-            ActivityShareSheet(items: [file.url])
-                .presentationDetents([.medium, .large])
-                .ignoresSafeArea()
+            ActivityShareSheet(items: [file.url]) { saved in
+                if saved { showBackupSavedBanner = true }
+            }
+            .presentationDetents([.medium, .large])
+            .ignoresSafeArea()
+        }
+        .alert("Backup Saved", isPresented: $showBackupSavedBanner) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Your backup file was saved successfully.")
         }
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.midiSetListArchive, .json], allowsMultipleSelection: false) { result in
             switch result {
@@ -275,9 +283,15 @@ struct BackupSection: View {
 /// The system share sheet (Save to Files, AirDrop, Mail…) for files that are already made
 struct ActivityShareSheet: UIViewControllerRepresentable {
     let items: [Any]
+    /// Called when the sheet completes; `saved` is true when the user performed an action (vs. cancelled).
+    var onComplete: ((_ saved: Bool) -> Void)? = nil
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        vc.completionWithItemsHandler = { _, completed, _, _ in
+            DispatchQueue.main.async { onComplete?(completed) }
+        }
+        return vc
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}

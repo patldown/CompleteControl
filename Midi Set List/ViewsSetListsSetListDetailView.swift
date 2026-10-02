@@ -136,6 +136,7 @@ struct SetListDetailView: View {
         }
         .navigationTitle(setList.name)
         .navigationBarTitleDisplayMode(.inline)
+        .performShortcutDetail()
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 EditButton()

@@ -296,8 +296,10 @@ struct QuickMacrosPickerView: View {
 
     private func addMacro(_ macro: DeviceMacro) {
         let commands = macro.toMIDICommands(in: viewContext)
+        let groupInstanceID = macro.isGroup ? UUID().uuidString : nil
         for command in commands {
             command.sourceMacro = macro
+            command.sourceGroupInstanceID = groupInstanceID
             song.addCommand(command, toSnapshot: snapshotIndex)
         }
         try? viewContext.save()

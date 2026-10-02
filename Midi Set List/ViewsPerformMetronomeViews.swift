@@ -2,10 +2,12 @@
 //  MetronomeViews.swift
 //  Midi Set List
 //
-//  Perform's click: a start / stop button and a dot per beat that lights on the beat.
-//  The dots read the same host-clock timeline the audio clicks are made from.
+//  Perform's click: a toggle that enables auto-start per song, a standalone play button,
+//  and a dot-per-beat display. The dots read the same host-clock timeline the audio
+//  clicks are made from.
 //
 
+import CoreData
 import SwiftUI
 
 struct MetronomeControl: View {
@@ -15,12 +17,20 @@ struct MetronomeControl: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
+                // Toggle: auto-start the click when this song loads in Perform
+                Toggle(isOn: clickEnabledBinding) {
+                    Label("Click", systemImage: "metronome")
+                        .font(.subheadline)
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
+
+                // Standalone play: run the click without needing auto-scroll or perform mode
                 Button {
                     performance.toggleMetronome()
                 } label: {
-                    Label(metronome.isRunning ? "Stop Click" : "Click",
-                          systemImage: metronome.isRunning ? "stop.fill" : "metronome")
+                    Image(systemName: metronome.isRunning ? "stop.fill" : "play.fill")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -46,6 +56,21 @@ struct MetronomeControl: View {
                     .foregroundStyle(.orange)
             }
         }
+    }
+
+    private var clickEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { song.clickEnabled },
+            set: { enabled in
+                song.clickEnabled = enabled
+                try? song.managedObjectContext?.save()
+                if enabled, !metronome.isRunning {
+                    performance.toggleMetronome()
+                } else if !enabled, metronome.isRunning {
+                    metronome.stop()
+                }
+            }
+        )
     }
 }
 

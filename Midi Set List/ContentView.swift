@@ -52,7 +52,12 @@ struct ContentView: View {
                 SettingsView()
             }
         }
-        .floatingPerformShortcut(navigation)
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottomLeading) {
+            SystemStatsView()
+                .padding(.leading, 8)
+                .padding(.bottom, 8)
+        }
         .liveFollowPrompts()
         .environment(navigation)
         .onOpenURL { url in

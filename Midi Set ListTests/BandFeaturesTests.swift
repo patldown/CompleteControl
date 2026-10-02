@@ -583,3 +583,150 @@ struct SongClockTests {
         #expect(song.clockBPM == nil)
     }
 }
+
+// MARK: - Group macro stamp and snapshot behavior
+
+@Suite("GroupMacro")
+@MainActor
+struct GroupMacroTests {
+    let controller = PersistenceController(inMemory: true)
+    var ctx: NSManagedObjectContext { controller.viewContext }
+
+    // MARK: Fixture
+
+    /// Five-song set list with two solo macros and one group macro.
+    /// soloA: LSB + PC (2 commands); soloB: CC only (1 command)
+    /// groupMacro: [soloA, soloB] → expands to 3 commands total
+    private struct Fixture {
+        let setList: SetList
+        let songs: [Song]
+        let soloA: DeviceMacro
+        let soloB: DeviceMacro
+        let groupMacro: DeviceMacro
+        let device: InstrumentDevice
+        let category: MacroCategory
+    }
+
+    private func makeFixture() -> Fixture {
+        let device = InstrumentDevice.create(name: "Synth One", manufacturer: "ArtValley", in: ctx)
+        let category = MacroCategory.create(name: "Patches", device: device, in: ctx)
+
+        let soloA = DeviceMacro.create(name: "Bank A", lsbValue: 0, pcValue: 1, in: ctx)
+        soloA.category = category
+        let soloB = DeviceMacro.create(name: "Volume Up", ccNumber: 7, ccValue: 100, in: ctx)
+        soloB.category = category
+
+        let group = DeviceMacro.create(name: "Full Init", in: ctx)
+        group.isGroup = true
+        group.setChildMacros([soloA, soloB])
+        group.category = category
+
+        let songNames = ["Clocks", "Fix You", "The Scientist", "Yellow", "Speed of Sound"]
+        let songs = songNames.map { Song.create(name: $0, in: ctx) }
+        let setList = SetList.create(name: "Coldplay Night", in: ctx)
+        songs.forEach { setList.addSong($0) }
+
+        return Fixture(setList: setList, songs: songs,
+                       soloA: soloA, soloB: soloB, groupMacro: group,
+                       device: device, category: category)
+    }
+
+    /// Replicates the stamp logic from QuickMacrosPickerView.addMacro and Song.applyMacroDrift.
+    private func addMacro(_ macro: DeviceMacro, to song: Song, snapshot: Int = 0) {
+        let commands = macro.toMIDICommands(in: ctx)
+        let groupInstanceID = macro.isGroup ? UUID().uuidString : nil
+        for command in commands {
+            command.sourceMacro = macro
+            command.sourceGroupInstanceID = groupInstanceID
+            song.addCommand(command, toSnapshot: snapshot)
+        }
+    }
+
+    // MARK: Fixture validation
+
+    @Test func fixture_hasFiveSongsInSetList() {
+        let f = makeFixture()
+        #expect(f.setList.songs.count == 5)
+        #expect(f.songs.map(\.name) == ["Clocks", "Fix You", "The Scientist", "Yellow", "Speed of Sound"])
+    }
+
+    @Test func fixture_groupHasTwoChildren() {
+        let f = makeFixture()
+        #expect(f.groupMacro.isGroup)
+        #expect(f.groupMacro.childMacros.count == 2)
+    }
+
+    @Test func fixture_groupExpandsToThreeCommands() {
+        let f = makeFixture()
+        // soloA → LSB + PC = 2 commands; soloB → CC = 1 command
+        #expect(f.groupMacro.toMIDICommands(in: ctx).count == 3)
+    }
+
+    // MARK: sourceGroupInstanceID stamping
+
+    @Test func groupMacro_allCommandsShareSameInstanceID() {
+        let f = makeFixture()
+        let song = f.songs[0]
+        addMacro(f.groupMacro, to: song)
+        let cmds = song.commands(inSnapshot: 0)
+        #expect(cmds.count == 3)
+        #expect(cmds.allSatisfy { $0.sourceGroupInstanceID != nil })
+        #expect(Set(cmds.compactMap(\.sourceGroupInstanceID)).count == 1)
+    }
+
+    @Test func groupMacro_addedTwice_givesDifferentInstanceIDs() {
+        let f = makeFixture()
+        let song = f.songs[0]
+        addMacro(f.groupMacro, to: song)
+        addMacro(f.groupMacro, to: song)
+        let ids = Set(song.commands(inSnapshot: 0).compactMap(\.sourceGroupInstanceID))
+        #expect(ids.count == 2)
+    }
+
+    @Test func soloMacro_hasNilInstanceID() {
+        let f = makeFixture()
+        let song = f.songs[1]
+        addMacro(f.soloA, to: song)
+        let cmds = song.commands(inSnapshot: 0)
+        #expect(cmds.allSatisfy { $0.sourceGroupInstanceID == nil })
+    }
+
+    // MARK: duplicateSnapshot preserves instanceID
+
+    @Test func duplicateSnapshot_copiesGroupInstanceID() throws {
+        let f = makeFixture()
+        let song = f.songs[2]
+        addMacro(f.groupMacro, to: song)
+        try ctx.save()
+        let originalIDs = song.commands(inSnapshot: 0).compactMap(\.sourceGroupInstanceID)
+
+        _ = song.duplicateSnapshot(0, in: ctx)
+
+        #expect(song.commands(inSnapshot: 1).compactMap(\.sourceGroupInstanceID) == originalIDs)
+    }
+
+    @Test func duplicateSnapshot_soloCommandsRetainNilInstanceID() throws {
+        let f = makeFixture()
+        let song = f.songs[3]
+        addMacro(f.soloB, to: song)
+        try ctx.save()
+
+        _ = song.duplicateSnapshot(0, in: ctx)
+
+        #expect(song.commands(inSnapshot: 1).allSatisfy { $0.sourceGroupInstanceID == nil })
+    }
+
+    // MARK: Mixed snapshot (group + solo in same snapshot)
+
+    @Test func mixedSnapshot_groupCommandsHaveInstanceID_soloDoesNot() {
+        let f = makeFixture()
+        let song = f.songs[4]
+        addMacro(f.groupMacro, to: song)  // 3 commands with instanceID
+        addMacro(f.soloB, to: song)        // 1 command, nil instanceID
+
+        let cmds = song.commands(inSnapshot: 0)
+        #expect(cmds.count == 4)
+        #expect(cmds.filter { $0.sourceGroupInstanceID != nil }.count == 3)
+        #expect(cmds.filter { $0.sourceGroupInstanceID == nil }.count == 1)
+    }
+}

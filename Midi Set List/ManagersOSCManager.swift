@@ -21,6 +21,26 @@ class OSCManager {
     private var keepaliveTimers: [UUID: DispatchSourceTimer] = [:]
     private let oscQueue = DispatchQueue(label: "com.midisetlist.osc", qos: .userInteractive)
 
+    /// UUIDs of targets the user has connected to — persisted so they auto-reconnect on launch.
+    private var desiredTargetIDs: Set<UUID> = []
+    private let desiredTargetIDsKey = "osc.desiredTargetIDs"
+
+    // MARK: - Persistence helpers
+
+    private func persistDesiredTargetIDs() {
+        UserDefaults.standard.set(desiredTargetIDs.map { $0.uuidString }, forKey: desiredTargetIDsKey)
+    }
+
+    /// Reconnects any target whose ID was previously saved as "desired connected."
+    /// Call on launch after Core Data targets are available.
+    func restoreConnections(from targets: [OSCTarget]) {
+        let raw = UserDefaults.standard.stringArray(forKey: desiredTargetIDsKey) ?? []
+        desiredTargetIDs = Set(raw.compactMap { UUID(uuidString: $0) })
+        for target in targets where desiredTargetIDs.contains(target.id) {
+            connect(to: target)
+        }
+    }
+
     // MARK: - Connection Management
 
     func connect(to target: OSCTarget) {
@@ -58,6 +78,8 @@ class OSCManager {
 
         connections[target.id] = connection
         connectedTargets.insert(target.id)
+        desiredTargetIDs.insert(target.id)
+        persistDesiredTargetIDs()
         activityLog?.log("OSC connecting: \(target.name) (\(target.host) tx:\(target.sendPort) rx:\(target.receivePort))", direction: .system, proto: .osc)
 
         startKeepalive(for: target)
@@ -70,6 +92,8 @@ class OSCManager {
         connections[target.id]?.cancel()
         connections.removeValue(forKey: target.id)
         connectedTargets.remove(target.id)
+        desiredTargetIDs.remove(target.id)
+        persistDesiredTargetIDs()
         activityLog?.log("OSC disconnected: \(target.name)", direction: .system, proto: .osc)
     }
 

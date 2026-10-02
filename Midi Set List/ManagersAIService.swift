@@ -78,17 +78,19 @@ enum AIProviderType: String, CaseIterable, Identifiable {
 // MARK: - Task type (one routing slot per AI feature)
 
 enum AITask: String, CaseIterable {
-    case macroChat       = "task_macro_chat"
-    case specAnalysis    = "task_spec_analysis"
-    case macroGeneration = "task_macro_generation"
-    case bulkCheck       = "task_bulk_check"
-    case bulkSplit       = "task_bulk_split"
+    case macroChat        = "task_macro_chat"
+    case libraryChat      = "task_library_chat"
+    case specAnalysis     = "task_spec_analysis"
+    case macroGeneration  = "task_macro_generation"
+    case bulkCheck        = "task_bulk_check"
+    case bulkSplit        = "task_bulk_split"
     case setListAssistant = "task_set_list_assistant"
-    case songDetails     = "task_song_details"
+    case songDetails      = "task_song_details"
 
     var displayName: String {
         switch self {
         case .macroChat:       return "Macro Chat (wand)"
+        case .libraryChat:     return "Device Library AI (wand)"
         case .specAnalysis:    return "Build Reference File"
         case .macroGeneration: return "Generate Macros"
         case .bulkCheck:       return "Detect Bulk Requests"

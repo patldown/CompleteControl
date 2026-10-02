@@ -366,7 +366,8 @@ class Song: NSManagedObject, Identifiable, ChartSource {
             copy.oscFormula    = original.oscFormula
             copy.value1Formula = original.value1Formula
             copy.value2Formula = original.value2Formula
-            copy.sourceMacro   = original.sourceMacro
+            copy.sourceMacro            = original.sourceMacro
+            copy.sourceGroupInstanceID  = original.sourceGroupInstanceID
             addCommand(copy, toSnapshot: newIndex)
         }
         return newIndex
@@ -470,7 +471,13 @@ class Song: NSManagedObject, Identifiable, ChartSource {
         let before = Array(allSorted.prefix(anchorIndex))
         let after  = allSorted.dropFirst(anchorIndex).filter { $0.sourceMacro?.objectID != macro.objectID }
         let newCmds = macro.toMIDICommands(in: context)
-        newCmds.forEach { $0.sourceMacro = macro; $0.song = self; $0.snapshotIndex = snapshot }
+        let groupInstanceID = macro.isGroup ? UUID().uuidString : nil
+        newCmds.forEach {
+            $0.sourceMacro = macro
+            $0.song = self
+            $0.snapshotIndex = snapshot
+            $0.sourceGroupInstanceID = groupInstanceID
+        }
 
         // Delete old macro commands
         macroCommands.forEach {

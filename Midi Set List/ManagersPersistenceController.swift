@@ -177,6 +177,7 @@ final class PersistenceController {
             attr("value1Formula",        .stringAttributeType,    optional: true),
             attr("value2Formula",        .stringAttributeType,    optional: true),
             attr("snapshotIndexRaw",     .integer16AttributeType, defaultValue: Int16(0)),
+            attr("sourceGroupInstanceID",.stringAttributeType,    optional: true),
         ]
 
         setListE.properties = [

@@ -12,7 +12,10 @@ struct DeviceLibraryView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @FetchRequest(sortDescriptors: [SortDescriptor(\.name)]) private var instruments: FetchedResults<InstrumentDevice>
 
+    @StateObject private var libraryChatSession = DeviceLibraryChatSession()
+    @ObservedObject private var ai = AISettings.shared
     @State private var showingAddInstrument = false
+    @State private var showingLibraryChat = false
 
     var body: some View {
         NavigationStack {
@@ -54,9 +57,22 @@ struct DeviceLibraryView: View {
                         Label("Add MIDI Instrument", systemImage: "plus")
                     }
                 }
+                if ai.isAvailable(.libraryChat) {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { showingLibraryChat = true } label: {
+                            Image(systemName: "wand.and.stars")
+                                .foregroundStyle(ai.offlineMode ? Color.offlineMode : .accentColor)
+                                .offlineModeDot(ai.offlineMode)
+                        }
+                        .accessibilityLabel(ai.offlineMode ? "Device Library AI (offline, on-device)" : "Device Library AI")
+                    }
+                }
             }
             .sheet(isPresented: $showingAddInstrument) {
                 AddEditDeviceView()
+            }
+            .sheet(isPresented: $showingLibraryChat) {
+                DeviceLibraryChatView(chatSession: libraryChatSession)
             }
         }
     }

@@ -17,7 +17,9 @@ struct SongDetailView: View {
 
     /// The snapshot whose commands are listed and edited below.
     @State private var selectedSnapshot = 0
-    
+    /// Group macro instance IDs that are currently expanded in the snapshot list.
+    @State private var expandedGroups: Set<String> = []
+
     @State private var showingGenrePicker = false
     @State private var selectedGenres: Set<String> = []
     @State private var showingAddCommand = false
@@ -123,215 +125,20 @@ struct SongDetailView: View {
 
             keySection
 
-            // Click track: Perform starts the metronome when this song loads
-            Section {
-                Toggle("Click Track", isOn: Binding(
-                    get: { song.clickEnabled && song.bpm != nil },
-                    set: { enabled in
-                        song.clickEnabled = enabled
-                        if enabled, song.bpm == nil { song.bpm = 120 }
-                        saveSong()
-                    }
-                ))
-            } footer: {
-                Text("Starts the metronome at the song's BPM when it loads in Perform, \(song.beatsPerBar) click\(song.beatsPerBar == 1 ? "" : "s") a bar with beat 1 accented. Each person chooses in Settings whether it plays and whether it just counts in.")
-            }
+            clickTrackSection
 
-            // MIDI Clock: only the clock — its tempo is the song's BPM above
-            Section {
-                Toggle("Send MIDI Clock", isOn: Binding(
-                    get: { song.midiClockEnabled && song.bpm != nil },
-                    set: { enabled in
-                        song.midiClockEnabled = enabled
-                        if enabled {
-                            if song.bpm == nil { song.bpm = 120 }
-                        } else {
-                            midiManager.stopClock()
-                        }
-                        saveSong()
-                    }
-                ))
-
-                if let clockBPM = song.clockBPM, midiManager.isInitialized {
-                    Toggle("Send Start / Stop", isOn: $clockSendTransport)
-                        .disabled(midiManager.isClockRunning)
-
-                    Button {
-                        if midiManager.isClockRunning {
-                            midiManager.stopClock()
-                        } else {
-                            midiManager.startClock(bpm: clockBPM, sendTransport: clockSendTransport)
-                        }
-                    } label: {
-                        HStack {
-                            Image(systemName: midiManager.isClockRunning ? "stop.fill" : "metronome")
-                            Text(midiManager.isClockRunning ? "Stop Clock" : "Start Clock")
-                            if midiManager.isClockRunning {
-                                Spacer()
-                                Text("\(midiManager.currentClockBPM) BPM")
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.8))
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(midiManager.isClockRunning ? .red : .green)
-                    .disabled(midiManager.availableDevices.isEmpty)
-                }
-            } header: {
-                Text("MIDI Clock")
-            } footer: {
-                if song.clockBPM == nil {
-                    Text("Sends clock pulses at the song's BPM so connected gear follows its tempo.")
-                } else if midiManager.availableDevices.isEmpty {
-                    Text("No MIDI devices found. Make sure your device is connected.")
-                } else {
-                    Text(clockSendTransport
-                         ? "Sends 24 PPQN at \(song.bpm ?? 120) BPM + Start/Stop to all available devices."
-                         : "Sends 24 PPQN at \(song.bpm ?? 120) BPM, tempo only — devices sync to tempo but play/stop independently.")
-                }
-            }
+            midiClockSection
 
             SongChartsSection(song: song) { showingLyricsPerformance = true }
 
             SongSnapshotsSection(song: song, selected: $selectedSnapshot,
                                  footerOverride: isSelectMode ? "Select commands for batch operations." : nil) {
-                if !snapshotCommands.isEmpty {
-                    HStack {
-                        Text("\(song.snapshotName(selectedSnapshot)) Commands")
-                        Spacer()
-                        Text(isSelectMode ? "\(selectedCommands.count) selected" : "\(snapshotCommands.count)")
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                }
-
-                ForEach(snapshotCommands) { command in
-                    Button {
-                        if isSelectMode {
-                            toggleSelection(command)
-                        } else {
-                            editingCommand = command
-                        }
-                    } label: {
-                        MIDICommandRowView(
-                            command: command,
-                            isSelected: selectedCommands.contains(command.id),
-                            showSelection: isSelectMode
-                        )
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            deleteCommand(command)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                        if canSend(command) {
-                            Button {
-                                Task {
-                                    await sendSingleCommand(command)
-                                }
-                            } label: {
-                                Label("Send", systemImage: "paperplane")
-                            }
-                            .tint(.green)
-                        }
-                        
-                        Button {
-                            duplicateCommand(command)
-                        } label: {
-                            Label("Duplicate", systemImage: "doc.on.doc")
-                        }
-                        .tint(.blue)
-                    }
-                    .contextMenu {
-                        Button {
-                            editingCommand = command
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
-                        }
-                        
-                        Button {
-                            duplicateCommand(command)
-                        } label: {
-                            Label("Duplicate", systemImage: "doc.on.doc")
-                        }
-                        
-                        Divider()
-                        
-                        Button(role: .destructive) {
-                            deleteCommand(command)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                }
-                .onMove(perform: moveCommands)
-                
-                Menu {
-                    Button {
-                        showingAddCommand = true
-                    } label: {
-                        Label("Manual Entry", systemImage: "keyboard")
-                    }
-                    
-                    Button {
-                        showingQuickCommands = true
-                    } label: {
-                        Label("Quick Add", systemImage: "bolt.fill")
-                    }
-                } label: {
-                    Label("Add to \(song.snapshotName(selectedSnapshot))", systemImage: "plus.circle.fill")
-                }
-
-                if !snapshotCommands.isEmpty {
-                    Button {
-                        Task { await sendAllCommands() }
-                    } label: {
-                        HStack {
-                            if isSendingCommands {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "paperplane.fill")
-                            }
-                            Text("Send \(song.snapshotName(selectedSnapshot))")
-                            Spacer()
-                            if !canSendAny && !isSendingCommands {
-                                Text("No MIDI or OSC connected")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else if !midiManager.connectedDevices.isEmpty {
-                                Text("\(midiManager.connectedDevices.count) MIDI")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .disabled(!canSendAny)
-                }
-
-                Toggle(isOn: Binding(
-                    get: { song.sendsSnapshotOnLoad },
-                    set: { song.sendsSnapshotOnLoad = $0; saveSong() }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Send \(song.snapshotName(0)) When Song Loads")
-                        Text(song.sendsSnapshotOnLoad
-                             ? "In Perform, loading this song sends its first snapshot."
-                             : "In Perform, nothing is sent until you tap a snapshot or press a pedal.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                snapshotSectionContent
             }
         }
         .navigationTitle(song.name)
         .navigationBarTitleDisplayMode(.inline)
+        .performShortcutDetail()
         .toolbar {
             // Show Done button if presented in sheet, otherwise show menu items
             if isInSheet {
@@ -480,7 +287,7 @@ struct SongDetailView: View {
             performance.unfocus(song)
             AppleMusicReference.shared.stop()
         }
-        .onChange(of: selectedSnapshot) { _, _ in selectedCommands.removeAll() }
+        .onChange(of: selectedSnapshot) { _, _ in selectedCommands.removeAll(); expandedGroups.removeAll() }
         .onChange(of: selectedGenres) { _, newValue in
             song.setGenres(Array(newValue))
             song.dateModified = Date()
@@ -672,6 +479,298 @@ struct SongDetailView: View {
         song.commands(inSnapshot: selectedSnapshot)
     }
 
+    private var snapshotMoveHandler: ((IndexSet, Int) -> Void)? {
+        if hasGroupCommands { return nil }
+        return moveCommands
+    }
+
+    private var snapshotSectionContent: some View {
+        Group {
+        if !snapshotCommands.isEmpty {
+            HStack {
+                Text("\(song.snapshotName(selectedSnapshot)) Commands")
+                Spacer()
+                Text(isSelectMode ? "\(selectedCommands.count) selected" : "\(snapshotCommands.count)")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+        }
+
+        ForEach(snapshotDisplayItems) { item in
+            snapshotItemRow(item)
+        }
+        .onMove(perform: snapshotMoveHandler)
+
+        Menu {
+            Button { showingAddCommand = true } label: {
+                Label("Manual Entry", systemImage: "keyboard")
+            }
+            Button { showingQuickCommands = true } label: {
+                Label("Quick Add", systemImage: "bolt.fill")
+            }
+        } label: {
+            Label("Add to \(song.snapshotName(selectedSnapshot))", systemImage: "plus.circle.fill")
+        }
+
+        if !snapshotCommands.isEmpty {
+            Button { Task { await sendAllCommands() } } label: {
+                snapshotSendLabel
+            }
+            .disabled(!canSendAny)
+        }
+
+        Toggle(isOn: Binding(
+            get: { song.sendsSnapshotOnLoad },
+            set: { song.sendsSnapshotOnLoad = $0; saveSong() }
+        )) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Send \(song.snapshotName(0)) When Song Loads")
+                Text(song.sendsSnapshotOnLoad
+                     ? "In Perform, loading this song sends its first snapshot."
+                     : "In Perform, nothing is sent until you tap a snapshot or press a pedal.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        } // end Group
+    }
+
+    @ViewBuilder
+    private var snapshotSendLabel: some View {
+        HStack {
+            if isSendingCommands { ProgressView() }
+            else { Image(systemName: "paperplane.fill") }
+            Text("Send \(song.snapshotName(selectedSnapshot))")
+            Spacer()
+            if !canSendAny && !isSendingCommands {
+                Text("No MIDI or OSC connected").font(.caption).foregroundStyle(.secondary)
+            } else if !midiManager.connectedDevices.isEmpty {
+                Text("\(midiManager.connectedDevices.count) MIDI").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var clickTrackSection: some View {
+        Section {
+            Toggle("Click Track", isOn: Binding(
+                get: { song.clickEnabled && song.bpm != nil },
+                set: { enabled in
+                    song.clickEnabled = enabled
+                    if enabled, song.bpm == nil { song.bpm = 120 }
+                    saveSong()
+                }
+            ))
+        } footer: {
+            let plural = song.beatsPerBar == 1 ? "" : "s"
+            Text("Starts the metronome at the song's BPM when it loads in Perform, \(song.beatsPerBar) click\(plural) a bar with beat 1 accented. Each person chooses in Settings whether it plays and whether it just counts in.")
+        }
+    }
+
+    @ViewBuilder
+    private var midiClockSection: some View {
+        Section {
+            Toggle("Send MIDI Clock", isOn: Binding(
+                get: { song.midiClockEnabled && song.bpm != nil },
+                set: { enabled in
+                    song.midiClockEnabled = enabled
+                    if enabled {
+                        if song.bpm == nil { song.bpm = 120 }
+                    } else {
+                        midiManager.stopClock()
+                    }
+                    saveSong()
+                }
+            ))
+            if let clockBPM = song.clockBPM, midiManager.isInitialized {
+                Toggle("Send Start / Stop", isOn: $clockSendTransport)
+                    .disabled(midiManager.isClockRunning)
+                Button {
+                    if midiManager.isClockRunning { midiManager.stopClock() }
+                    else { midiManager.startClock(bpm: clockBPM, sendTransport: clockSendTransport) }
+                } label: { clockToggleLabel }
+                .buttonStyle(.borderedProminent)
+                .tint(midiManager.isClockRunning ? Color.red : Color.green)
+                .disabled(midiManager.availableDevices.isEmpty)
+            }
+        } header: {
+            Text("MIDI Clock")
+        } footer: {
+            if song.clockBPM == nil {
+                Text("Sends clock pulses at the song's BPM so connected gear follows its tempo.")
+            } else if midiManager.availableDevices.isEmpty {
+                Text("No MIDI devices found. Make sure your device is connected.")
+            } else {
+                Text(clockSendTransport
+                     ? "Sends 24 PPQN at \(song.bpm ?? 120) BPM + Start/Stop to all available devices."
+                     : "Sends 24 PPQN at \(song.bpm ?? 120) BPM, tempo only — devices sync to tempo but play/stop independently.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var clockToggleLabel: some View {
+        HStack {
+            Image(systemName: midiManager.isClockRunning ? "stop.fill" : "metronome")
+            Text(midiManager.isClockRunning ? "Stop Clock" : "Start Clock")
+            if midiManager.isClockRunning {
+                Spacer()
+                Text("\(midiManager.currentClockBPM) BPM")
+                    .font(.caption)
+                    .foregroundStyle(Color.white.opacity(0.8))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+    }
+
+    // MARK: - Row builders (broken out so the type-checker doesn't time out)
+
+    // AnyView type-erasure breaks the exponential type-inference chain that
+    // occurs when the compiler tries to resolve nested @ViewBuilder return types
+    // across groupRow / childRow / soloRow simultaneously.
+    private func snapshotItemRow(_ item: SnapshotItem) -> AnyView {
+        switch item {
+        case .group(let instanceID, let macro, let count):
+            return AnyView(groupRow(instanceID: instanceID, macro: macro, count: count))
+        case .child(let command):
+            return AnyView(childRow(command))
+        case .solo(let command):
+            return AnyView(soloRow(command))
+        }
+    }
+
+    @ViewBuilder
+    private func groupRow(instanceID: String, macro: DeviceMacro, count: Int) -> some View {
+        let isExpanded = expandedGroups.contains(instanceID)
+        Button {
+            if isExpanded { expandedGroups.remove(instanceID) }
+            else          { expandedGroups.insert(instanceID) }
+        } label: {
+            GroupMacroRowView(macro: macro, commandCount: count, isExpanded: isExpanded)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) { deleteGroupCommands(instanceID: instanceID) } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            let groupCmds = snapshotCommands.filter { $0.sourceGroupInstanceID == instanceID }
+            if groupCmds.contains(where: canSend) {
+                Button {
+                    Task { for cmd in groupCmds { await sendSingleCommand(cmd) } }
+                } label: { Label("Send", systemImage: "paperplane") }
+                .tint(.green)
+            }
+        }
+        .moveDisabled(true)
+    }
+
+    @ViewBuilder
+    private func childRow(_ command: MIDICommand) -> some View {
+        Button {
+            if isSelectMode { toggleSelection(command) }
+            else            { editingCommand = command }
+        } label: {
+            MIDICommandRowView(command: command,
+                               isSelected: selectedCommands.contains(command.id),
+                               showSelection: isSelectMode)
+                .padding(.leading, 16)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) { deleteCommand(command) } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        .moveDisabled(true)
+    }
+
+    @ViewBuilder
+    private func soloRow(_ command: MIDICommand) -> some View {
+        Button {
+            if isSelectMode { toggleSelection(command) }
+            else            { editingCommand = command }
+        } label: {
+            MIDICommandRowView(command: command,
+                               isSelected: selectedCommands.contains(command.id),
+                               showSelection: isSelectMode)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) { deleteCommand(command) } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            if canSend(command) {
+                Button { Task { await sendSingleCommand(command) } } label: {
+                    Label("Send", systemImage: "paperplane")
+                }.tint(.green)
+            }
+            Button { duplicateCommand(command) } label: {
+                Label("Duplicate", systemImage: "doc.on.doc")
+            }.tint(.blue)
+        }
+        .contextMenu {
+            Button { editingCommand = command } label: { Label("Edit", systemImage: "pencil") }
+            Button { duplicateCommand(command) } label: { Label("Duplicate", systemImage: "doc.on.doc") }
+            Divider()
+            Button(role: .destructive) { deleteCommand(command) } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    private var hasGroupCommands: Bool {
+        snapshotCommands.contains { $0.sourceGroupInstanceID != nil }
+    }
+
+    // MARK: - Snapshot display model
+
+    private enum SnapshotItem: Identifiable {
+        case group(instanceID: String, macro: DeviceMacro, commandCount: Int)
+        case child(MIDICommand)
+        case solo(MIDICommand)
+
+        var id: String {
+            switch self {
+            case .group(let id, _, _):    return "grp_\(id)"
+            case .child(let cmd):         return "child_\(cmd.id.uuidString)"
+            case .solo(let cmd):          return cmd.id.uuidString
+            }
+        }
+    }
+
+    private var snapshotDisplayItems: [SnapshotItem] {
+        let cmds = snapshotCommands
+        var items: [SnapshotItem] = []
+        var seenGroups: Set<String> = []
+
+        for cmd in cmds {
+            if let instanceID = cmd.sourceGroupInstanceID,
+               let macro = cmd.sourceMacro, macro.isGroup {
+                if seenGroups.insert(instanceID).inserted {
+                    let count = cmds.filter { $0.sourceGroupInstanceID == instanceID }.count
+                    items.append(.group(instanceID: instanceID, macro: macro, commandCount: count))
+                }
+                if expandedGroups.contains(instanceID) {
+                    items.append(.child(cmd))
+                }
+            } else {
+                items.append(.solo(cmd))
+            }
+        }
+        return items
+    }
+
+    private func deleteGroupCommands(instanceID: String) {
+        for command in snapshotCommands where command.sourceGroupInstanceID == instanceID {
+            song.removeCommand(command)
+            viewContext.delete(command)
+        }
+        try? viewContext.save()
+    }
+
     // A command can be sent if it's OSC (no MIDI device needed) or if a MIDI device is connected
     private func canSend(_ command: MIDICommand) -> Bool {
         command.commandType == .oscMessage || !midiManager.connectedDevices.isEmpty
@@ -780,6 +879,36 @@ private struct MacroDeviationLabel: View {
                 .font(.caption2)
                 .foregroundStyle(.orange)
         }
+    }
+}
+
+struct GroupMacroRowView: View {
+    @ObservedObject var macro: DeviceMacro
+    let commandCount: Int
+    let isExpanded: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isExpanded ? "chevron.down.circle.fill" : "chevron.right.circle.fill")
+                .foregroundStyle(.secondary)
+                .imageScale(.medium)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(macro.name)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                Text("\(commandCount) command\(commandCount == 1 ? "" : "s") · tap to \(isExpanded ? "collapse" : "expand")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Image(systemName: "link")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 4)
     }
 }
 

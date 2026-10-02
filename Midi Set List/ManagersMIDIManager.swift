@@ -21,6 +21,9 @@ class MIDIManager {
     // Discovered devices
     private(set) var availableDevices: [MIDIDevice] = []
     private(set) var connectedDevices: Set<MIDIUniqueID> = []
+    /// IDs the user has explicitly connected to — persisted so devices auto-reconnect on reappearance.
+    private var desiredConnections: Set<MIDIUniqueID> = []
+    private let desiredConnectionsKey = "midi.desiredOutputIDs"
 
     /// MIDI inputs (controllers, foot pedals…) the app is listening to.
     private(set) var availableSources: [MIDIDevice] = []
@@ -50,6 +53,7 @@ class MIDIManager {
     private var clockRun: ClockRun?
     
     init() {
+        loadDesiredConnections()
         setupMIDI()
         scanForDevices()
     }
@@ -215,29 +219,40 @@ class MIDIManager {
         if midiClient != 0 { MIDIClientDispose(midiClient) }
     }
     
+    // MARK: - Desired-connection persistence
+
+    private func loadDesiredConnections() {
+        let raw = UserDefaults.standard.array(forKey: desiredConnectionsKey) as? [Int] ?? []
+        desiredConnections = Set(raw.map { MIDIUniqueID($0) })
+    }
+
+    private func persistDesiredConnections() {
+        UserDefaults.standard.set(desiredConnections.map { Int($0) }, forKey: desiredConnectionsKey)
+    }
+
     // MARK: - Device Discovery
-    
+
     func scanForDevices() {
         availableDevices.removeAll()
-        
+
         let destinationCount = MIDIGetNumberOfDestinations()
-        
+
         for i in 0..<destinationCount {
             let endpoint = MIDIGetDestination(i)
             guard endpoint != 0 else { continue }
-            
+
             // Get device properties
             var uniqueID: MIDIUniqueID = 0
             var name: Unmanaged<CFString>?
             var manufacturer: Unmanaged<CFString>?
-            
+
             MIDIObjectGetIntegerProperty(endpoint, kMIDIPropertyUniqueID, &uniqueID)
             MIDIObjectGetStringProperty(endpoint, kMIDIPropertyName, &name)
             MIDIObjectGetStringProperty(endpoint, kMIDIPropertyManufacturer, &manufacturer)
-            
+
             let deviceName = name?.takeRetainedValue() as String? ?? "Unknown Device"
             let manufacturerName = manufacturer?.takeRetainedValue() as String?
-            
+
             let device = MIDIDevice(
                 id: uniqueID,
                 name: deviceName,
@@ -246,22 +261,35 @@ class MIDIManager {
                 isOnline: true,
                 endpoint: endpoint
             )
-            
+
             availableDevices.append(device)
         }
         activityLog?.log("Scan found \(availableDevices.count) MIDI destination\(availableDevices.count == 1 ? "" : "s")", direction: .system, proto: .midi)
         connectAllSources()
+
+        // Auto-reconnect to any previously connected device that just became available.
+        for device in availableDevices where desiredConnections.contains(device.id) {
+            guard !connectedDevices.contains(device.id) else { continue }
+            connectedDevices.insert(device.id)
+            activityLog?.log("Auto-reconnected to \(device.displayName)", direction: .system, proto: .midi)
+        }
+        // Drop any connectedDevices that are no longer in the available list.
+        connectedDevices = connectedDevices.filter { id in availableDevices.contains(where: { $0.id == id }) }
     }
     
     // MARK: - Device Connection
     
     func connect(to device: MIDIDevice) {
         connectedDevices.insert(device.id)
+        desiredConnections.insert(device.id)
+        persistDesiredConnections()
         activityLog?.log("Connected to \(device.displayName)", direction: .system, proto: .midi)
     }
 
     func disconnect(from device: MIDIDevice) {
         connectedDevices.remove(device.id)
+        desiredConnections.remove(device.id)
+        persistDesiredConnections()
         activityLog?.log("Disconnected from \(device.displayName)", direction: .system, proto: .midi)
     }
     
