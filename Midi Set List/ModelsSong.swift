@@ -424,7 +424,17 @@ class Song: NSManagedObject, Identifiable, ChartSource {
     }
 
     func removeCommand(_ command: MIDICommand) {
-        removeFromCommandsRaw(command)
+        batchDelete([command], in: managedObjectContext!)
+    }
+
+    /// Removes and deletes multiple commands in one pass, calling reorderCommands only once.
+    /// Avoids CoreData relationship management issues that occur when removeCommand (which
+    /// calls reorderCommands) and context.delete are interleaved in a loop.
+    func batchDelete(_ commandsToDelete: [MIDICommand], in context: NSManagedObjectContext) {
+        for command in commandsToDelete {
+            removeFromCommandsRaw(command)
+            context.delete(command)
+        }
         reorderCommands()
         dateModified = Date()
     }

@@ -302,7 +302,7 @@ struct SongDetailView: View {
         .onChange(of: song.lyrics) { _, _ in song.dateModified = Date(); try? viewContext.save() }
         .onChange(of: song.bpm)    { _, _ in song.dateModified = Date(); try? viewContext.save() }
     }
-    
+
     // MARK: - Key, transpose & capo
 
     private func saveSong() {
@@ -764,10 +764,8 @@ struct SongDetailView: View {
     }
 
     private func deleteGroupCommands(instanceID: String) {
-        for command in snapshotCommands where command.sourceGroupInstanceID == instanceID {
-            song.removeCommand(command)
-            viewContext.delete(command)
-        }
+        let toDelete = snapshotCommands.filter { $0.sourceGroupInstanceID == instanceID }
+        song.batchDelete(toDelete, in: viewContext)
         try? viewContext.save()
     }
 
@@ -804,27 +802,18 @@ struct SongDetailView: View {
     }
     
     private func deleteCommand(_ command: MIDICommand) {
-        song.removeCommand(command)
-        viewContext.delete(command)
+        song.batchDelete([command], in: viewContext)
         try? viewContext.save()
     }
 
     private func deleteCommands(at offsets: IndexSet) {
-        let sortedCommands = snapshotCommands
-        for index in offsets {
-            let command = sortedCommands[index]
-            song.removeCommand(command)
-            viewContext.delete(command)
-        }
+        let toDelete = offsets.map { snapshotCommands[$0] }
+        song.batchDelete(toDelete, in: viewContext)
         try? viewContext.save()
     }
 
     private func clearAllCommands() {
-        for command in snapshotCommands {
-            song.removeCommand(command)
-            viewContext.delete(command)
-        }
-        song.dateModified = Date()
+        song.batchDelete(snapshotCommands, in: viewContext)
         try? viewContext.save()
     }
     

@@ -101,10 +101,12 @@ enum SongDetailsAI {
         songs are 4/4; waltzes and many ballads are 3/4 or 6/8. If you don't recognise the song or \
         aren't confident, leave it empty — never guess.
         - genres: only from this list: \(Song.predefinedGenres.joined(separator: ", ")).
-        - lyricsFirstLine and lyricsLastLine: if the text contains lyrics or a chord chart, copy its \
-        first and last lines EXACTLY as they appear (including chord lines). Skip headings like \
-        title, artist, key, tempo or capo. If the text has no lyrics, leave both empty. Never write \
-        lyrics from memory.
+        - lyricsFirstLine: the very first non-header line of the body, copied exactly — even if it \
+        is only chord names like "D  C  G". In a chord/lyric chart the first line is often a chord \
+        row above the first lyric; that chord row IS lyricsFirstLine. Skip only header lines \
+        (title, artist, key, tempo, BPM, capo, time signature). Never write from memory.
+        - lyricsLastLine: the very last line of the body, copied exactly. If the text has no lyrics \
+        or chord chart, leave both fields empty.
         """
     }
 
@@ -227,17 +229,41 @@ enum SongDetailsAI {
         return NoteName.pickerRoots.contains(spelled) ? spelled : nil
     }
 
-    /// Copies the lyrics from the original text, first line through last line, untouched
+    /// Returns true when a line is a chart header (e.g. "Key: G", "Capo: 2"), so we don't
+    /// accidentally absorb header lines when walking back past the AI-identified first line.
+    private static let knownHeaderKeywords: Set<String> = [
+        "title", "artist", "key", "scale", "tempo", "bpm", "capo",
+        "time", "signature", "tuning", "notes", "genre", "composer", "style"
+    ]
+    private static func isHeaderLine(_ line: String) -> Bool {
+        guard let colon = line.firstIndex(of: ":") else { return false }
+        let keyword = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+        return knownHeaderKeywords.contains(keyword)
+    }
+
+    /// Copies the lyrics from the original text, first line through last line, untouched.
+    /// If the AI identified a lyric line as lyricsFirstLine but the line immediately above it
+    /// is a chord row (non-blank, not a header), include that chord row too — it was cut off.
     static func lyricsSpan(in source: String, first: String?, last: String?) -> String? {
         guard let first = nonEmpty(first) else { return nil }
         let lines = source.components(separatedBy: .newlines)
         let key = { (line: String) in line.trimmingCharacters(in: .whitespaces).lowercased() }
-        guard let start = lines.firstIndex(where: { key($0) == first.lowercased() }) else { return nil }
+        guard let found = lines.firstIndex(where: { key($0) == first.lowercased() }) else { return nil }
+
+        // Walk back one line: if the AI named a lyric line, include any chord row sitting
+        // directly above it (standard chord/lyric chart format: chords then words).
+        var start = found
+        if start > 0 {
+            let prev = lines[start - 1].trimmingCharacters(in: .whitespaces)
+            if !prev.isEmpty && !isHeaderLine(prev) {
+                start -= 1
+            }
+        }
 
         var end = lines.count - 1
         if let last = nonEmpty(last),
-           let found = lines.indices.last(where: { $0 >= start && key(lines[$0]) == last.lowercased() }) {
-            end = found
+           let lastFound = lines.indices.last(where: { $0 >= start && key(lines[$0]) == last.lowercased() }) {
+            end = lastFound
         }
         let span = lines[start...end].joined(separator: "\n").trimmingCharacters(in: .newlines)
         return span.isEmpty ? nil : span

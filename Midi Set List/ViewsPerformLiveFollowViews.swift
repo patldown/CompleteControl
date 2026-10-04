@@ -37,6 +37,7 @@ struct LiveFollowButton: View {
                 }
             }
         }
+        .accessibilityIdentifier("live-follow")
         .sheet(isPresented: $showingSheet) {
             LiveFollowSheet()
         }

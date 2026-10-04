@@ -92,6 +92,7 @@ struct SettingsView: View {
                     Label("This Device Plays", systemImage: "person.3")
                 }
             }
+            .accessibilityIdentifier("settings-band-row")
         } header: {
             Text("Band")
         } footer: {
