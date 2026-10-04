@@ -66,7 +66,7 @@ struct LaunchSplashView: View {
     private var appName: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
-            ?? "Midi Set List"
+            ?? "Complete Control"
     }
 
     var body: some View {

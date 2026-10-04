@@ -8,6 +8,7 @@
 //  two store-description blocks in init(inMemory:).
 //
 
+import CloudKit
 import CoreData
 import Foundation
 
@@ -21,8 +22,7 @@ final class PersistenceController {
 
     static let cloudKitContainerID = "iCloud.Patrick-Downey.Midi-Set-List"
 
-    // ── Change to NSPersistentCloudKitContainer once membership + entitlement are in place ──
-    let container: NSPersistentContainer
+    let container: NSPersistentCloudKitContainer
 
     var viewContext: NSManagedObjectContext { container.viewContext }
 
@@ -30,42 +30,40 @@ final class PersistenceController {
     private(set) var sharedPersistentStore: NSPersistentStore?
 
     init(inMemory: Bool = false) {
-        let c = NSPersistentContainer(name: "MidiSetList",
-                                      managedObjectModel: Self.model)
+        let c = NSPersistentCloudKitContainer(name: "MidiSetList",
+                                             managedObjectModel: Self.model)
 
         if inMemory {
             c.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
+        } else {
+            let baseURL = NSPersistentContainer.defaultDirectoryURL()
+
+            let privateDesc = NSPersistentStoreDescription(
+                url: baseURL.appendingPathComponent("MidiSetList.sqlite")
+            )
+            privateDesc.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
+            privateDesc.setOption(true as NSNumber,
+                                  forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
+            let privateOpts = NSPersistentCloudKitContainerOptions(
+                containerIdentifier: Self.cloudKitContainerID
+            )
+            privateOpts.databaseScope = .private
+            privateDesc.cloudKitContainerOptions = privateOpts
+
+            let sharedDesc = NSPersistentStoreDescription(
+                url: baseURL.appendingPathComponent("MidiSetListShared.sqlite")
+            )
+            sharedDesc.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
+            sharedDesc.setOption(true as NSNumber,
+                                 forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
+            let sharedOpts = NSPersistentCloudKitContainerOptions(
+                containerIdentifier: Self.cloudKitContainerID
+            )
+            sharedOpts.databaseScope = .shared
+            sharedDesc.cloudKitContainerOptions = sharedOpts
+
+            c.persistentStoreDescriptions = [privateDesc, sharedDesc]
         }
-        // ── CloudKit stores (re-enable when NSPersistentCloudKitContainer is active) ──
-        // else {
-        //     let baseURL = NSPersistentContainer.defaultDirectoryURL()
-        //
-        //     let privateDesc = NSPersistentStoreDescription(
-        //         url: baseURL.appendingPathComponent("MidiSetList.sqlite")
-        //     )
-        //     privateDesc.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
-        //     privateDesc.setOption(true as NSNumber,
-        //                           forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
-        //     let privateOpts = NSPersistentCloudKitContainerOptions(
-        //         containerIdentifier: Self.cloudKitContainerID
-        //     )
-        //     privateOpts.databaseScope = .private
-        //     privateDesc.cloudKitContainerOptions = privateOpts
-        //
-        //     let sharedDesc = NSPersistentStoreDescription(
-        //         url: baseURL.appendingPathComponent("MidiSetListShared.sqlite")
-        //     )
-        //     sharedDesc.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
-        //     sharedDesc.setOption(true as NSNumber,
-        //                          forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
-        //     let sharedOpts = NSPersistentCloudKitContainerOptions(
-        //         containerIdentifier: Self.cloudKitContainerID
-        //     )
-        //     sharedOpts.databaseScope = .shared
-        //     sharedDesc.cloudKitContainerOptions = sharedOpts
-        //
-        //     c.persistentStoreDescriptions = [privateDesc, sharedDesc]
-        // }
 
         self.container = c
 
@@ -79,10 +77,9 @@ final class PersistenceController {
             if let error { fatalError("Core Data load failed: \(error)") }
         }
 
-        // sharedPersistentStore stays nil until CloudKit is active
-        // sharedPersistentStore = c.persistentStoreCoordinator.persistentStores.first {
-        //     $0.url?.lastPathComponent.contains("Shared") == true
-        // }
+        sharedPersistentStore = c.persistentStoreCoordinator.persistentStores.first {
+            $0.url?.lastPathComponent.contains("Shared") == true
+        }
 
         c.viewContext.automaticallyMergesChangesFromParent = true
         c.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy

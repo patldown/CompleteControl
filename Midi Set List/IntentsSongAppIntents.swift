@@ -68,7 +68,7 @@ enum SongDetailsSourceAppEnum: String, AppEnum {
 struct CreateSongIntent: AppIntent {
     static let title: LocalizedStringResource = "Create Song"
     static let description = IntentDescription(
-        "Creates a new song in your Midi Set List library. Enter the details yourself, or let AI read the title, key, scale, BPM, genre and lyrics from text (a chord chart, lyric sheet, or just a name and artist) or from a file (text, PDF, or a photo of a chart)."
+        "Creates a new song in your Complete Control library. Enter the details yourself, or let AI read the title, key, scale, BPM, genre and lyrics from text (a chord chart, lyric sheet, or just a name and artist) or from a file (text, PDF, or a photo of a chart)."
     )
 
     @Parameter(title: "Song Details", description: "Enter the details yourself, or have AI read them from text or a file.",

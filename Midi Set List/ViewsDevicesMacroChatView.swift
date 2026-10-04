@@ -488,7 +488,7 @@ struct MacroChatView: View {
     private func makeOnDeviceSession() -> LanguageModelSession {
         let specContext = DeviceSpecManager.specContext(for: device)
         var instructions = """
-            You are a MIDI macro assistant for the app "Midi Set List."
+            You are a MIDI macro assistant for the app "Complete Control."
             Device: \(device.name), MIDI channel \(device.midiChannel).
             Category: \(category.name).
             """
@@ -720,7 +720,7 @@ struct MacroChatView: View {
     private var externalSystemPrompt: String {
         let specContext = DeviceSpecManager.specContext(for: device)
         var prompt = """
-            You are a MIDI macro assistant for the app "Midi Set List."
+            You are a MIDI macro assistant for the app "Complete Control."
             Device: \(device.name), MIDI channel \(device.midiChannel).
             Category: \(category.name).
             """

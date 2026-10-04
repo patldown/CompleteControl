@@ -507,7 +507,7 @@ private struct DeviceMemorySheet: View {
 
         var prompt = """
             You maintain the AI memory for "\(device.name)" (MIDI channel \(device.midiChannel)) \
-            in the app "Midi Set List". The memory is read by an AI assistant before it builds \
+            in the app "Complete Control". The memory is read by an AI assistant before it builds \
             MIDI/OSC macros for this device.
 
             The raw memory is a log of chat moments the user saved: what they asked ("You:"), \

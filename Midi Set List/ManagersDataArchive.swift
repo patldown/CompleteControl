@@ -82,7 +82,7 @@ nonisolated enum DataArchiveError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notAnArchive:          return "This file isn't a Midi Set List backup or shared item."
+        case .notAnArchive:          return "This file isn't a Complete Control backup or shared item."
         case .newerVersion(let v):   return "This file was made by a newer version of the app (format \(v)). Update the app to import it."
         case .noObjects:             return "Nothing to export."
         }

@@ -52,7 +52,7 @@ struct ArchiveFile: Transferable {
 
     static func fullBackup() -> ArchiveFile {
         let date = Date().formatted(.iso8601.year().month().day())
-        return ArchiveFile(objectID: nil, fileName: "Midi Set List Backup \(date).json", title: "Full Backup")
+        return ArchiveFile(objectID: nil, fileName: "Complete Control Backup \(date).json", title: "Full Backup")
     }
 }
 

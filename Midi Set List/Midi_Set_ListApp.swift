@@ -37,7 +37,7 @@ struct Midi_Set_ListApp: App {
                     // Live Follow: the leader broadcasts every song / snapshot change
                     LiveFollowSession.shared.performance = performance
                     performance.onStateChange = { LiveFollowSession.shared.leaderStateChanged() }
-                    MidiSetListShortcuts.updateAppShortcutParameters()
+                    CompleteControlShortcuts.updateAppShortcutParameters()
                     // Restore OSC connections from last session
                     let oscRequest = NSFetchRequest<OSCTarget>(entityName: "OSCTarget")
                     let targets = (try? persistence.viewContext.fetch(oscRequest)) ?? []

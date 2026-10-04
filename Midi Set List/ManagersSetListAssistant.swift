@@ -158,7 +158,7 @@ enum SetListAssistant {
 
     static func systemPrompt(catalog: Catalog, current: SetList?) -> String {
         var prompt = """
-            You are the set list assistant in "Midi Set List", an app musicians use to plan gigs.
+            You are the set list assistant in "Complete Control", an app musicians use to plan gigs.
             You change set lists by returning the COMPLETE final song order. The app works out what \
             was added, removed and moved, and shows the user a summary to approve before anything changes.
 
