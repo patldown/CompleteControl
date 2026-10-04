@@ -23,43 +23,57 @@ struct ContentView: View {
             Tab("Perform", systemImage: "play.circle", value: "perform") {
                 PerformView()
             }
+            .accessibilityIdentifier("tab-perform")
 
             Tab("Set Lists", systemImage: "list.bullet", value: "setlists") {
                 SetListsView()
             }
+            .accessibilityIdentifier("tab-set-lists")
 
             Tab("Songs", systemImage: "music.note.list", value: "songs") {
                 SongsLibraryView()
             }
+            .accessibilityIdentifier("tab-songs")
 
             Tab("Devices", systemImage: "pianokeys", value: "devices") {
                 DeviceLibraryView()
             }
+            .accessibilityIdentifier("tab-devices")
 
             Tab("Connections", systemImage: "cable.connector", value: "connections") {
                 ConnectionsView()
             }
+            .accessibilityIdentifier("tab-connections")
 
             Tab("Activity", systemImage: "waveform", value: "activity") {
                 ActivityLogView()
             }
+            .accessibilityIdentifier("tab-activity")
 
             Tab("Help", systemImage: "questionmark.circle", value: "help") {
                 HelpView()
             }
+            .accessibilityIdentifier("tab-help")
 
             Tab("Settings", systemImage: "gear", value: "settings") {
                 SettingsView()
             }
+            .accessibilityIdentifier("tab-settings")
         }
-        .floatingPerformShortcut(navigation)
+        .overlay(alignment: .bottomLeading) {
+            SystemStatsView()
+                .padding(.leading, 8)
+                .padding(.bottom, 8)
+        }
         .liveFollowPrompts()
         .environment(navigation)
         .onOpenURL { url in
-            do {
-                pendingImport = PendingImport(archive: try DataArchiveImporter.read(url))
-            } catch {
-                importError = error.localizedDescription
+            Task {
+                do {
+                    pendingImport = PendingImport(archive: try await DataArchiveImporter.readShowingProgress(url))
+                } catch {
+                    importError = error.localizedDescription
+                }
             }
         }
         .sheet(item: $pendingImport) { ImportReviewSheet(archive: $0.archive) }

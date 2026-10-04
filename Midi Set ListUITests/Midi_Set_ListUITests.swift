@@ -19,16 +19,30 @@ final class Midi_Set_ListUITests: XCTestCase {
         app.launch()
     }
 
-    /// Taps a tab, going through More when the tab bar can't fit it (iPhone)
+    /// Taps a tab by name. iOS 26's floating tab bar no longer appears as XCUIElement.tabBar
+    /// and its items have automation-type mismatches (legacy=Button, modern=Cell). Searching
+    /// by identifier avoids type dependencies entirely; the label-based button search is a
+    /// fallback for older iOS.
     @MainActor
     private func openTab(_ name: String) {
-        let tab = app.tabBars.buttons[name]
-        if tab.waitForExistence(timeout: 5) {
-            tab.tap()
-            return
+        let id = "tab-\(name.lowercased().replacingOccurrences(of: " ", with: "-"))"
+        let byID = app.descendants(matching: .any).matching(identifier: id).firstMatch
+        if byID.waitForExistence(timeout: 5) { byID.tap(); return }
+
+        // Older iOS: tab bar buttons match by label.
+        let byLabel = app.buttons[name].firstMatch
+        if byLabel.waitForExistence(timeout: 5) { byLabel.tap(); return }
+
+        // Compact / "More" overflow (iPhone / compact width).
+        let more = app.buttons["More"].firstMatch
+        if more.waitForExistence(timeout: 2) {
+            more.tap()
+            // Type-agnostic search for the menu item label.
+            let item = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", name))
+                .firstMatch
+            if item.waitForExistence(timeout: 3) { item.tap() }
         }
-        app.tabBars.buttons["More"].tap()
-        app.cells.staticTexts[name].firstMatch.tap()
     }
 
     @MainActor
@@ -48,7 +62,9 @@ final class Midi_Set_ListUITests: XCTestCase {
     @MainActor
     func testBandSettingsListBuiltInRoles() throws {
         openTab("Settings")
-        app.staticTexts["This Device Plays"].firstMatch.tap()
+        let bandRow = app.descendants(matching: .any).matching(identifier: "settings-band-row").firstMatch
+        XCTAssertTrue(bandRow.waitForExistence(timeout: 5), "Band row not found in Settings")
+        bandRow.tap()
         XCTAssertTrue(app.navigationBars["Band"].waitForExistence(timeout: 5))
         for role in ["Vocals", "Guitar", "Keys", "Bass", "Drums"] {
             XCTAssertTrue(app.buttons.containing(NSPredicate(format: "label CONTAINS %@", role)).firstMatch.exists,
@@ -58,7 +74,9 @@ final class Midi_Set_ListUITests: XCTestCase {
 
     @MainActor
     func testLiveFollowSheetOpens() throws {
-        let band = app.buttons["Band"].firstMatch
+        // The Band toolbar button has accessibilityIdentifier "live-follow".
+        // Searching by identifier is more robust than label across iOS versions.
+        let band = app.buttons.matching(identifier: "live-follow").firstMatch
         XCTAssertTrue(band.waitForExistence(timeout: 10))
         band.tap()
         XCTAssertTrue(app.navigationBars["Live Follow"].waitForExistence(timeout: 5))

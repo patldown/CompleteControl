@@ -171,6 +171,7 @@ struct DeviceDetailView: View {
         .onAppear { memoryExists = DeviceSpecManager.hasMemory(for: device) }
         .navigationTitle(device.name)
         .navigationBarTitleDisplayMode(.large)
+        .performShortcutDetail()
         .toolbar {
             // Edit: always top right, first of the buttons there, on every screen
             ToolbarItem(placement: .primaryAction) {

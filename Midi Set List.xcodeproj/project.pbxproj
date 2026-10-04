@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AE80A9F130700733009CC1AA /* ViewsComponentsSystemStatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE80A9F030700733009CC1AA /* ViewsComponentsSystemStatsView.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		AE0F80A33067479C0088BB80 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +31,7 @@
 		AE0F80953067479B0088BB80 /* Midi Set List.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Midi Set List.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AE0F80A23067479C0088BB80 /* Midi Set ListTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Midi Set ListTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AE0F80AC3067479C0088BB80 /* Midi Set ListUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Midi Set ListUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AE80A9F030700733009CC1AA /* ViewsComponentsSystemStatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewsComponentsSystemStatsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -79,6 +84,7 @@
 				AE0F80A53067479C0088BB80 /* Midi Set ListTests */,
 				AE0F80AF3067479C0088BB80 /* Midi Set ListUITests */,
 				AE0F80963067479B0088BB80 /* Products */,
+				AE80A9F030700733009CC1AA /* ViewsComponentsSystemStatsView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -236,6 +242,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AE80A9F130700733009CC1AA /* ViewsComponentsSystemStatsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

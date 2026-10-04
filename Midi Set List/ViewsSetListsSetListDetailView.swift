@@ -136,12 +136,16 @@ struct SetListDetailView: View {
         }
         .navigationTitle(setList.name)
         .navigationBarTitleDisplayMode(.inline)
+        .performShortcutDetail()
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 EditButton()
             }
             ToolbarItem(placement: .secondaryAction) {
                 ShareItemButton(object: setList, kindName: "Set List", itemName: setList.name)
+            }
+            ToolbarItem(placement: .secondaryAction) {
+                ChordProExportButton(songs: setList.songs, title: "Export Songs as ChordPro…")
             }
             // Hidden when no AI is available
             if ai.isAvailable(.setListAssistant) {

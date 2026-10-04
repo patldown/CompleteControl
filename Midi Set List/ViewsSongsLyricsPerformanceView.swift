@@ -108,6 +108,15 @@ struct LyricsPerformanceView: View {
                     .foregroundStyle(.white)
             }
 
+            if mode == .lyrics && hasChart {
+                LyricsDisplayMenu()
+                    .font(.title2)
+                    .labelStyle(.iconOnly)
+                    .tint(.white)
+                    .foregroundStyle(.white)
+                    .padding(.trailing, 8)
+            }
+
             if chart.hasLyricsText && chart.hasSheetMusic {
                 Picker("Show", selection: Binding(
                     get: { mode },
@@ -194,6 +203,8 @@ struct AutoScrollingTextView: UIViewRepresentable {
     @Binding var isScrolling: Bool
     @Binding var scrollSpeed: Double
     @Binding var resetTrigger: Bool
+    /// The largest size the lyrics start at. Smaller when needed so the longest line fits
+    /// the width without wrapping, then scaled by this person's size preference.
     var fontSize: CGFloat = 24
     var insets = UIEdgeInsets(top: 100, left: 32, bottom: 500, right: 32)
     /// Semitones to shift recognised chords by
@@ -204,7 +215,7 @@ struct AutoScrollingTextView: UIViewRepresentable {
     var pageRequest: PageRequest? = nil
     /// The chart shown, for Live Follow scrolling
     var liveChartID: UUID? = nil
-    /// Blank lines above the lyrics come from this person's preferences
+    /// Blank lines, size and hidden chords come from this person's preferences
     @ObservedObject private var prefs = UserPreferences.shared
 
     /// Blank lines first, so the opening lyrics start lower and auto-scroll eases into them
@@ -214,27 +225,46 @@ struct AutoScrollingTextView: UIViewRepresentable {
 
     /// Recognised chords are tinted and bold, so it's clear which ones will transpose
     static let chordColor = UIColor.systemYellow
+    /// Fitting a very long line never shrinks the lyrics below this; past it they wrap
+    static let minimumFittedFontSize: CGFloat = 11
 
-    private var renderKey: String {
-        "\(displayText.hashValue)|\(fontSize)|\(insets)|\(transpose)|\(String(describing: chordsPreferFlats))"
+    private var config: TextConfig {
+        TextConfig(text: displayText, maxFontSize: fontSize, scale: CGFloat(prefs.lyricsTextScale),
+                   insets: insets, transpose: transpose, flats: chordsPreferFlats,
+                   hideChords: prefs.lyricsHideChords)
     }
 
-    private func applyText(to textView: UITextView) {
-        let rendered = ChordEngine.render(displayText, transpose: transpose, flats: chordsPreferFlats)
-        let attributed = NSMutableAttributedString(string: rendered.text, attributes: [
-            .font: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
-            .foregroundColor: UIColor.white,
-        ])
-        let chordFont = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
-        for range in rendered.chordRanges {
-            attributed.addAttributes([.foregroundColor: Self.chordColor, .font: chordFont], range: range)
-        }
-        textView.attributedText = attributed
-        textView.textContainerInset = insets
+    /// Everything the rendered text depends on except the view's width
+    struct TextConfig: Equatable {
+        var text: String
+        var maxFontSize: CGFloat
+        var scale: CGFloat
+        var insets: UIEdgeInsets
+        var transpose: Int
+        var flats: Bool?
+        var hideChords: Bool
+    }
+
+    /// Width of one character of the (monospaced) lyrics font per point of font size
+    private static let characterAdvance: CGFloat = {
+        let probe = UIFont.monospacedSystemFont(ofSize: 100, weight: .bold)
+        return ("0" as NSString).size(withAttributes: [.font: probe]).width / 100
+    }()
+
+    /// The largest size up to `maxSize` at which the longest line fits in `width`
+    static func fittedFontSize(for text: String, maxSize: CGFloat, width: CGFloat) -> CGFloat {
+        guard width > 0 else { return maxSize }
+        let longest = text.split(separator: "\n").map { line in
+            line.reversed().drop(while: \.isWhitespace).count
+        }.max() ?? 0
+        guard longest > 0 else { return maxSize }
+        // A little slack so rounding never pushes the last character onto a new line
+        let fits = (width * 0.98 / (CGFloat(longest) * characterAdvance) * 2).rounded(.down) / 2
+        return min(maxSize, max(minimumFittedFontSize, fits))
     }
 
     func makeUIView(context: Context) -> UIScrollView {
-        let scrollView = UIScrollView()
+        let scrollView = WidthReportingScrollView()
         scrollView.backgroundColor = .black
         scrollView.showsVerticalScrollIndicator = false
         scrollView.showsHorizontalScrollIndicator = false
@@ -244,9 +274,6 @@ struct AutoScrollingTextView: UIViewRepresentable {
         textView.isEditable = false
         textView.isSelectable = false
         textView.isScrollEnabled = false
-        applyText(to: textView)
-        context.coordinator.lastRenderKey = renderKey
-        context.coordinator.lastPageRequestID = pageRequest?.id
         textView.textContainer.lineBreakMode = .byWordWrapping
         textView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -262,19 +289,19 @@ struct AutoScrollingTextView: UIViewRepresentable {
 
         context.coordinator.scrollView = scrollView
         context.coordinator.textView = textView
+        context.coordinator.lastPageRequestID = pageRequest?.id
+        context.coordinator.update(config)
+        // Rotation, Full View and window resizing change the width: fit the lyrics again.
+        // Next turn of the run loop, so the text isn't replaced in the middle of layout.
+        scrollView.onWidthChange = { [weak coordinator = context.coordinator] in
+            DispatchQueue.main.async { coordinator?.render() }
+        }
 
         return scrollView
     }
 
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
-        guard let textView = context.coordinator.textView else { return }
-
-        if context.coordinator.lastRenderKey != renderKey {
-            context.coordinator.lastRenderKey = renderKey
-            applyText(to: textView)
-            scrollView.setNeedsLayout()
-            scrollView.layoutIfNeeded()
-        }
+        context.coordinator.update(config)
 
         if resetTrigger != context.coordinator.lastResetTrigger {
             context.coordinator.lastResetTrigger = resetTrigger
@@ -300,11 +327,61 @@ struct AutoScrollingTextView: UIViewRepresentable {
 
     final class Coordinator: AutoScroller {
         weak var textView: UITextView?
-        var lastRenderKey = ""
+        private var config: TextConfig?
+        /// What's on screen now, to skip redrawing identical text
+        private var rendered: (config: TextConfig, width: CGFloat)?
+
+        func update(_ config: TextConfig) {
+            guard config != self.config else { return }
+            self.config = config
+            render()
+        }
+
+        /// Lays out the lyrics at the size that fits the current width
+        func render() {
+            guard let config, let textView, let scrollView else { return }
+            let width = scrollView.bounds.width
+            if let rendered, rendered.config == config, abs(rendered.width - width) < 0.5 { return }
+            rendered = (config, width)
+
+            let result = ChordEngine.render(config.text, transpose: config.transpose, flats: config.flats,
+                                            hideChords: config.hideChords)
+            let textWidth = width - config.insets.left - config.insets.right
+                - textView.textContainer.lineFragmentPadding * 2
+            let size = AutoScrollingTextView.fittedFontSize(for: result.text, maxSize: config.maxFontSize,
+                                                            width: textWidth) * config.scale
+
+            let attributed = NSMutableAttributedString(string: result.text, attributes: [
+                .font: UIFont.monospacedSystemFont(ofSize: size, weight: .regular),
+                .foregroundColor: UIColor.white,
+            ])
+            let chordFont = UIFont.monospacedSystemFont(ofSize: size, weight: .bold)
+            for range in result.chordRanges {
+                attributed.addAttributes([.foregroundColor: AutoScrollingTextView.chordColor, .font: chordFont],
+                                         range: range)
+            }
+            textView.attributedText = attributed
+            textView.textContainerInset = config.insets
+            scrollView.setNeedsLayout()
+            scrollView.layoutIfNeeded()
+        }
     }
 
     static func dismantleUIView(_ scrollView: UIScrollView, coordinator: Coordinator) {
         coordinator.stopScrolling()
+    }
+}
+
+/// Tells its owner when its width changes, e.g. on rotation
+final class WidthReportingScrollView: UIScrollView {
+    var onWidthChange: (() -> Void)?
+    private var reportedWidth: CGFloat = 0
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard abs(bounds.width - reportedWidth) > 0.5 else { return }
+        reportedWidth = bounds.width
+        onWidthChange?()
     }
 }
 

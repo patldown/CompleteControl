@@ -6,6 +6,18 @@
 import CoreData
 import Foundation
 
+/// What a new song starts with when nothing more specific is known. Set in Settings.
+nonisolated enum SongDefaults {
+    static let timeSignatureKey = "defaultTimeSignature"
+    static let timeSignatures = ["2/4", "3/4", "4/4", "5/4", "6/8", "7/8", "9/8", "12/8"]
+
+    /// Time signature for new songs; nil (the default) leaves it unset
+    static var timeSignature: String? {
+        let value = UserDefaults.standard.string(forKey: timeSignatureKey) ?? ""
+        return timeSignatures.contains(value) ? value : nil
+    }
+}
+
 @objc(Song)
 class Song: NSManagedObject, Identifiable, ChartSource {
 
@@ -64,6 +76,20 @@ class Song: NSManagedObject, Identifiable, ChartSource {
 
     /// The tempo to send as MIDI clock, or nil when this song sends none
     var clockBPM: Int? { midiClockEnabled ? bpm : nil }
+
+    /// Click track: Perform starts the metronome when this song loads (needs a BPM)
+    @NSManaged var clickEnabled: Bool
+
+    /// Clicks per bar from the time signature, counting the felt beat: 3 for 3/4, but 2 for
+    /// 6/8, 3 for 9/8 and 4 for 12/8 (BPM is that dotted beat). 4 when there's none.
+    var beatsPerBar: Int {
+        guard let signature = timeSignature, let slash = signature.firstIndex(of: "/"),
+              let top = Int(signature[..<slash]), let bottom = Int(signature[signature.index(after: slash)...]),
+              top > 0
+        else { return 4 }
+        if bottom == 8, top > 3, top % 3 == 0 { return top / 3 }
+        return top
+    }
 
     // ── Key, transpose & capo ──────────────────────────────────────────
     static let transposeRange = -6...6
@@ -340,7 +366,8 @@ class Song: NSManagedObject, Identifiable, ChartSource {
             copy.oscFormula    = original.oscFormula
             copy.value1Formula = original.value1Formula
             copy.value2Formula = original.value2Formula
-            copy.sourceMacro   = original.sourceMacro
+            copy.sourceMacro            = original.sourceMacro
+            copy.sourceGroupInstanceID  = original.sourceGroupInstanceID
             addCommand(copy, toSnapshot: newIndex)
         }
         return newIndex
@@ -397,7 +424,17 @@ class Song: NSManagedObject, Identifiable, ChartSource {
     }
 
     func removeCommand(_ command: MIDICommand) {
-        removeFromCommandsRaw(command)
+        batchDelete([command], in: managedObjectContext!)
+    }
+
+    /// Removes and deletes multiple commands in one pass, calling reorderCommands only once.
+    /// Avoids CoreData relationship management issues that occur when removeCommand (which
+    /// calls reorderCommands) and context.delete are interleaved in a loop.
+    func batchDelete(_ commandsToDelete: [MIDICommand], in context: NSManagedObjectContext) {
+        for command in commandsToDelete {
+            removeFromCommandsRaw(command)
+            context.delete(command)
+        }
         reorderCommands()
         dateModified = Date()
     }
@@ -444,7 +481,13 @@ class Song: NSManagedObject, Identifiable, ChartSource {
         let before = Array(allSorted.prefix(anchorIndex))
         let after  = allSorted.dropFirst(anchorIndex).filter { $0.sourceMacro?.objectID != macro.objectID }
         let newCmds = macro.toMIDICommands(in: context)
-        newCmds.forEach { $0.sourceMacro = macro; $0.song = self; $0.snapshotIndex = snapshot }
+        let groupInstanceID = macro.isGroup ? UUID().uuidString : nil
+        newCmds.forEach {
+            $0.sourceMacro = macro
+            $0.song = self
+            $0.snapshotIndex = snapshot
+            $0.sourceGroupInstanceID = groupInstanceID
+        }
 
         // Delete old macro commands
         macroCommands.forEach {

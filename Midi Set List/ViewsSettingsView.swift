@@ -13,6 +13,7 @@ struct SettingsView: View {
     @ObservedObject private var pedals = PedalSettings.shared
     @ObservedObject private var band = BandSettings.shared
     @FetchRequest(sortDescriptors: [SortDescriptor(\.orderIndexRaw)]) private var roles: FetchedResults<BandRole>
+    @AppStorage(SongDefaults.timeSignatureKey) private var defaultTimeSignature = ""
 
     var body: some View {
         NavigationStack {
@@ -20,6 +21,8 @@ struct SettingsView: View {
                 midiSection
                 bandSection
                 lyricsSection
+                metronomeSection
+                newSongsSection
                 if ai.anyAIAvailable {
                     offlineModeSection
                     apiKeysSection
@@ -89,10 +92,51 @@ struct SettingsView: View {
                     Label("This Device Plays", systemImage: "person.3")
                 }
             }
+            .accessibilityIdentifier("settings-band-row")
         } header: {
             Text("Band")
         } footer: {
             Text("Pick your instrument to see just your parts of each song, and whether chords read as capo shapes or concert pitch.")
+        }
+    }
+
+    // MARK: - Metronome
+
+    private var metronomeSection: some View {
+        Section {
+            Toggle("Start on Click Track Songs", isOn: $prefs.metronomeAutoStart)
+            Toggle("Just Count In", isOn: $prefs.metronomeCountInOnly)
+                .disabled(!prefs.metronomeAutoStart)
+            Toggle("Click Sound", isOn: $prefs.metronomeSound)
+            if prefs.metronomeSound {
+                HStack {
+                    Image(systemName: "speaker.fill").foregroundStyle(.secondary)
+                    Slider(value: $prefs.metronomeVolume, in: 0...1)
+                        .onChange(of: prefs.metronomeVolume) { Metronome.shared.applyVolume() }
+                    Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Click Volume")
+            }
+        } header: {
+            Text("Metronome")
+        } footer: {
+            Text("Songs marked Click Track start the click when they load in Perform; Just Count In plays one bar and stops. The Click button on Perform starts it on any song with a BPM, joining MIDI clock's bars when that's running. Turn Click Sound off to see just the beat. For an in-ear click use a wired connection — headphone jack or a USB / Lightning audio interface. Bluetooth and AirPlay add a delay the click can't make up for.")
+        }
+    }
+
+    // MARK: - New songs
+
+    private var newSongsSection: some View {
+        Section {
+            Picker("Default Time Signature", selection: $defaultTimeSignature) {
+                Text("None").tag("")
+                ForEach(SongDefaults.timeSignatures, id: \.self) { Text($0).tag($0) }
+            }
+        } header: {
+            Text("New Songs")
+        } footer: {
+            Text("Used when a new song's time signature isn't known — in the New Song form, and in the Create Song shortcut when you leave it empty and AI isn't confident. None leaves it unset.")
         }
     }
 
@@ -116,11 +160,24 @@ struct SettingsView: View {
                         .monospacedDigit()
                 }
             }
+
+            Stepper {
+                LabeledContent("Lyrics Text Size") {
+                    Text(prefs.lyricsTextScale == 1 ? "Fits Longest Line" : "\(Int((prefs.lyricsTextScale * 100).rounded()))%")
+                        .monospacedDigit()
+                }
+            } onIncrement: {
+                prefs.stepLyricsTextScale(1)
+            } onDecrement: {
+                prefs.stepLyricsTextScale(-1)
+            }
+
+            Toggle("Hide Chords", isOn: $prefs.lyricsHideChords)
         } header: {
             Text("Your Performance Settings")
         } footer: {
             Text(prefs.chartModeOverride == nil
-                 ? "For songs with both lyrics and sheet music, each song opens in the view you last used on it, at your last speed. These are yours alone and follow your Apple ID, so someone sharing your songs keeps their own. New songs start at the speeds above."
+                 ? "For songs with both lyrics and sheet music, each song opens in the view you last used on it, at your last speed. Lyrics start at the largest size that fits the longest line without wrapping; size them up or down from there. Hide Chords shows just the words, for singers. These are yours alone and follow your Apple ID, so someone sharing your songs keeps their own. New songs start at the speeds above."
                  : "Every song with \(prefs.chartModeOverride?.title.lowercased() ?? "") shows it. Your remembered view for each song is kept — switch back to Remember Per Song to use it again.")
         }
     }

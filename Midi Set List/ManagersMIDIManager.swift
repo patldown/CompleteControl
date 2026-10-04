@@ -8,6 +8,7 @@
 import Foundation
 import CoreMIDI
 import Observation
+import Synchronization
 
 /// Manages MIDI connections and communication
 @Observable
@@ -20,6 +21,9 @@ class MIDIManager {
     // Discovered devices
     private(set) var availableDevices: [MIDIDevice] = []
     private(set) var connectedDevices: Set<MIDIUniqueID> = []
+    /// IDs the user has explicitly connected to — persisted so devices auto-reconnect on reappearance.
+    private var desiredConnections: Set<MIDIUniqueID> = []
+    private let desiredConnectionsKey = "midi.desiredOutputIDs"
 
     /// MIDI inputs (controllers, foot pedals…) the app is listening to.
     private(set) var availableSources: [MIDIDevice] = []
@@ -44,10 +48,12 @@ class MIDIManager {
     private(set) var isClockRunning = false
     private(set) var currentClockBPM: Int = 120
     private(set) var clockSendsTransport = false   // true = send Start/Stop; false = clock pulses only
-    private var clockThread: Thread?
-    private var clockThreadRunning = false
+    /// Host time of the running clock's first pulse (beat 1), for the metronome to line up with
+    private(set) var clockStartHostTime: UInt64 = 0
+    private var clockRun: ClockRun?
     
     init() {
+        loadDesiredConnections()
         setupMIDI()
         scanForDevices()
     }
@@ -206,36 +212,47 @@ class MIDIManager {
     }
 
     private func cleanup() {
-        clockThreadRunning = false
-        clockThread = nil
+        clockRun?.running.store(false, ordering: .relaxed)
+        clockRun = nil
         if inputPort  != 0 { MIDIPortDispose(inputPort) }
         if outputPort != 0 { MIDIPortDispose(outputPort) }
         if midiClient != 0 { MIDIClientDispose(midiClient) }
     }
     
+    // MARK: - Desired-connection persistence
+
+    private func loadDesiredConnections() {
+        let raw = UserDefaults.standard.array(forKey: desiredConnectionsKey) as? [Int] ?? []
+        desiredConnections = Set(raw.map { MIDIUniqueID($0) })
+    }
+
+    private func persistDesiredConnections() {
+        UserDefaults.standard.set(desiredConnections.map { Int($0) }, forKey: desiredConnectionsKey)
+    }
+
     // MARK: - Device Discovery
-    
+
     func scanForDevices() {
         availableDevices.removeAll()
-        
+
         let destinationCount = MIDIGetNumberOfDestinations()
-        
+
         for i in 0..<destinationCount {
             let endpoint = MIDIGetDestination(i)
             guard endpoint != 0 else { continue }
-            
+
             // Get device properties
             var uniqueID: MIDIUniqueID = 0
             var name: Unmanaged<CFString>?
             var manufacturer: Unmanaged<CFString>?
-            
+
             MIDIObjectGetIntegerProperty(endpoint, kMIDIPropertyUniqueID, &uniqueID)
             MIDIObjectGetStringProperty(endpoint, kMIDIPropertyName, &name)
             MIDIObjectGetStringProperty(endpoint, kMIDIPropertyManufacturer, &manufacturer)
-            
+
             let deviceName = name?.takeRetainedValue() as String? ?? "Unknown Device"
             let manufacturerName = manufacturer?.takeRetainedValue() as String?
-            
+
             let device = MIDIDevice(
                 id: uniqueID,
                 name: deviceName,
@@ -244,22 +261,35 @@ class MIDIManager {
                 isOnline: true,
                 endpoint: endpoint
             )
-            
+
             availableDevices.append(device)
         }
         activityLog?.log("Scan found \(availableDevices.count) MIDI destination\(availableDevices.count == 1 ? "" : "s")", direction: .system, proto: .midi)
         connectAllSources()
+
+        // Auto-reconnect to any previously connected device that just became available.
+        for device in availableDevices where desiredConnections.contains(device.id) {
+            guard !connectedDevices.contains(device.id) else { continue }
+            connectedDevices.insert(device.id)
+            activityLog?.log("Auto-reconnected to \(device.displayName)", direction: .system, proto: .midi)
+        }
+        // Drop any connectedDevices that are no longer in the available list.
+        connectedDevices = connectedDevices.filter { id in availableDevices.contains(where: { $0.id == id }) }
     }
     
     // MARK: - Device Connection
     
     func connect(to device: MIDIDevice) {
         connectedDevices.insert(device.id)
+        desiredConnections.insert(device.id)
+        persistDesiredConnections()
         activityLog?.log("Connected to \(device.displayName)", direction: .system, proto: .midi)
     }
 
     func disconnect(from device: MIDIDevice) {
         connectedDevices.remove(device.id)
+        desiredConnections.remove(device.id)
+        persistDesiredConnections()
         activityLog?.log("Disconnected from \(device.displayName)", direction: .system, proto: .midi)
     }
     
@@ -437,76 +467,89 @@ class MIDIManager {
     
     // MARK: - MIDI Clock
 
-    /// Starts a MIDI clock at the given BPM.
-    /// Sends MIDI Start (0xFA) immediately, then streams Timing Clock (0xF8)
-    /// pulses at 24 PPQN. Call from the main thread.
-    func startClock(bpm: Int, sendTransport: Bool = false) {
+    /// Starts a MIDI clock at the given BPM, streaming Timing Clock (0xF8) at 24 PPQN.
+    /// `startAt` is the host time (mach ticks) of the first pulse — beat 1 — so the
+    /// metronome can share it; nil starts a moment from now. Call from the main thread.
+    ///
+    /// Each pulse is handed to CoreMIDI a few milliseconds early, stamped with the exact
+    /// time it should go out, so thread wake-up delays never reach the wire as jitter.
+    func startClock(bpm: Int, sendTransport: Bool = false, startAt: UInt64? = nil) {
         stopClock()
 
         // Clock is a system broadcast — send to all available devices, not just connected ones.
-        let devices = availableDevices
-        guard !devices.isEmpty, bpm > 0 else { return }
+        let endpoints = availableDevices.map(\.endpoint)
+        guard !endpoints.isEmpty, bpm > 0 else { return }
 
         currentClockBPM = bpm
         clockSendsTransport = sendTransport
 
-        // Optionally send MIDI Start (0xFA) — only when the user explicitly wants transport.
-        if sendTransport {
-            sendSystemRealtime(0xFA, to: devices)
-        }
+        let pulse = HostTime.clockPulseTicks(bpm: bpm)
+        let firstPulse = startAt ?? (mach_absolute_time() + HostTime.ticks(seconds: Self.clockLeadIn))
+        clockStartHostTime = firstPulse
 
-        // Convert pulse interval to Mach absolute time units (same kernel primitive
-        // used by AudioUnit) for sub-millisecond accuracy across all Apple hardware.
-        var tbInfo = mach_timebase_info_data_t()
-        mach_timebase_info(&tbInfo)
-        let nsPerPulse = UInt64(60_000_000_000.0 / Double(bpm * 24))
-        // machPerPulse = nsPerPulse × (denom / numer)  — converts ns → mach ticks
-        let machPerPulse = tbInfo.numer == tbInfo.denom
-            ? nsPerPulse
-            : nsPerPulse * UInt64(tbInfo.denom) / UInt64(tbInfo.numer)
-
-        clockThreadRunning = true
-        let thread = Thread {
-            // Start one full period after the Start message so the first
-            // Start→Clock interval is exactly one beat-subdivision.
-            var nextFire = mach_absolute_time() + machPerPulse
-            while self.clockThreadRunning {
-                mach_wait_until(nextFire)          // kernel-level precision wait
-                guard self.clockThreadRunning else { break }
-                self.sendSystemRealtime(0xF8, to: devices)
-                nextFire += machPerPulse           // absolute schedule — never drifts
-            }
-        }
-        thread.threadPriority = 1.0   // real-time priority for timing accuracy
-        thread.start()
-        clockThread = thread
+        let run = ClockRun()
+        clockRun = run
+        Self.runClock(run, port: outputPort, endpoints: endpoints, firstPulse: firstPulse,
+                      pulse: pulse, sendStart: sendTransport)
         isClockRunning = true
         activityLog?.log("Clock started at \(bpm) BPM", direction: .system, proto: .midi)
     }
 
     /// Stops the MIDI clock and sends MIDI Stop (0xFC). Call from the main thread.
     func stopClock() {
-        clockThreadRunning = false
-        clockThread = nil
+        // Each run has its own flag, so a quick stop + start can never leave the old
+        // thread running beside the new one (which would double the clock)
+        clockRun?.running.store(false, ordering: .relaxed)
+        clockRun = nil
 
-        let devices = availableDevices
-        if clockSendsTransport && !devices.isEmpty {
-            sendSystemRealtime(0xFC, to: devices)
+        let endpoints = availableDevices.map(\.endpoint)
+        if clockSendsTransport && !endpoints.isEmpty {
+            Self.sendRealtime(0xFC, at: 0, port: outputPort, endpoints: endpoints)
         }
         isClockRunning = false
         clockSendsTransport = false
         activityLog?.log("Clock stopped", direction: .system, proto: .midi)
     }
 
-    /// Sends a single-byte MIDI System Real-Time message to all specified devices.
-    /// Safe to call from any thread — does not touch @Observable properties.
-    private func sendSystemRealtime(_ byte: UInt8, to devices: [MIDIDevice]) {
+    /// Time from starting the clock to its first pulse, so the first one can be stamped ahead
+    static let clockLeadIn: Double = 0.03
+    /// How early each pulse is handed to CoreMIDI
+    private nonisolated static let clockLookahead: Double = 0.005
+
+    /// One running clock's stop flag, shared with its thread
+    nonisolated final class ClockRun: Sendable {
+        let running = Atomic<Bool>(true)
+    }
+
+    /// The clock thread. Nonisolated: it touches only the values passed in, never the manager.
+    private nonisolated static func runClock(_ run: ClockRun, port: MIDIPortRef, endpoints: [MIDIEndpointRef],
+                                             firstPulse: UInt64, pulse: UInt64, sendStart: Bool) {
+        let lookahead = HostTime.ticks(seconds: clockLookahead)
+        let thread = Thread {
+            // Start goes out one pulse before beat 1, so Start→first Clock is one pulse
+            if sendStart { sendRealtime(0xFA, at: firstPulse &- pulse, port: port, endpoints: endpoints) }
+            var nextPulse = firstPulse
+            while run.running.load(ordering: .relaxed) {
+                mach_wait_until(nextPulse &- lookahead)    // kernel-level precision wait
+                guard run.running.load(ordering: .relaxed) else { break }
+                sendRealtime(0xF8, at: nextPulse, port: port, endpoints: endpoints)
+                nextPulse += pulse                          // absolute schedule — never drifts
+            }
+        }
+        thread.threadPriority = 1.0   // real-time priority for timing accuracy
+        thread.start()
+    }
+
+    /// Sends a single-byte MIDI System Real-Time message, delivered by CoreMIDI at
+    /// `timeStamp` (host time; 0 = now). Safe to call from any thread.
+    private nonisolated static func sendRealtime(_ byte: UInt8, at timeStamp: MIDITimeStamp,
+                                                 port: MIDIPortRef, endpoints: [MIDIEndpointRef]) {
         var bytes: [UInt8] = [byte]
         var packetList = MIDIPacketList()
         var packet = MIDIPacketListInit(&packetList)
-        packet = MIDIPacketListAdd(&packetList, 1024, packet, 0, 1, &bytes)
-        for device in devices {
-            MIDISend(outputPort, device.endpoint, &packetList)
+        packet = MIDIPacketListAdd(&packetList, 1024, packet, timeStamp, 1, &bytes)
+        for endpoint in endpoints {
+            MIDISend(port, endpoint, &packetList)
         }
     }
 

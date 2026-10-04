@@ -104,6 +104,7 @@ struct PerformLyricsPanel: View {
 
             if mode == .lyrics {
                 TransposeMenu(song: song) { try? viewContext.save() }
+                LyricsDisplayMenu()
             }
 
             Button {

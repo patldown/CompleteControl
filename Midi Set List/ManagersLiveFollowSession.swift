@@ -89,6 +89,15 @@ final class LiveFollowSession: NSObject {
     var followScroll: Bool {
         didSet { UserDefaults.standard.set(followScroll, forKey: "liveFollowScroll") }
     }
+    /// Followers may trigger snapshots themselves. Off by default: only the leader changes
+    /// snapshots, so two devices never fight over the same gear.
+    var followerControlsSnapshots: Bool {
+        didSet { UserDefaults.standard.set(followerControlsSnapshots, forKey: "liveFollowerControlsSnapshots") }
+    }
+
+    /// Following without the override: Perform's snapshots are greyed out, and pedals and
+    /// MIDI triggers don't change them
+    var snapshotsLocked: Bool { mode == .following && !followerControlsSnapshots }
 
     /// Set by the app
     @ObservationIgnored weak var performance: PerformanceSession?
@@ -108,6 +117,7 @@ final class LiveFollowSession: NSObject {
         stageName = defaults.string(forKey: "liveStageName") ?? "My \(UIDevice.current.model)"
         followerSendsCommands = defaults.bool(forKey: "liveFollowerSendsCommands")
         followScroll = defaults.object(forKey: "liveFollowScroll") as? Bool ?? true
+        followerControlsSnapshots = defaults.bool(forKey: "liveFollowerControlsSnapshots")
         super.init()
     }
 

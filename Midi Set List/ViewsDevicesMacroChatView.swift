@@ -152,7 +152,7 @@ struct MacroChatView: View {
             .navigationTitle("Generate Macros")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
                 if !chatSession.messages.isEmpty {

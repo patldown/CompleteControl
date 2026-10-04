@@ -476,7 +476,7 @@ struct FormulaEvaluatorTests {
     }
 
     @Test func comparison_withArithmetic() {
-        #expect(eval("bpm + 10 > 130", bpm: 120) == 1)  // 130 > 130 is false
+        #expect(eval("bpm + 10 > 130", bpm: 120) == 0)  // 130 > 130 is false
         #expect(eval("bpm + 10 > 129", bpm: 120) == 1)  // 130 > 129 is true
     }
 
@@ -732,7 +732,7 @@ struct SongTests {
         let c2 = MIDICommand(commandType: .programChange, channel: 1, value1: 2, context: ctx)
         let c3 = MIDICommand(commandType: .programChange, channel: 1, value1: 3, context: ctx)
         song.addCommand(c1); song.addCommand(c2); song.addCommand(c3)
-        song.moveCommand(from: 0, to: 2)  // move c1 to the end
+        song.moveCommand(from: 0, to: 3)  // move c1 to the end (SwiftUI insert-before offset: 3 = after last item)
         let sorted = song.sortedCommands
         #expect(sorted[0].value1 == 2)
         #expect(sorted[1].value1 == 3)

@@ -149,6 +149,24 @@ enum ChordEngine {
         return shift(root) + quality + (bass.map { "/" + shift($0) } ?? "")
     }
 
+    /// A chord line's chords and the column (in characters) each starts at; nil when the
+    /// line isn't a chord line. Neutral tokens (| x2 N.C.) are skipped.
+    static func chordLineTokens(_ line: String) -> [(column: Int, chord: String)]? {
+        let ns = line as NSString
+        let tokens = tokenPattern.matches(in: line, range: NSRange(location: 0, length: ns.length))
+        let words = tokens.map { ns.substring(with: $0.range) }
+        func core(_ w: String) -> String {
+            w.count > 2 && w.hasPrefix("(") && w.hasSuffix(")") ? String(w.dropFirst().dropLast()) : w
+        }
+        let flags = words.map { isChord(core($0)) }
+        guard !words.isEmpty, flags.contains(true), zip(words, flags).allSatisfy({ $1 || isNeutral($0) })
+        else { return nil }
+        return zip(tokens, words).enumerated().compactMap { index, pair in
+            guard flags[index], let range = Range(pair.0.range, in: line) else { return nil }
+            return (line.distance(from: line.startIndex, to: range.lowerBound), core(pair.1))
+        }
+    }
+
     struct Rendered {
         var text: String
         /// UTF-16 ranges of recognised chords in `text`
@@ -156,14 +174,16 @@ enum ChordEngine {
     }
 
     /// Finds chords — whole chord lines and inline [G] — transposes them, and keeps chord
-    /// lines lined up over the lyric below.
-    static func render(_ text: String, transpose semitones: Int, flats: Bool?) -> Rendered {
+    /// lines lined up over the lyric below. `hideChords` leaves just the words: chord lines
+    /// are dropped and inline [G] chords removed (for singers who don't need them).
+    static func render(_ text: String, transpose semitones: Int, flats: Bool?, hideChords: Bool = false) -> Rendered {
         var output = ""
         var ranges: [NSRange] = []
         var outLength = 0  // UTF-16 length of `output`
+        var emittedLines = 0
 
         let lines = text.components(separatedBy: "\n")
-        for (i, line) in lines.enumerated() {
+        for line in lines {
             let ns = line as NSString
             let tokens = tokenPattern.matches(in: line, range: NSRange(location: 0, length: ns.length))
             let words = tokens.map { ns.substring(with: $0.range) }
@@ -175,6 +195,13 @@ enum ChordEngine {
             let chordFlags = words.map { isChord(core($0)) }
             let isChordLine = !words.isEmpty && chordFlags.contains(true)
                 && zip(words, chordFlags).allSatisfy { $1 || isNeutral($0) }
+
+            if hideChords && isChordLine { continue }
+            if emittedLines > 0 {
+                output += "\n"
+                outLength += 1
+            }
+            emittedLines += 1
 
             var lineOut = ""
             if isChordLine {
@@ -206,22 +233,19 @@ enum ChordEngine {
                     let inner = ns.substring(with: m.range(at: 1))
                     guard isChord(inner) else { continue }
                     lineOut += ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor))
+                    cursor = m.range.location + m.range.length
+                    if hideChords { continue }
                     let moved = transpose(inner, by: semitones, flats: flats) ?? inner
                     lineOut += "["
                     ranges.append(NSRange(location: outLength + (lineOut as NSString).length,
                                           length: (moved as NSString).length))
                     lineOut += moved + "]"
-                    cursor = m.range.location + m.range.length
                 }
                 lineOut += ns.substring(from: cursor)
             }
 
             output += lineOut
             outLength += (lineOut as NSString).length
-            if i < lines.count - 1 {
-                output += "\n"
-                outLength += 1
-            }
         }
         return Rendered(text: output, chordRanges: ranges)
     }

@@ -164,3 +164,119 @@ enum BulkRequestPlanner {
         return payload.actions
     }
 }
+
+// MARK: - Library context (device library wand)
+
+extension BulkRequestPlanner {
+
+    struct LibraryContext {
+        let deviceSummary: String
+    }
+
+    private static let libraryActionDefinition = """
+        An action is ONE of:
+        (a) Creating a new MIDI device (name, optionally manufacturer and MIDI channel), or
+        (b) Adding one command macro to a device: a bank select + PC pair, one CC message, or \
+        one OSC message — together is ONE macro.
+        """
+
+    static func isMultiLibraryAction(_ request: String, context: LibraryContext) async -> Bool {
+        let ai = AISettings.shared
+        let provider = ai.provider(for: .bulkCheck)
+        let deviceLine = context.deviceSummary.isEmpty
+            ? "No devices in library yet."
+            : "Known devices: \(context.deviceSummary)."
+        let instructions = """
+            You classify requests sent to a device library assistant in Midi Set List.
+            \(deviceLine)
+            \(libraryActionDefinition)
+            Answer true only if the request clearly asks for more than one action, e.g. \
+            "create an HX Stomp and add a tap tempo macro", "add clean and drive presets to the guitar synth".
+            Answer false for a single action or a correction to a previous result.
+            """
+
+        func checkOnDevice() async -> Bool {
+            guard SystemLanguageModel.default.isAvailable else { return false }
+            let session = LanguageModelSession(instructions: instructions)
+            return (try? await session.respond(to: request, generating: MultiActionCheck.self)
+                .content.hasMultipleActions) ?? false
+        }
+
+        guard provider != .onDevice,
+              let apiKey = provider == .openAI ? ai.openAIKey : ai.anthropicKey
+        else { return await checkOnDevice() }
+
+        do {
+            let response = try await ExternalAIClient.chat(
+                provider: provider,
+                apiKey: apiKey,
+                systemPrompt: instructions + """
+
+                    Respond ONLY with a JSON object:
+                    {"multiple": true} or {"multiple": false}
+                    """,
+                messages: [ExternalAIMessage(role: "user", content: request)],
+                workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
+                anthropicModelID: ai.anthropicModel(for: .bulkCheck),
+                anthropicThinking: ai.thinkingEnabled(for: .bulkCheck)
+            )
+            return decodeMultiple(from: response.text)
+        } catch let error where ExternalAIError.isConnectivity(error) {
+            return await checkOnDevice()
+        } catch {
+            return false
+        }
+    }
+
+    static func splitLibraryActions(_ request: String, context: LibraryContext) async throws -> [String] {
+        let ai = AISettings.shared
+        let provider = ai.provider(for: .bulkSplit)
+        let deviceLine = context.deviceSummary.isEmpty
+            ? "No devices in library yet."
+            : "Known devices: \(context.deviceSummary)."
+        let instructions = """
+            You split a request sent to a device library assistant into separate actions, one per item.
+            \(deviceLine)
+            \(libraryActionDefinition)
+            Rules:
+            - Keep the exact order the user gave. Expand ranges.
+            - Each request must stand alone: repeat device name and channel in every one.
+            - Do not add, drop, or invent actions.
+            """
+
+        func splitOnDevice() async throws -> [String] {
+            let session = LanguageModelSession(instructions: instructions)
+            return try await session.respond(to: request, generating: SplitActionList.self).content.actions
+        }
+
+        let actions: [String]
+        if provider == .onDevice {
+            actions = try await splitOnDevice()
+        } else {
+            guard let apiKey = provider == .openAI ? ai.openAIKey : ai.anthropicKey
+            else { throw ExternalAIError.notConfigured }
+            do {
+                let response = try await ExternalAIClient.chat(
+                    provider: provider,
+                    apiKey: apiKey,
+                    systemPrompt: instructions + """
+
+                        Respond ONLY with a JSON object:
+                        {"actions": ["first action", "second action"]}
+                        """,
+                    messages: [ExternalAIMessage(role: "user", content: request)],
+                    workspaceID: provider == .anthropic ? ai.anthropicWorkspaceID : nil,
+                    anthropicModelID: ai.anthropicModel(for: .bulkSplit),
+                    anthropicThinking: ai.thinkingEnabled(for: .bulkSplit)
+                )
+                actions = try decodeActions(from: response.text)
+            } catch let error where ExternalAIError.isConnectivity(error) && SystemLanguageModel.default.isAvailable {
+                actions = try await splitOnDevice()
+            }
+        }
+
+        return actions
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+}

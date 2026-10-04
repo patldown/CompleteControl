@@ -108,16 +108,70 @@ struct ShareItemButton: View {
             let objectID = object.objectID
             let title = "\(kindName): \(itemName)"
             let fileName = "\(kindName) - \(itemName).msl"
-            // Build archive on a background Core Data context so the main thread stays free
-            let bgContext = PersistenceController.shared.newBackgroundContext()
-            let archive = try await bgContext.perform {
-                try DataArchiveExporter.share([bgContext.object(with: objectID)], title: title)
+            // The button sits in a menu that closes on tap, so its own "Preparing…" label
+            // is never seen; the card shows the work is happening
+            let url = try await ProcessingHUD.run("Preparing \(kindName)…") {
+                // Build archive on a background Core Data context so the main thread stays free
+                let bgContext = PersistenceController.shared.newBackgroundContext()
+                let archive = try await bgContext.perform {
+                    try DataArchiveExporter.share([bgContext.object(with: objectID)], title: title)
+                }
+                // JSON encoding + file write is also off the main thread
+                return try await Task.detached(priority: .userInitiated) {
+                    try DataArchiveExporter.write(archive, fileName: fileName)
+                }.value
             }
-            // JSON encoding + file write is also off the main thread
-            let url = try await Task.detached(priority: .userInitiated) {
-                try DataArchiveExporter.write(archive, fileName: fileName)
-            }.value
             readyFile = ReadyFile(url: url)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Export as ChordPro
+
+/// Exports songs as ChordPro files (one per song) for other chord apps, via the share sheet
+struct ChordProExportButton: View {
+    let songs: [Song]
+    var title = "Export as ChordPro…"
+
+    @State private var readyFiles: ReadyFiles?
+    @State private var errorMessage: String?
+
+    private struct ReadyFiles: Identifiable {
+        let id = UUID()
+        let urls: [URL]
+    }
+
+    var body: some View {
+        Button {
+            Task { await prepare() }
+        } label: {
+            Label(title, systemImage: "doc.text")
+        }
+        .disabled(songs.isEmpty)
+        .sheet(item: $readyFiles) { files in
+            ActivityShareSheet(items: files.urls)
+                .presentationDetents([.medium, .large])
+                .ignoresSafeArea()
+        }
+        .alert("Couldn't Export", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let errorMessage { Text(errorMessage) }
+        }
+    }
+
+    @MainActor
+    private func prepare() async {
+        do {
+            let urls = try await ProcessingHUD.run("Preparing ChordPro…") {
+                try ChordPro.writeFiles(for: songs)
+            }
+            readyFiles = ReadyFiles(urls: urls)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -132,6 +186,7 @@ struct BackupSection: View {
     @State private var errorMessage: String?
     @State private var isPreparingBackup = false
     @State private var readyBackup: ReadyFile?
+    @State private var showBackupSavedBanner = false
 
     struct ReadyFile: Identifiable {
         let id = UUID()
@@ -172,16 +227,25 @@ struct BackupSection: View {
         }
         .sheet(item: $pendingImport) { ImportReviewSheet(archive: $0.archive) }
         .sheet(item: $readyBackup) { file in
-            ActivityShareSheet(items: [file.url])
-                .presentationDetents([.medium, .large])
-                .ignoresSafeArea()
+            ActivityShareSheet(items: [file.url]) { saved in
+                if saved { showBackupSavedBanner = true }
+            }
+            .presentationDetents([.medium, .large])
+            .ignoresSafeArea()
+        }
+        .alert("Backup Saved", isPresented: $showBackupSavedBanner) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Your backup file was saved successfully.")
         }
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.midiSetListArchive, .json], allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                do { pendingImport = PendingImport(archive: try DataArchiveImporter.read(url)) }
-                catch { errorMessage = error.localizedDescription }
+                Task {
+                    do { pendingImport = PendingImport(archive: try await DataArchiveImporter.readShowingProgress(url)) }
+                    catch { errorMessage = error.localizedDescription }
+                }
             case .failure(let error):
                 errorMessage = error.localizedDescription
             }
@@ -201,14 +265,14 @@ struct BackupSection: View {
     private func exportFullBackup() async {
         isPreparingBackup = true
         defer { isPreparingBackup = false }
-        // Let the spinner appear before the work starts
-        try? await Task.sleep(for: .milliseconds(80))
         do {
-            let archive = try DataArchiveExporter.fullBackup(context: PersistenceController.shared.viewContext)
-            let fileName = ArchiveFile.fullBackup().fileName
-            let url = try await Task.detached(priority: .userInitiated) {
-                try DataArchiveExporter.write(archive, fileName: fileName)
-            }.value
+            let url = try await ProcessingHUD.run("Preparing Backup…") {
+                let archive = try DataArchiveExporter.fullBackup(context: PersistenceController.shared.viewContext)
+                let fileName = ArchiveFile.fullBackup().fileName
+                return try await Task.detached(priority: .userInitiated) {
+                    try DataArchiveExporter.write(archive, fileName: fileName)
+                }.value
+            }
             readyBackup = ReadyFile(url: url)
         } catch {
             errorMessage = "Couldn't make the backup: \(error.localizedDescription)"
@@ -219,12 +283,29 @@ struct BackupSection: View {
 /// The system share sheet (Save to Files, AirDrop, Mail…) for files that are already made
 struct ActivityShareSheet: UIViewControllerRepresentable {
     let items: [Any]
+    /// Called when the sheet completes; `saved` is true when the user performed an action (vs. cancelled).
+    var onComplete: ((_ saved: Bool) -> Void)? = nil
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        vc.completionWithItemsHandler = { _, completed, _, _ in
+            DispatchQueue.main.async { onComplete?(completed) }
+        }
+        return vc
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - Reading a file to import
+
+extension DataArchiveImporter {
+    /// Reads and decodes an archive off the main thread with the processing card showing
+    static func readShowingProgress(_ url: URL) async throws -> DataArchive {
+        try await ProcessingHUD.run("Opening File…") {
+            try await Task.detached(priority: .userInitiated) { try read(url) }.value
+        }
+    }
 }
 
 // MARK: - Import review
@@ -326,11 +407,15 @@ struct ImportReviewSheet: View {
     }
 
     private func run(_ mode: DataArchiveImporter.Mode) {
-        do {
-            let count = try DataArchiveImporter.apply(archive, mode: mode, context: viewContext)
-            result = "Imported \(count) item\(count == 1 ? "" : "s")"
-        } catch {
-            errorMessage = error.localizedDescription
+        Task {
+            do {
+                let count = try await ProcessingHUD.run(mode == .replaceAll ? "Restoring Backup…" : "Importing…") {
+                    try DataArchiveImporter.apply(archive, mode: mode, context: viewContext)
+                }
+                result = "Imported \(count) item\(count == 1 ? "" : "s")"
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

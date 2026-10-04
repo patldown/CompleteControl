@@ -418,6 +418,54 @@ struct ChartContentView: View {
     }
 }
 
+/// This person's lyrics look, used everywhere they perform: size up or down from the size
+/// that fits the longest line, and chords shown or hidden. The menu stays open while
+/// stepping the size so several steps take one visit.
+struct LyricsDisplayMenu: View {
+    @ObservedObject private var prefs = UserPreferences.shared
+
+    private var percent: Int { Int((prefs.lyricsTextScale * 100).rounded()) }
+
+    var body: some View {
+        Menu {
+            Text(prefs.lyricsTextScale == 1 ? "Text fits the longest line" : "Text size \(percent)%")
+            Button {
+                prefs.stepLyricsTextScale(1)
+            } label: {
+                Label("Larger Text", systemImage: "plus.magnifyingglass")
+            }
+            .disabled(prefs.lyricsTextScale >= UserPreferences.lyricsTextScaleRange.upperBound)
+            .menuActionDismissBehavior(.disabled)
+
+            Button {
+                prefs.stepLyricsTextScale(-1)
+            } label: {
+                Label("Smaller Text", systemImage: "minus.magnifyingglass")
+            }
+            .disabled(prefs.lyricsTextScale <= UserPreferences.lyricsTextScaleRange.lowerBound)
+            .menuActionDismissBehavior(.disabled)
+
+            if prefs.lyricsTextScale != 1 {
+                Button {
+                    prefs.lyricsTextScale = 1
+                } label: {
+                    Label("Fit Longest Line", systemImage: "arrow.left.and.right")
+                }
+            }
+
+            Divider()
+
+            Toggle(isOn: $prefs.lyricsHideChords) {
+                Label("Hide Chords", systemImage: "eye.slash")
+            }
+        } label: {
+            Label("Text Size and Chords", systemImage: "textformat.size")
+        }
+        .menuIndicator(.hidden)
+        .accessibilityValue(prefs.lyricsHideChords ? "\(percent)%, chords hidden" : "\(percent)%")
+    }
+}
+
 /// Lyrics / Sheet Music switch, shown when a chart has both. Remembers the choice for this
 /// person on this chart — or, while the Settings override is on, just for this visit.
 struct ChartModeMenu: View {

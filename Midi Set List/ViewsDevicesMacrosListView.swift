@@ -42,6 +42,7 @@ struct MacrosListView: View {
             }
         }
         .navigationTitle(category.name)
+        .performShortcutDetail()
         .toolbar {
             // Edit: always top right, first of the buttons there, on every screen
             if !category.macros.isEmpty {

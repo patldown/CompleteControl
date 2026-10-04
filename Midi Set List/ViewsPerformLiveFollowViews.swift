@@ -37,6 +37,7 @@ struct LiveFollowButton: View {
                 }
             }
         }
+        .accessibilityIdentifier("live-follow")
         .sheet(isPresented: $showingSheet) {
             LiveFollowSheet()
         }
@@ -47,6 +48,7 @@ struct LiveFollowSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(PerformanceSession.self) private var performance
     @Bindable private var live = LiveFollowSession.shared
+    @State private var confirmingSnapshotOverride = false
 
     var body: some View {
         NavigationStack {
@@ -67,11 +69,32 @@ struct LiveFollowSheet: View {
                 Section {
                     Toggle("Send My Commands While Following", isOn: $live.followerSendsCommands)
                     Toggle("Follow the Leader's Scrolling", isOn: $live.followScroll)
+                    Toggle("Let Me Trigger Snapshots", isOn: Binding(
+                        get: { live.followerControlsSnapshots },
+                        set: { on in
+                            // Turning it on asks first; turning it off doesn't
+                            if on { confirmingSnapshotOverride = true } else { live.followerControlsSnapshots = false }
+                        }
+                    ))
                 } header: {
                     Text("When Following")
                 } footer: {
-                    Text("Leave commands off when the leader's device already drives your gear — otherwise every change would be sent twice. Scrolling follows only when you're both showing the same chart.")
+                    Text("Leave commands off when the leader's device already drives your gear — otherwise every change would be sent twice. Scrolling follows only when you're both showing the same chart. Snapshots are greyed out while following: only the leader changes them unless you turn that on.")
                 }
+            }
+            .alert("Trigger Snapshots While Following?", isPresented: $confirmingSnapshotOverride) {
+                Button("Turn On") { live.followerControlsSnapshots = true }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("""
+                More than one device sending snapshots at once can cause:
+                • Gear jumping between patches — the last device to send wins
+                • Doubled or clashing MIDI, glitching sounds mid-song
+                • Your screen getting out of step with the leader's
+                • Nobody being sure which device is in charge
+
+                Only turn this on if your snapshots drive gear nobody else controls.
+                """)
             }
             .navigationTitle("Live Follow")
             .navigationBarTitleDisplayMode(.inline)

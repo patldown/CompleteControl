@@ -23,6 +23,11 @@ struct SongSnapshotsSection<Content: View>: View {
     @State private var renamingIndex: Int?
     @State private var renameText = ""
     @State private var deletingIndex: Int?
+    @State private var isLoadingNames = false
+    @State private var suggestedNames: [String] = []
+    @State private var showingNamesSheet = false
+    @State private var namesError: String?
+    @State private var showingNamesError = false
 
     var body: some View {
         Section {
@@ -44,6 +49,18 @@ struct SongSnapshotsSection<Content: View>: View {
             HStack {
                 Text("Snapshots")
                 Spacer()
+                if AISettings.shared.anyAIAvailable && song.snapshotCount > 0 {
+                    if isLoadingNames {
+                        ProgressView().padding(.trailing, 6)
+                    } else {
+                        Button { suggestNames() } label: {
+                            Label("Suggest Names", systemImage: "sparkles")
+                                .labelStyle(.iconOnly)
+                        }
+                        .foregroundStyle(.tint)
+                        .padding(.trailing, 6)
+                    }
+                }
                 Text("\(song.snapshotCount) of \(Song.maxSnapshots)")
                     .foregroundStyle(.secondary)
             }
@@ -88,6 +105,29 @@ struct SongSnapshotsSection<Content: View>: View {
         // Don't leave a snapshot Learn waiting after leaving the song
         .onDisappear {
             if case .snapshot = performance.learnTarget { performance.learnTarget = nil }
+        }
+        .sheet(isPresented: $showingNamesSheet) {
+            SnapshotNamesView(song: song, proposed: suggestedNames)
+        }
+        .alert("Couldn't Suggest Names", isPresented: $showingNamesError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let namesError { Text(namesError) }
+        }
+    }
+
+    private func suggestNames() {
+        guard !isLoadingNames else { return }
+        isLoadingNames = true
+        Task {
+            do {
+                suggestedNames = try await SnapshotNamesAI.suggest(for: song)
+                showingNamesSheet = true
+            } catch {
+                namesError = error.localizedDescription
+                showingNamesError = true
+            }
+            isLoadingNames = false
         }
     }
 

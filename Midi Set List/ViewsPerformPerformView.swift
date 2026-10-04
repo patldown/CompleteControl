@@ -165,7 +165,8 @@ private struct PerformPlayingView: View {
             if let song = performance.currentSong {
                 VStack(alignment: .leading, spacing: 12) {
                     if !lyricsExpanded {
-                        PerformSongHeader(song: song, index: performance.songIndex, total: songs.count)
+                        PerformSongHeader(song: song, index: performance.songIndex, total: songs.count,
+                                          nextSongName: name(in: songs, at: performance.songIndex + 1))
                     }
                     if let error = performance.lastError {
                         errorBanner(error)
@@ -219,8 +220,7 @@ private struct PerformPlayingView: View {
                 Button(role: .destructive) {
                     performance.stop()
                 } label: {
-                    Label("End", systemImage: "stop.fill")
-                        .labelStyle(.titleAndIcon)
+                    Label("End Set", systemImage: "stop.fill")
                 }
                 .tint(.red)
             }
@@ -399,6 +399,7 @@ private struct PerformSongHeader: View {
     @ObservedObject var song: Song
     let index: Int
     let total: Int
+    var nextSongName: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -423,10 +424,23 @@ private struct PerformSongHeader: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             }
+            if song.bpm != nil {
+                MetronomeControl(song: song)
+            }
             if let notes = song.notes, !notes.isEmpty {
                 Text(notes)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            }
+            if let next = nextSongName {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                    Text("Up next: \(next)")
+                        .lineLimit(1)
+                }
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -472,8 +486,21 @@ private struct PerformSnapshotStrip: View {
     @Environment(PerformanceSession.self) private var performance
     @ObservedObject var song: Song
     @ObservedObject private var remote = MIDIRemoteSettings.shared
+    @State private var flashingIndex: Int? = nil
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if performance.snapshotsLocked {
+                Label("The leader controls snapshots", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+            }
+            strip
+        }
+    }
+
+    private var strip: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -486,6 +513,7 @@ private struct PerformSnapshotStrip: View {
             }
             .onChange(of: performance.activeSnapshot) { old, new in
                 reveal(new, movingForward: new >= old, proxy: proxy)
+                flash(new)
             }
             .onAppear {
                 reveal(performance.activeSnapshot, movingForward: true, proxy: proxy, animated: false)
@@ -506,13 +534,24 @@ private struct PerformSnapshotStrip: View {
         }
     }
 
+    private func flash(_ index: Int) {
+        flashingIndex = index
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            withAnimation(.easeOut(duration: 0.3)) { flashingIndex = nil }
+        }
+    }
+
     private func snapshotButton(_ index: Int, proxy: ScrollViewProxy) -> some View {
         let isActive = performance.isActive(snapshot: index, of: song)
         let count = song.commands(inSnapshot: index).count
+        // Following: greyed out, with the leader's live snapshot still marked
+        let locked = performance.snapshotsLocked
+        let activeColor = locked ? Color.gray : Color.accentColor
         return Button {
             let previous = performance.activeSnapshot
             performance.selectSnapshot(index)
             reveal(index, movingForward: index >= previous, proxy: proxy)
+            flash(index)
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
@@ -543,15 +582,25 @@ private struct PerformSnapshotStrip: View {
             .foregroundStyle(isActive ? Color.white : Color.primary)
             .frame(width: 128, alignment: .topLeading)
             .padding(8)
-            .background(isActive ? Color.accentColor : Color(.secondarySystemBackground),
+            .background(isActive ? activeColor : Color(.secondarySystemBackground),
                         in: RoundedRectangle(cornerRadius: 10))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(isActive ? Color.clear : Color.secondary.opacity(0.2))
             )
+            .overlay {
+                if flashingIndex == index {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(.white.opacity(0.45))
+                }
+            }
+            .animation(.easeOut(duration: 0.3), value: flashingIndex == index)
+            .opacity(locked && !isActive ? 0.45 : 1)
         }
         .buttonStyle(.plain)
+        .disabled(locked)
         .accessibilityAddTraits(isActive ? .isSelected : [])
+        .accessibilityHint(locked ? "The leader controls snapshots" : "")
     }
 }
 
