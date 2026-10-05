@@ -148,6 +148,20 @@ struct SongDetailView: View {
                     }
                 }
             }
+
+            // Push-to-main: only for set-list copies that the local user owns
+            if !song.isMaster && !PersistenceController.shared.isSharedByOther(song) {
+                ToolbarItem(placement: .secondaryAction) {
+                    PushToMainButton(song: song)
+                }
+            }
+
+            // iCloud sharing: only for master songs
+            if song.isMaster {
+                ToolbarItem(placement: .secondaryAction) {
+                    CloudSongShareButton(song: song)
+                }
+            }
             
             ToolbarItem(placement: .primaryAction) {
                 if isSelectMode {
@@ -853,6 +867,37 @@ struct SongDetailView: View {
             showingSendError = true
         }
         isSendingCommands = false
+    }
+}
+
+// MARK: - Push to Main
+
+/// Toolbar button that copies this set-list song's data back to the master.
+/// Owns its own confirmation state so it doesn't add complexity to SongDetailView.
+private struct PushToMainButton: View {
+    let song: Song
+    @Environment(\.managedObjectContext) private var viewContext
+    @State private var confirming = false
+
+    var body: some View {
+        Button {
+            confirming = true
+        } label: {
+            Label("Push to Main Song", systemImage: "arrow.up.square")
+        }
+        .confirmationDialog(
+            "Overwrite main song with this version?",
+            isPresented: $confirming,
+            titleVisibility: .visible
+        ) {
+            Button("Push to Main", role: .destructive) {
+                song.pushToMaster(in: viewContext)
+                try? viewContext.save()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This copies all fields and commands from this set list's version back to the main song in your library.")
+        }
     }
 }
 

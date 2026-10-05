@@ -11,7 +11,10 @@ import CoreData
 struct SetListDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(MIDIManager.self) private var midiManager
-    @FetchRequest(sortDescriptors: [SortDescriptor(\.name)]) private var allSongs: FetchedResults<Song>
+    @FetchRequest(
+        sortDescriptors: [SortDescriptor(\.name)],
+        predicate: NSPredicate(format: "canonicalID == nil")
+    ) private var allSongs: FetchedResults<Song>
     @ObservedObject var setList: SetList
     @ObservedObject private var ai = AISettings.shared
 
@@ -145,6 +148,9 @@ struct SetListDetailView: View {
                 ShareItemButton(object: setList, kindName: "Set List", itemName: setList.name)
             }
             ToolbarItem(placement: .secondaryAction) {
+                CloudShareButton(setList: setList)
+            }
+            ToolbarItem(placement: .secondaryAction) {
                 ChordProExportButton(songs: setList.songs, title: "Export Songs as ChordPro…")
             }
             // Hidden when no AI is available
@@ -184,9 +190,8 @@ struct SetListDetailView: View {
     }
     
     private var availableSongs: [Song] {
-        allSongs.filter { song in
-            !setList.songs.contains(where: { $0.id == song.id })
-        }
+        let alreadyCopied = Set(setList.songs.compactMap { $0.canonicalID })
+        return allSongs.filter { !alreadyCopied.contains($0.id) }
     }
     
     private func removeSongs(at offsets: IndexSet) {

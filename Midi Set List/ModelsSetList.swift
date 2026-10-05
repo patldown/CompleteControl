@@ -67,10 +67,15 @@ class SetList: NSManagedObject, Identifiable {
     // ── Mutation helpers ───────────────────────────────────────────────
 
     func addSong(_ song: Song) {
-        guard !songs.contains(where: { $0.objectID == song.objectID }) else { return }
-        addToSongsRaw(song)
+        guard song.isMaster else { return }
+        // Already have a copy of this master in this set list?
+        guard !songs.contains(where: { $0.canonicalID == song.id }) else { return }
+        guard let context = song.managedObjectContext else { return }
+
+        let copy = song.makeCopy(in: context)
+        addToSongsRaw(copy)
         var ids = decodedOrderIDs
-        ids.append(song.id.uuidString)
+        ids.append(copy.id.uuidString)
         songOrderData = encode(ids)
         dateModified = Date()
     }
@@ -81,6 +86,34 @@ class SetList: NSManagedObject, Identifiable {
         ids.removeAll { $0 == song.id.uuidString }
         songOrderData = encode(ids)
         dateModified = Date()
+
+        // Copies belong to exactly one set list — delete them when removed.
+        if !song.isMaster {
+            song.managedObjectContext?.delete(song)
+        }
+    }
+
+    /// Replaces a directly-linked master with a copy during one-time migration.
+    func migrateDirectSong(_ master: Song, in context: NSManagedObjectContext) {
+        guard master.isMaster else { return }
+        let copy = master.makeCopy(in: context)
+        addToSongsRaw(copy)
+        removeFromSongsRaw(master)
+        var ids = decodedOrderIDs
+        if let idx = ids.firstIndex(of: master.id.uuidString) {
+            ids[idx] = copy.id.uuidString
+        } else {
+            ids.append(copy.id.uuidString)
+        }
+        songOrderData = encode(ids)
+    }
+
+    // When a set list is deleted, delete all its song copies.
+    override func prepareForDeletion() {
+        super.prepareForDeletion()
+        for song in songs where !song.isMaster {
+            managedObjectContext?.delete(song)
+        }
     }
 
     /// Reorders songs; caller must save the context.

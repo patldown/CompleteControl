@@ -23,6 +23,13 @@ class Song: NSManagedObject, Identifiable, ChartSource {
 
     // ── Scalar attributes ──────────────────────────────────────────────
     @NSManaged var id: UUID
+    /// nil = this is the master song in the library.
+    /// non-nil = this is a set-list-specific copy; value is the master's id.
+    @NSManaged var canonicalID: UUID?
+
+    /// True when this is the authoritative library song, not a set-list copy.
+    var isMaster: Bool { canonicalID == nil }
+
     @NSManaged var name: String
     @NSManaged var artist: String?
     @NSManaged var genre: String?
@@ -468,6 +475,127 @@ class Song: NSManagedObject, Identifiable, ChartSource {
         for snapshot in snapshots.sorted() {
             applyMacroDrift(macro, inSnapshot: snapshot, context: context)
         }
+    }
+
+    // ── Per-set-list copy support ──────────────────────────────────────
+
+    /// Creates a deep copy of this song with canonicalID pointing back to self.id.
+    /// Does NOT add the copy to any set list — the caller handles that.
+    func makeCopy(in context: NSManagedObjectContext) -> Song {
+        let copy = Song(context: context)
+        copy.id = UUID()
+        copy.canonicalID = self.id
+        copy.name = self.name
+        copy.artist = self.artist
+        copy.genre = self.genre
+        copy.notes = self.notes
+        copy.lyrics = self.lyrics
+        copy.bpm = self.bpm
+        copy.midiClockEnabled = self.midiClockEnabled
+        copy.clickEnabled = self.clickEnabled
+        copy.timeSignature = self.timeSignature
+        copy.snapshotNamesData = self.snapshotNamesData
+        copy.referenceTrackID = self.referenceTrackID
+        copy.referenceTrackTitle = self.referenceTrackTitle
+        copy.referenceTrackArtist = self.referenceTrackArtist
+        copy.referenceTrackURL = self.referenceTrackURL
+        copy.referenceTrackDuration = self.referenceTrackDuration
+        copy.keyRoot = self.keyRoot
+        copy.keyScaleRaw = self.keyScaleRaw
+        copy.transposeRaw = self.transposeRaw
+        copy.capoEnabled = self.capoEnabled
+        copy.capoKeepsKey = self.capoKeepsKey
+        copy.capoRaw = self.capoRaw
+        copy.sendsSnapshotOnLoad = self.sendsSnapshotOnLoad
+        copy.pdfFileName = self.pdfFileName
+        copy.chartImageNamesData = self.chartImageNamesData
+        copy.dateCreated = Date()
+        copy.dateModified = Date()
+        for original in self.sortedCommands {
+            let cmd = MIDICommand(commandType: original.commandType,
+                                  channel: original.channel,
+                                  value1: original.value1,
+                                  value2: original.value2,
+                                  delayMilliseconds: original.delayMilliseconds,
+                                  notes: original.notes,
+                                  context: context)
+            cmd.oscAddress           = original.oscAddress
+            cmd.oscFloatArg          = original.oscFloatArg
+            cmd.oscFormula           = original.oscFormula
+            cmd.value1Formula        = original.value1Formula
+            cmd.value2Formula        = original.value2Formula
+            cmd.sourceMacro          = original.sourceMacro
+            cmd.sourceGroupInstanceID = original.sourceGroupInstanceID
+            copy.addCommand(cmd, toSnapshot: original.snapshotIndex)
+        }
+        return copy
+    }
+
+    /// Overwrites the master song's data with this copy's current state.
+    /// Silently does nothing if this is already the master or if the master is not found.
+    func pushToMaster(in context: NSManagedObjectContext) {
+        guard let canonicalID else { return }
+        let req = NSFetchRequest<Song>(entityName: "Song")
+        req.predicate = NSPredicate(format: "id == %@ AND canonicalID == nil", canonicalID as CVarArg)
+        req.fetchLimit = 1
+        guard let master = (try? context.fetch(req))?.first else { return }
+
+        master.name = self.name
+        master.artist = self.artist
+        master.genre = self.genre
+        master.notes = self.notes
+        master.lyrics = self.lyrics
+        master.bpm = self.bpm
+        master.midiClockEnabled = self.midiClockEnabled
+        master.clickEnabled = self.clickEnabled
+        master.timeSignature = self.timeSignature
+        master.snapshotNamesData = self.snapshotNamesData
+        master.referenceTrackID = self.referenceTrackID
+        master.referenceTrackTitle = self.referenceTrackTitle
+        master.referenceTrackArtist = self.referenceTrackArtist
+        master.referenceTrackURL = self.referenceTrackURL
+        master.referenceTrackDuration = self.referenceTrackDuration
+        master.keyRoot = self.keyRoot
+        master.keyScaleRaw = self.keyScaleRaw
+        master.transposeRaw = self.transposeRaw
+        master.capoEnabled = self.capoEnabled
+        master.capoKeepsKey = self.capoKeepsKey
+        master.capoRaw = self.capoRaw
+        master.sendsSnapshotOnLoad = self.sendsSnapshotOnLoad
+        master.pdfFileName = self.pdfFileName
+        master.chartImageNamesData = self.chartImageNamesData
+        master.dateModified = Date()
+
+        for cmd in master.commands {
+            master.removeFromCommandsRaw(cmd)
+            context.delete(cmd)
+        }
+        for original in self.sortedCommands {
+            let cmd = MIDICommand(commandType: original.commandType,
+                                  channel: original.channel,
+                                  value1: original.value1,
+                                  value2: original.value2,
+                                  delayMilliseconds: original.delayMilliseconds,
+                                  notes: original.notes,
+                                  context: context)
+            cmd.oscAddress           = original.oscAddress
+            cmd.oscFloatArg          = original.oscFloatArg
+            cmd.oscFormula           = original.oscFormula
+            cmd.value1Formula        = original.value1Formula
+            cmd.value2Formula        = original.value2Formula
+            cmd.sourceMacro          = original.sourceMacro
+            cmd.sourceGroupInstanceID = original.sourceGroupInstanceID
+            master.addCommand(cmd, toSnapshot: original.snapshotIndex)
+        }
+    }
+
+    // Deleting a master also deletes all its set-list copies.
+    override func prepareForDeletion() {
+        super.prepareForDeletion()
+        guard isMaster, let context = managedObjectContext else { return }
+        let req = NSFetchRequest<Song>(entityName: "Song")
+        req.predicate = NSPredicate(format: "canonicalID == %@", id as CVarArg)
+        ((try? context.fetch(req)) ?? []).forEach { context.delete($0) }
     }
 
     private func applyMacroDrift(_ macro: DeviceMacro, inSnapshot snapshot: Int, context: NSManagedObjectContext) {

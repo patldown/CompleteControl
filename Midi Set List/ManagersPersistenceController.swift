@@ -130,8 +130,9 @@ final class PersistenceController {
         let roleE     = ent("BandRole")
 
         songE.properties = [
-            attr("id",            .UUIDAttributeType),
-            attr("name",          .stringAttributeType),
+            attr("id",            .UUIDAttributeType,      optional: true),
+            attr("canonicalID",   .UUIDAttributeType,      optional: true),
+            attr("name",          .stringAttributeType,    defaultValue: ""),
             attr("artist",        .stringAttributeType,    optional: true),
             attr("genre",         .stringAttributeType,    optional: true),
             attr("notes",         .stringAttributeType,    optional: true),
@@ -155,12 +156,12 @@ final class PersistenceController {
             attr("capoKeepsKey",  .booleanAttributeType,   defaultValue: true),
             attr("sendsSnapshotOnLoad", .booleanAttributeType, defaultValue: true),
             attr("capoRaw",       .integer16AttributeType, defaultValue: Int16(0)),
-            attr("dateCreated",   .dateAttributeType),
-            attr("dateModified",  .dateAttributeType),
+            attr("dateCreated",   .dateAttributeType,      optional: true),
+            attr("dateModified",  .dateAttributeType,      optional: true),
         ]
 
         commandE.properties = [
-            attr("id",                   .UUIDAttributeType),
+            attr("id",                   .UUIDAttributeType, optional: true),
             attr("orderIndexRaw",        .integer32AttributeType, defaultValue: 0),
             attr("commandTypeRaw",       .stringAttributeType,    defaultValue: "Program Change"),
             attr("channelRaw",           .integer16AttributeType, optional: true),
@@ -178,32 +179,32 @@ final class PersistenceController {
         ]
 
         setListE.properties = [
-            attr("id",            .UUIDAttributeType),
-            attr("name",          .stringAttributeType),
-            attr("dateCreated",   .dateAttributeType),
-            attr("dateModified",  .dateAttributeType),
+            attr("id",            .UUIDAttributeType,   optional: true),
+            attr("name",          .stringAttributeType, defaultValue: ""),
+            attr("dateCreated",   .dateAttributeType,   optional: true),
+            attr("dateModified",  .dateAttributeType,   optional: true),
             attr("notes",         .stringAttributeType, optional: true),
             attr("songOrderData", .stringAttributeType, optional: true),
         ]
 
         deviceE.properties = [
-            attr("id",                .UUIDAttributeType),
-            attr("name",              .stringAttributeType),
+            attr("id",                .UUIDAttributeType,      optional: true),
+            attr("name",              .stringAttributeType,    defaultValue: ""),
             attr("manufacturer",      .stringAttributeType,    optional: true),
             attr("midiChannelRaw",    .integer16AttributeType, defaultValue: Int16(1)),
-            attr("dateCreated",       .dateAttributeType),
+            attr("dateCreated",       .dateAttributeType,      optional: true),
             attr("specFileNamesData", .stringAttributeType,    optional: true),
         ]
 
         categoryE.properties = [
-            attr("id",            .UUIDAttributeType),
-            attr("name",          .stringAttributeType),
+            attr("id",            .UUIDAttributeType,   optional: true),
+            attr("name",          .stringAttributeType, defaultValue: ""),
             attr("orderIndexRaw", .integer32AttributeType, defaultValue: 0),
         ]
 
         macroE.properties = [
-            attr("id",                   .UUIDAttributeType),
-            attr("name",                 .stringAttributeType),
+            attr("id",                   .UUIDAttributeType,   optional: true),
+            attr("name",                 .stringAttributeType, defaultValue: ""),
             attr("notes",                .stringAttributeType,    optional: true),
             attr("channelRaw",           .integer16AttributeType, defaultValue: Int16(1)),
             attr("delayMillisecondsRaw", .integer32AttributeType, defaultValue: Int32(50)),
@@ -224,37 +225,37 @@ final class PersistenceController {
         ]
 
         oscTargE.properties = [
-            attr("id",                   .UUIDAttributeType),
-            attr("name",                 .stringAttributeType),
-            attr("host",                 .stringAttributeType),
+            attr("id",                   .UUIDAttributeType,      optional: true),
+            attr("name",                 .stringAttributeType,    defaultValue: ""),
+            attr("host",                 .stringAttributeType,    defaultValue: ""),
             attr("portRaw",              .integer32AttributeType, defaultValue: Int32(10024)),
             attr("receivePortRaw",       .integer32AttributeType, defaultValue: Int32(10024)),
             attr("keepaliveAddress",     .stringAttributeType,    optional: true),
             attr("keepaliveIntervalRaw", .integer32AttributeType, defaultValue: Int32(8)),
-            attr("dateCreated",          .dateAttributeType),
+            attr("dateCreated",          .dateAttributeType,      optional: true),
         ]
 
         presetE.properties = [
-            attr("id",           .UUIDAttributeType),
-            attr("name",         .stringAttributeType),
-            attr("category",     .stringAttributeType,     defaultValue: "Custom"),
-            attr("dateCreated",  .dateAttributeType),
-            attr("commandsData", .binaryDataAttributeType),
+            attr("id",           .UUIDAttributeType,      optional: true),
+            attr("name",         .stringAttributeType,    defaultValue: ""),
+            attr("category",     .stringAttributeType,    defaultValue: "Custom"),
+            attr("dateCreated",  .dateAttributeType,      optional: true),
+            attr("commandsData", .binaryDataAttributeType, optional: true),
         ]
 
         partE.properties = [
-            attr("id",                  .UUIDAttributeType),
-            attr("name",                .stringAttributeType),
+            attr("id",                  .UUIDAttributeType,      optional: true),
+            attr("name",                .stringAttributeType,    defaultValue: ""),
             attr("lyrics",              .stringAttributeType,    optional: true),
             attr("pdfFileName",         .stringAttributeType,    optional: true),
             attr("chartImageNamesData", .stringAttributeType,    optional: true),
             attr("orderIndexRaw",       .integer32AttributeType, defaultValue: Int32(0)),
-            attr("dateCreated",         .dateAttributeType),
+            attr("dateCreated",         .dateAttributeType,      optional: true),
         ]
 
         roleE.properties = [
-            attr("id",            .UUIDAttributeType),
-            attr("name",          .stringAttributeType),
+            attr("id",            .UUIDAttributeType,   optional: true),
+            attr("name",          .stringAttributeType, defaultValue: ""),
             attr("emoji",         .stringAttributeType,    defaultValue: ""),
             attr("orderIndexRaw", .integer32AttributeType, defaultValue: Int32(0)),
         ]
