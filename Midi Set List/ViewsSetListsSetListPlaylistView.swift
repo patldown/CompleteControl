@@ -211,7 +211,18 @@ struct SetListPlaylistView: View {
             )
             if saveMatches {
                 for row in adding where row.status == .matched {
-                    if let track = row.track { row.song.linkReferenceTrack(track) }
+                    guard let track = row.track else { continue }
+                    row.song.linkReferenceTrack(track)
+                    // Set-list songs are copies; also save to the library master so it
+                    // appears in the Songs tab.
+                    if let canonicalID = row.song.canonicalID {
+                        let req = NSFetchRequest<Song>(entityName: "Song")
+                        req.predicate = NSPredicate(format: "id == %@ AND canonicalID == nil", canonicalID as CVarArg)
+                        req.fetchLimit = 1
+                        if let master = (try? viewContext.fetch(req))?.first {
+                            master.linkReferenceTrack(track)
+                        }
+                    }
                 }
                 try? viewContext.save()
             }
