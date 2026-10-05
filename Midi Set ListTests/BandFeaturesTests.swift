@@ -280,7 +280,8 @@ struct DataArchivePartsTests {
 
         let f = follower.viewContext
         try share(setList, into: f)
-        song.name = "Wonderwall (leader's)"
+        // The set list owns a copy of the song; editing the copy is what gets re-shared
+        setList.songs[0].name = "Wonderwall (leader's)"
         try l.save()
         try share(setList, into: f, mode: .merge)
 

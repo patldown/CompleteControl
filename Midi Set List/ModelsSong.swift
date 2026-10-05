@@ -528,6 +528,18 @@ class Song: NSManagedObject, Identifiable, ChartSource {
             cmd.sourceGroupInstanceID = original.sourceGroupInstanceID
             copy.addCommand(cmd, toSnapshot: original.snapshotIndex)
         }
+        for original in self.parts {
+            let partCopy = SongPart(context: context)
+            partCopy.id = UUID()
+            partCopy.name = original.name
+            partCopy.lyrics = original.lyrics
+            partCopy.pdfFileName = original.pdfFileName
+            partCopy.chartImageNamesData = original.chartImageNamesData
+            partCopy.orderIndex = original.orderIndex
+            partCopy.dateCreated = Date()
+            partCopy.song = copy
+            partCopy.setSeenBy(original.seenBy)
+        }
         return copy
     }
 
