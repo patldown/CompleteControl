@@ -93,6 +93,8 @@ enum SetListAssistant {
     struct Catalog {
         let songsByID: [String: Song]
         let idsBySong: [NSManagedObjectID: String]
+        /// Maps master song.id UUID → catalog string ID, so set-list copies can be looked up by canonicalID
+        let idsByUUID: [UUID: String]
         let listing: String
         /// Set lists get IDs too (L1, L2, …) so a request can change one that isn't open
         let setListsByID: [String: SetList]
@@ -102,11 +104,13 @@ enum SetListAssistant {
         init(songs: [Song], setLists: [SetList]) {
             var byID: [String: Song] = [:]
             var bySong: [NSManagedObjectID: String] = [:]
+            var byUUID: [UUID: String] = [:]
             var lines: [String] = []
             for (index, song) in songs.enumerated() {
                 let id = "S\(index + 1)"
                 byID[id] = song
                 bySong[song.objectID] = id
+                byUUID[song.id] = id
                 var parts = ["\(id) | \(song.name)"]
                 if let artist = song.artist, !artist.isEmpty { parts[0] += " — \(artist)" }
                 if let bpm = song.bpm { parts.append("\(bpm) BPM") }
@@ -120,6 +124,7 @@ enum SetListAssistant {
             }
             songsByID = byID
             idsBySong = bySong
+            idsByUUID = byUUID
             listing = lines.joined(separator: "\n")
 
             var listsByID: [String: SetList] = [:]
@@ -149,8 +154,11 @@ enum SetListAssistant {
             return result
         }
 
+        /// Returns catalog IDs for the given songs. Works for both master songs and set-list copies.
         func ids(for songs: [Song]) -> String {
-            songs.compactMap { idsBySong[$0.objectID] }.joined(separator: ", ")
+            songs.compactMap { song in
+                idsBySong[song.objectID] ?? song.canonicalID.flatMap { idsByUUID[$0] }
+            }.joined(separator: ", ")
         }
     }
 
@@ -293,17 +301,18 @@ enum SetListAssistant {
 
         let trimmedName = plan.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let currentSongs = kind == .update ? (target?.songs ?? []) : []
-        let currentIDs = Set(currentSongs.map(\.objectID))
-        let finalIDs = Set(final.map(\.objectID))
+        // Set lists hold copies; map each to its master's UUID for comparison against the catalog's masters.
+        let currentMasterIDs = Set(currentSongs.map { $0.canonicalID ?? $0.id })
+        let finalMasterIDs = Set(final.map(\.id))
 
         // A song is "moved" when its position among the songs kept from before changed
-        let keptBefore = currentSongs.filter { finalIDs.contains($0.objectID) }.map(\.objectID)
-        let keptAfter = final.filter { currentIDs.contains($0.objectID) }.map(\.objectID)
+        let keptBefore = currentSongs.filter { finalMasterIDs.contains($0.canonicalID ?? $0.id) }.map { $0.canonicalID ?? $0.id }
+        let keptAfter  = final.filter { currentMasterIDs.contains($0.id) }.map(\.id)
         let entries = final.map { song -> SetListChangePreview.Entry in
-            guard kind == .update, currentIDs.contains(song.objectID) else {
+            guard kind == .update, currentMasterIDs.contains(song.id) else {
                 return .init(song: song, mark: kind == .update ? .added : .unchanged)
             }
-            let moved = keptBefore.firstIndex(of: song.objectID) != keptAfter.firstIndex(of: song.objectID)
+            let moved = keptBefore.firstIndex(of: song.id) != keptAfter.firstIndex(of: song.id)
             return .init(song: song, mark: moved ? .moved : .unchanged)
         }
 
@@ -329,7 +338,7 @@ enum SetListAssistant {
             newName: newName,
             oldName: kind == .update ? target?.name : nil,
             finalSongs: entries,
-            removed: currentSongs.filter { !finalIDs.contains($0.objectID) },
+            removed: currentSongs.filter { !finalMasterIDs.contains($0.canonicalID ?? $0.id) },
             unknownIDs: unknown,
             makePlaylist: makePlaylist
         )
@@ -353,7 +362,14 @@ enum SetListAssistant {
             if let name = preview.newName { setList.name = name }
             preview.removed.forEach(setList.removeSong)
             ordered.forEach(setList.addSong)   // no-op for songs already in the list
-            setList.setSongOrder(ordered)
+            // setSongOrder uses copy UUIDs; look up each master's copy in the set list
+            let copiesByCanonical = Dictionary(uniqueKeysWithValues:
+                setList.songs.compactMap { song -> (UUID, Song)? in
+                    guard let cid = song.canonicalID else { return nil }
+                    return (cid, song)
+                }
+            )
+            setList.setSongOrder(ordered.compactMap { copiesByCanonical[$0.id] })
             try context.save()
             return setList
         }
