@@ -144,8 +144,10 @@ private struct PerformPlayingView: View {
     @Environment(PerformanceSession.self) private var performance
     @Environment(MIDIManager.self) private var midiManager
     @ObservedObject private var remote = MIDIRemoteSettings.shared
+    private let music = AppleMusicReference.shared
 
     @State private var showingBTMIDI = false
+    @State private var showingReferencePlayer = false
     /// Lyrics fill the window; the snapshot strip stays above them
     @State private var lyricsExpanded = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -163,17 +165,33 @@ private struct PerformPlayingView: View {
         let songs = performance.songs
         VStack(spacing: 0) {
             if let song = performance.currentSong {
-                VStack(alignment: .leading, spacing: 12) {
-                    if !lyricsExpanded {
+                if !lyricsExpanded {
+                    VStack(alignment: .leading, spacing: 8) {
                         PerformSongHeader(song: song, index: performance.songIndex, total: songs.count,
                                           nextSongName: name(in: songs, at: performance.songIndex + 1))
+                        if let error = performance.lastError {
+                            errorBanner(error)
+                        }
+                        if showingReferencePlayer {
+                            Divider()
+                            PracticePlayerPanel(song: song)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+                } else {
                     if let error = performance.lastError {
                         errorBanner(error)
+                            .padding(.horizontal)
+                            .padding(.top, 8)
+                    }
+                    if showingReferencePlayer {
+                        PracticePlayerPanel(song: song)
+                            .padding(.horizontal)
+                            .padding(.top, 8)
                     }
                 }
-                .padding(.horizontal)
-                .padding(.top, lyricsExpanded ? 8 : 12)
 
                 PerformSnapshotStrip(song: song)
                     .id(song.objectID)
@@ -225,21 +243,7 @@ private struct PerformPlayingView: View {
                 .tint(.red)
             }
             ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    ForEach(Array(songs.enumerated()), id: \.element.objectID) { index, song in
-                        Button {
-                            performance.goToSong(index)
-                        } label: {
-                            if index == performance.songIndex {
-                                Label("\(index + 1). \(song.name)", systemImage: "play.fill")
-                            } else {
-                                Text("\(index + 1). \(song.name)")
-                            }
-                        }
-                    }
-                } label: {
-                    Label("Songs", systemImage: "list.number")
-                }
+                songListMenu(songs: songs)
             }
             ToolbarItem(placement: .primaryAction) {
                 LiveFollowButton()
@@ -251,9 +255,47 @@ private struct PerformPlayingView: View {
                     Label("Bluetooth MIDI", systemImage: "wave.3.right")
                 }
             }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingReferencePlayer.toggle()
+                    if !showingReferencePlayer {
+                        music.stop()
+                        performance.practiceRate = 1.0
+                        performance.applyPracticeRate()
+                    }
+                } label: {
+                    Label("Reference Track", systemImage: showingReferencePlayer ? "headphones.circle.fill" : "headphones.circle")
+                        .foregroundStyle(showingReferencePlayer ? Color.accentColor : .primary)
+                }
+                .accessibilityValue(showingReferencePlayer ? "On" : "Off")
+            }
         }
         .sheet(isPresented: $showingBTMIDI) {
             BTMIDIConnectSheet()
+        }
+        .onChange(of: performance.songIndex) { _, _ in
+            if showingReferencePlayer { music.stop() }
+        }
+        .onDisappear {
+            music.stop()
+        }
+    }
+
+    private func songListMenu(songs: [Song]) -> some View {
+        Menu {
+            ForEach(Array(songs.enumerated()), id: \.element.objectID) { index, song in
+                Button {
+                    performance.goToSong(index)
+                } label: {
+                    if index == performance.songIndex {
+                        Label("\(index + 1). \(song.name)", systemImage: "play.fill")
+                    } else {
+                        Text("\(index + 1). \(song.name)")
+                    }
+                }
+            }
+        } label: {
+            Label("Songs", systemImage: "list.number")
         }
     }
 
@@ -402,28 +444,16 @@ private struct PerformSongHeader: View {
     var nextSongName: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             Text("Song \(index + 1) of \(total)")
-                .font(.subheadline.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            Text(song.name)
-                .font(.title.bold())
-                .lineLimit(2)
+
+            // Bold title + secondary metadata, all on one line
+            compactInfoLine
+                .lineLimit(1)
                 .minimumScaleFactor(0.6)
-            if let artist = song.artist, !artist.isEmpty {
-                Text(artist)
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-            }
-            if song.bpm != nil || song.currentKey != nil || song.capoEnabled {
-                // Wraps onto a second line on narrow screens rather than truncating
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 14) { musicDetails }
-                    VStack(alignment: .leading, spacing: 4) { musicDetails }
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            }
+
             if song.bpm != nil {
                 MetronomeControl(song: song)
             }
@@ -431,6 +461,7 @@ private struct PerformSongHeader: View {
                 Text(notes)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
             if let next = nextSongName {
                 HStack(spacing: 4) {
@@ -446,35 +477,41 @@ private struct PerformSongHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
-    private var musicDetails: some View {
-        if let bpm = song.bpm {
-            let signature = song.timeSignature.map { " · " + $0 } ?? ""
-            Label("\(bpm) BPM\(signature)", systemImage: "metronome")
+    /// Title is bold+primary at title3 size; artist, BPM, time sig, key are
+    /// regular+secondary at the same size. Built with AttributedString so each
+    /// segment keeps its own styling without using the deprecated Text + operator.
+    private var compactInfoLine: Text {
+        var result = AttributedString(song.name)
+        result.font = .title3.bold()
+
+        func secondary(_ s: String) -> AttributedString {
+            var a = AttributedString(s)
+            a.font = .title3
+            a.foregroundColor = Color.secondary
+            return a
         }
-        // The key the audience hears; the offset shows only when transposing really moved it
+
+        if let artist = song.artist, !artist.isEmpty {
+            result += secondary(" · \(artist)")
+        }
+        if let bpm = song.bpm {
+            var seg = " · \(bpm) BPM"
+            if let sig = song.timeSignature { seg += " · \(sig)" }
+            result += secondary(seg)
+        }
         if let key = song.currentKey {
-            HStack(spacing: 4) {
-                Label(key.displayName, systemImage: "music.note")
-                if song.transpose != 0 && !song.isCapoKeepingKey {
-                    Text("(\(TransposeMenu.offsetLabel(song.transpose)))")
-                        .monospacedDigit()
-                }
+            var keySeg = " · \(key.displayName)"
+            if song.transpose != 0 && !song.isCapoKeepingKey {
+                keySeg += " (\(TransposeMenu.offsetLabel(song.transpose)))"
             }
+            result += secondary(keySeg)
         }
         if song.capoEnabled {
-            HStack(spacing: 4) {
-                if let fret = song.effectiveCapo {
-                    Label(fret == 0 ? "No Capo" : "Capo \(fret)", systemImage: "guitars")
-                } else {
-                    Label("Capo: out of range", systemImage: "guitars")
-                }
-                // What the fingers play, when that's not the key being heard
-                if let shapes = song.chordShapeKey, shapes != song.currentKey {
-                    Text("· \(shapes.displayName) shapes")
-                }
+            if let fret = song.effectiveCapo {
+                result += secondary(fret == 0 ? " · No Capo" : " · Capo \(fret)")
             }
         }
+        return Text(result)
     }
 }
 
@@ -573,8 +610,7 @@ private struct PerformSnapshotStrip: View {
                 }
                 Text(song.snapshotName(index))
                     .font(.subheadline.weight(.semibold))
-                    .lineLimit(2, reservesSpace: true)
-                    .multilineTextAlignment(.leading)
+                    .lineLimit(1)
                 Text(count == 0 ? "Empty" : "\(count) command\(count == 1 ? "" : "s")")
                     .font(.caption2)
                     .opacity(0.8)
@@ -601,6 +637,262 @@ private struct PerformSnapshotStrip: View {
         .disabled(locked)
         .accessibilityAddTraits(isActive ? .isSelected : [])
         .accessibilityHint(locked ? "The leader controls snapshots" : "")
+    }
+}
+
+// MARK: - Practice player panel
+
+private struct PracticePlayerPanel: View {
+    @ObservedObject var song: Song
+    @Environment(PerformanceSession.self) private var performance
+    private let music = AppleMusicReference.shared
+
+    @State private var isDragging = false
+    @State private var dragTime: TimeInterval = 0
+    @State private var loopIn: TimeInterval? = nil
+    @State private var loopOut: TimeInterval? = nil
+
+    private var trackID: String? { song.referenceTrackID }
+    private var hasTrack: Bool { trackID != nil }
+    private var isThisTrackPlaying: Bool { music.isPlaying(trackID ?? "") }
+    private var isLoading: Bool { music.loadingTrackID != nil && music.loadingTrackID == trackID }
+    private var duration: TimeInterval? { song.referenceTrack?.duration }
+    private var hasLoop: Bool { music.loopRegion != nil }
+
+    var body: some View {
+        let rate = performance.practiceRate
+        VStack(alignment: .leading, spacing: 8) {
+            // Practice tempo slider (60%–110%) with notched tick marks at each 5% step
+            HStack(spacing: 8) {
+                Image(systemName: "tortoise.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                VStack(spacing: 2) {
+                    Slider(
+                        value: Binding(get: { performance.practiceRate },
+                                       set: { performance.practiceRate = $0 }),
+                        in: 0.6...1.1,
+                        step: 0.05
+                    ) { editing in
+                        if !editing { performance.applyPracticeRate() }
+                    }
+                    .tint(rate == 1.0 ? Color.secondary : Color.accentColor)
+                    // Tick marks: 11 positions (0.60, 0.65 … 1.10); 100% mark is taller
+                    GeometryReader { geo in
+                        let steps = 10
+                        let thumbR: CGFloat = 14
+                        let trackW = geo.size.width - 2 * thumbR
+                        ZStack(alignment: .topLeading) {
+                            ForEach(0...steps, id: \.self) { i in
+                                let x = thumbR + CGFloat(i) / CGFloat(steps) * trackW
+                                let isCenter = i == 8  // step 8 = 100%
+                                Rectangle()
+                                    .fill(isCenter
+                                          ? Color.secondary.opacity(0.65)
+                                          : Color.secondary.opacity(0.3))
+                                    .frame(width: isCenter ? 2 : 1.5,
+                                           height: isCenter ? 7 : 4)
+                                    .position(x: x, y: isCenter ? 3.5 : 2)
+                            }
+                        }
+                    }
+                    .frame(height: 7)
+                }
+                Image(systemName: "hare.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("\(Int((rate * 100).rounded()))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(rate == 1.0 ? .secondary : .primary)
+                    .frame(minWidth: 36, alignment: .trailing)
+            }
+
+            // Track info + total duration
+            HStack(alignment: .firstTextBaseline) {
+                if let title = song.referenceTrack?.title {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        if let artist = song.referenceTrack?.artist {
+                            Text(artist)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                } else {
+                    Text("No reference track")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .italic()
+                }
+                Spacer()
+                if let dur = duration {
+                    Text(timeLabel(dur))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Transport controls + scrub bar + loop, all in one row
+            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+                let current = isDragging ? dragTime : music.currentPlaybackTime
+                HStack(spacing: 10) {
+                    Button { music.restart() } label: {
+                        Image(systemName: "backward.end.fill").font(.subheadline.weight(.semibold))
+                    }
+                    .disabled(!hasTrack)
+
+                    Button { music.skip(by: -15) } label: {
+                        Image(systemName: "gobackward.15").font(.subheadline)
+                    }
+                    .disabled(!hasTrack)
+
+                    Button {
+                        guard let id = trackID else { return }
+                        Task { await music.togglePlayback(of: id) }
+                    } label: {
+                        if isLoading {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: isThisTrackPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.title2)
+                        }
+                    }
+                    .disabled(!hasTrack)
+
+                    Button { music.skip(by: 15) } label: {
+                        Image(systemName: "goforward.15").font(.subheadline)
+                    }
+                    .disabled(!hasTrack)
+
+                    if let dur = duration, dur > 0 {
+                        scrubBar(current: current, duration: dur)
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Spacer()
+                    }
+
+                    if hasTrack { loopControls }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(hasTrack ? Color.primary : Color.secondary)
+            }
+
+            if let error = music.lastError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .onChange(of: song.referenceTrackID) { _, _ in
+            music.clearLoopRegion()
+            loopIn = nil
+            loopOut = nil
+        }
+        .padding(.bottom, 4)
+    }
+
+    // MARK: Scrub bar
+
+    private func scrubBar(current: TimeInterval, duration: TimeInterval) -> some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let progress = CGFloat(max(0, min(1, current / duration)))
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.secondary.opacity(0.25))
+                    .frame(height: 6)
+
+                if let region = music.loopRegion {
+                    let lx = CGFloat(region.lowerBound / duration) * w
+                    let rw = CGFloat((region.upperBound - region.lowerBound) / duration) * w
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.accentColor.opacity(0.4))
+                        .frame(width: max(0, rw), height: 6)
+                        .offset(x: lx)
+                }
+
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.primary.opacity(0.7))
+                    .frame(width: max(0, progress * w), height: 6)
+
+                Circle()
+                    .fill(Color.primary)
+                    .frame(width: 14, height: 14)
+                    .offset(x: max(0, min(w - 14, progress * w - 7)))
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        isDragging = true
+                        dragTime = max(0, min(duration, Double(value.location.x / w) * duration))
+                    }
+                    .onEnded { value in
+                        let t = max(0, min(duration, Double(value.location.x / w) * duration))
+                        music.seek(to: t)
+                        isDragging = false
+                    }
+            )
+        }
+        .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20)
+    }
+
+    // MARK: Loop controls
+
+    @ViewBuilder
+    private var loopControls: some View {
+        if hasLoop {
+            Button {
+                music.clearLoopRegion()
+                loopIn = nil
+                loopOut = nil
+            } label: {
+                Image(systemName: "repeat.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(Color.accentColor)
+            }
+        } else {
+            HStack(spacing: 6) {
+                loopPointButton("IN", isSet: loopIn != nil) {
+                    loopIn = music.currentPlaybackTime
+                    tryActivateLoop()
+                }
+                loopPointButton("OUT", isSet: loopOut != nil) {
+                    loopOut = music.currentPlaybackTime
+                    tryActivateLoop()
+                }
+            }
+        }
+    }
+
+    private func loopPointButton(_ label: String, isSet: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.caption.weight(.bold).monospacedDigit())
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    isSet ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
+                .foregroundStyle(isSet ? Color.accentColor : Color.secondary)
+        }
+    }
+
+    private func tryActivateLoop() {
+        guard let inTime = loopIn, let outTime = loopOut, outTime > inTime else { return }
+        music.setLoopRegion(start: inTime, end: outTime)
+    }
+
+    private func timeLabel(_ t: TimeInterval) -> String {
+        let s = Int(max(0, t))
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 }
 

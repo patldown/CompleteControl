@@ -17,26 +17,55 @@ struct SetListsView: View {
     @State private var showingAssistant = false
     @State private var searchText = ""
     
+    private var persistence: PersistenceController { .shared }
+
     var filteredSetLists: [SetList] {
         if searchText.isEmpty {
             return Array(setLists)
         }
-        return setLists.filter { setList in
-            setList.name.localizedCaseInsensitiveContains(searchText)
-        }
+        return setLists.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
-    
+
+    var ownedSetLists: [SetList] { filteredSetLists.filter { persistence.isOwned($0) } }
+    var sharedSetLists: [SetList] { filteredSetLists.filter { persistence.isSharedByOther($0) } }
+
     var body: some View {
         NavigationStack {
             List {
-                ForEach(filteredSetLists) { setList in
-                    NavigationLink {
-                        SetListDetailView(setList: setList)
-                    } label: {
-                        SetListRowView(setList: setList)
+                if sharedSetLists.isEmpty {
+                    ForEach(ownedSetLists) { setList in
+                        NavigationLink {
+                            SetListDetailView(setList: setList)
+                        } label: {
+                            SetListRowView(setList: setList)
+                        }
+                    }
+                    .onDelete(perform: deleteSetLists)
+                } else {
+                    Section("My Set Lists") {
+                        ForEach(ownedSetLists) { setList in
+                            NavigationLink {
+                                SetListDetailView(setList: setList)
+                            } label: {
+                                SetListRowView(setList: setList)
+                            }
+                        }
+                        .onDelete(perform: deleteSetLists)
+                    }
+                    Section {
+                        ForEach(sharedSetLists) { setList in
+                            NavigationLink {
+                                SetListDetailView(setList: setList)
+                            } label: {
+                                SetListRowView(setList: setList)
+                            }
+                        }
+                    } header: {
+                        Text("Shared With Me")
+                    } footer: {
+                        Text("Songs from shared set lists are available while sharing is active. To keep a song permanently, open it and add it to one of your own set lists — your copy stays even if sharing is revoked.")
                     }
                 }
-                .onDelete(perform: deleteSetLists)
             }
             .navigationTitle("Set Lists")
             .offlineStatusBadge()
@@ -92,7 +121,7 @@ struct SetListsView: View {
     
     private func deleteSetLists(at offsets: IndexSet) {
         for index in offsets {
-            viewContext.delete(filteredSetLists[index])
+            viewContext.delete(ownedSetLists[index])
         }
         try? viewContext.save()
     }

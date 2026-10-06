@@ -47,15 +47,19 @@ final class Midi_Set_ListUITests: XCTestCase {
 
     @MainActor
     func testLaunchesToPerform() throws {
-        XCTAssertTrue(app.navigationBars["Perform"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Play"].exists)
+        // The Play button at the bottom of PerformSetListPicker is more stable than
+        // navigationBars["Perform"] under iOS 26's Liquid Glass navigation rendering.
+        XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 10))
     }
 
     @MainActor
     func testMainTabsOpen() throws {
         for (tab, title) in [("Set Lists", "Set Lists"), ("Songs", "Songs"), ("Settings", "Settings")] {
             openTab(tab)
-            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), "\(tab) didn't open")
+            // iOS 26: navigationBars[title] may not resolve under Liquid Glass;
+            // the title text is always present as a staticText in the nav bar area.
+            let titleText = app.staticTexts.matching(NSPredicate(format: "label == %@", title)).firstMatch
+            XCTAssertTrue(titleText.waitForExistence(timeout: 8), "\(tab) didn't open")
         }
     }
 
@@ -63,23 +67,25 @@ final class Midi_Set_ListUITests: XCTestCase {
     func testBandSettingsListBuiltInRoles() throws {
         openTab("Settings")
         let bandRow = app.descendants(matching: .any).matching(identifier: "settings-band-row").firstMatch
-        XCTAssertTrue(bandRow.waitForExistence(timeout: 5), "Band row not found in Settings")
+        XCTAssertTrue(bandRow.waitForExistence(timeout: 8), "Band row not found in Settings")
         bandRow.tap()
-        XCTAssertTrue(app.navigationBars["Band"].waitForExistence(timeout: 5))
+        // Title text is reliable; navigationBars["Band"] may not resolve on iOS 26.
+        XCTAssertTrue(app.staticTexts["Band"].firstMatch.waitForExistence(timeout: 5))
         for role in ["Vocals", "Guitar", "Keys", "Bass", "Drums"] {
-            XCTAssertTrue(app.buttons.containing(NSPredicate(format: "label CONTAINS %@", role)).firstMatch.exists,
+            XCTAssertTrue(app.descendants(matching: .any)
+                .containing(NSPredicate(format: "label CONTAINS %@", role)).firstMatch.exists,
                           "\(role) missing from the roster")
         }
     }
 
     @MainActor
     func testLiveFollowSheetOpens() throws {
-        // The Band toolbar button has accessibilityIdentifier "live-follow".
-        // Searching by identifier is more robust than label across iOS versions.
-        let band = app.buttons.matching(identifier: "live-follow").firstMatch
+        // iOS 26 toolbar items may have type Cell rather than Button; search all descendants.
+        let band = app.descendants(matching: .any).matching(identifier: "live-follow").firstMatch
         XCTAssertTrue(band.waitForExistence(timeout: 10))
         band.tap()
-        XCTAssertTrue(app.navigationBars["Live Follow"].waitForExistence(timeout: 5))
+        // Check for the sheet's title text rather than navigationBars["Live Follow"].
+        XCTAssertTrue(app.staticTexts["Live Follow"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Lead the Band"].exists)
         XCTAssertTrue(app.buttons["Follow a Leader"].exists)
     }

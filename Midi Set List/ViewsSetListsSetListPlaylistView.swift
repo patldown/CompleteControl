@@ -25,6 +25,7 @@ struct SetListPlaylistView: View {
     @State private var isCreating = false
     @State private var createError: String?
     @State private var created = false
+    @State private var playlistURL: URL?
 
     struct Row: Identifiable {
         enum Status { case searching, linked, matched, notFound }
@@ -56,10 +57,17 @@ struct SetListPlaylistView: View {
                     } description: {
                         Text("\"\(playlistName)\" is in your Apple Music library with \(addCount) song\(addCount == 1 ? "" : "s").")
                     } actions: {
-                        Button("Open Music") {
-                            if let url = URL(string: "music://") { openURL(url) }
+                        if let playlistURL {
+                            Button("Open Playlist") {
+                                openURL(playlistURL)
+                            }
+                            .buttonStyle(.borderedProminent)
+                        } else {
+                            Button("Open Music") {
+                                if let url = URL(string: "music://") { openURL(url) }
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-                        .buttonStyle(.borderedProminent)
                     }
                 } else {
                     form
@@ -204,14 +212,31 @@ struct SetListPlaylistView: View {
         defer { isCreating = false }
         let adding = rows.filter(\.willAdd)
         do {
-            try await music.createPlaylist(
+            let result = try await music.createPlaylist(
                 name: playlistName.trimmingCharacters(in: .whitespaces),
                 description: setList.notes,
                 trackIDs: adding.compactMap { $0.track?.id }
             )
+            // Persist the playlist link and ID so SetListDetailView can open it and
+            // future song additions can append tracks automatically.
+            let urlToStore = result.url ?? URL(string: "music://")
+            setList.playlistURL = urlToStore?.absoluteString
+            setList.playlistID = result.playlistID
+            playlistURL = result.url
             if saveMatches {
                 for row in adding where row.status == .matched {
-                    if let track = row.track { row.song.linkReferenceTrack(track) }
+                    guard let track = row.track else { continue }
+                    row.song.linkReferenceTrack(track)
+                    // Set-list songs are copies; also save to the library master so it
+                    // appears in the Songs tab.
+                    if let canonicalID = row.song.canonicalID {
+                        let req = NSFetchRequest<Song>(entityName: "Song")
+                        req.predicate = NSPredicate(format: "id == %@ AND canonicalID == nil", canonicalID as CVarArg)
+                        req.fetchLimit = 1
+                        if let master = (try? viewContext.fetch(req))?.first {
+                            master.linkReferenceTrack(track)
+                        }
+                    }
                 }
                 try? viewContext.save()
             }

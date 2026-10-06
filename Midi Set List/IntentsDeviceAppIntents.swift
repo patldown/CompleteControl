@@ -130,7 +130,7 @@ struct DeviceMacroEntityQuery: EntityQuery {
 struct CreateDeviceIntent: AppIntent {
     static let title: LocalizedStringResource = "Create Instrument Device"
     static let description = IntentDescription(
-        "Creates a new instrument device in your Midi Set List library. You can then add macro categories and commands to it."
+        "Creates a new instrument device in your Complete Control library. You can then add macro categories and commands to it."
     )
 
     @Parameter(title: "Device Name", description: "e.g. HX Stomp, BeatBuddy, Roland RD-88")

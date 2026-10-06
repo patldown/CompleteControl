@@ -5,7 +5,7 @@
 
 import AppIntents
 
-struct MidiSetListShortcuts: AppShortcutsProvider {
+struct CompleteControlShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: CreateDeviceIntent(),

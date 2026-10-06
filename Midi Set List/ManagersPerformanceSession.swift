@@ -61,6 +61,10 @@ final class PerformanceSession {
         let outcome: String
     }
 
+    /// Practice speed multiplier (0.6–1.1); 1.0 = full tempo. Shown while the reference
+    /// player is visible; resets to 1.0 when the headphones toggle goes off.
+    var practiceRate: Double = 1.0
+
     /// While set, the next accepted message is assigned to this target instead of acting.
     var learnTarget: MIDIRemoteLearnTarget?
 
@@ -257,7 +261,7 @@ final class PerformanceSession {
         isSending = true
         sendTask = Task { @MainActor [weak self] in
             do {
-                try await midiManager.sendSnapshot(index, of: song)
+                try await midiManager.sendSnapshot(index, of: song, practiceRate: self?.practiceRate ?? 1.0)
             } catch is CancellationError {
                 return
             } catch {
@@ -278,7 +282,8 @@ final class PerformanceSession {
 
         if moveClock, let midiManager, midiManager.isClockRunning {
             if let bpm = song.clockBPM {
-                midiManager.startClock(bpm: bpm, sendTransport: midiManager.clockSendsTransport,
+                let adjusted = max(1, Int((Double(bpm) * practiceRate).rounded()))
+                midiManager.startClock(bpm: adjusted, sendTransport: midiManager.clockSendsTransport,
                                        startAt: wantsClick ? beatOne : nil)
             } else {
                 midiManager.stopClock()
@@ -286,7 +291,8 @@ final class PerformanceSession {
         }
 
         if wantsClick, let bpm = song.bpm {
-            metronome.start(bpm: bpm, beatsPerBar: song.beatsPerBar, startAt: beatOne,
+            let adjusted = max(1, Int((Double(bpm) * practiceRate).rounded()))
+            metronome.start(bpm: adjusted, beatsPerBar: song.beatsPerBar, startAt: beatOne,
                             countIn: prefs.metronomeCountInOnly)
         } else {
             metronome.stop()
@@ -309,6 +315,21 @@ final class PerformanceSession {
         if let midiManager, midiManager.isClockRunning, midiManager.currentClockBPM == bpm {
             startAt = midiManager.clockStartHostTime
         }
-        metronome.start(bpm: bpm, beatsPerBar: song.beatsPerBar, startAt: startAt)
+        let adjusted = max(1, Int((Double(bpm) * practiceRate).rounded()))
+        metronome.start(bpm: adjusted, beatsPerBar: song.beatsPerBar, startAt: startAt)
+    }
+
+    /// Restarts the metronome and MIDI clock (if running) at the current practiceRate.
+    /// Called when the slider is committed.
+    func applyPracticeRate() {
+        guard let song = activeSong else { return }
+        if let midiManager, midiManager.isClockRunning, let bpm = song.clockBPM {
+            let adjusted = max(1, Int((Double(bpm) * practiceRate).rounded()))
+            midiManager.startClock(bpm: adjusted, sendTransport: midiManager.clockSendsTransport)
+        }
+        if metronome.isRunning, let bpm = song.bpm {
+            let adjusted = max(1, Int((Double(bpm) * practiceRate).rounded()))
+            metronome.start(bpm: adjusted, beatsPerBar: song.beatsPerBar)
+        }
     }
 }

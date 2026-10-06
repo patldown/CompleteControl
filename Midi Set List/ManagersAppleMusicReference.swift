@@ -82,9 +82,12 @@ final class AppleMusicReference {
     /// MusicKit isn't enabled for the app's ID, so Apple can't issue it a developer token.
     /// Every catalog request fails until it is, so the UI says so instead of "no match".
     private(set) var isNotSetUp = false
+    /// Active loop region; nil when no loop is set.
+    private(set) var loopRegion: ClosedRange<TimeInterval>? = nil
 
     @ObservationIgnored private let player = ApplicationMusicPlayer.shared
     @ObservationIgnored private var stateObserver: AnyCancellable?
+    @ObservationIgnored private var loopEnforcer: Timer?
 
     private init() {
         // The player's state is an ObservableObject; mirror what the UI needs
@@ -97,6 +100,8 @@ final class AppleMusicReference {
     var isDenied: Bool { authorization == .denied || authorization == .restricted }
 
     func isPlaying(_ trackID: String) -> Bool { isPlaying && loadedTrackID == trackID }
+    /// Current playback position; 0 when nothing is loaded.
+    var currentPlaybackTime: TimeInterval { player.playbackTime }
 
     // MARK: - Access
 
@@ -153,7 +158,8 @@ final class AppleMusicReference {
     // MARK: - Playlists
 
     /// Creates a playlist in the person's Apple Music library, tracks in the given order.
-    func createPlaylist(name: String, description: String?, trackIDs: [String]) async throws {
+    /// Returns the playlist's deep-link URL and library ID for later updates.
+    func createPlaylist(name: String, description: String?, trackIDs: [String]) async throws -> (url: URL?, playlistID: String?) {
         guard await requestAccess() else { throw AppleMusicError.accessDenied }
         let request = MusicCatalogResourceRequest<MusicKit.Song>(matching: \.id, memberOf: trackIDs.map { MusicItemID($0) })
         let found: MusicItemCollection<MusicKit.Song>
@@ -166,9 +172,39 @@ final class AppleMusicReference {
         let ordered = trackIDs.compactMap { byID[$0] }
         guard !ordered.isEmpty else { throw AppleMusicError.noTracks }
         do {
-            _ = try await MusicLibrary.shared.createPlaylist(name: name, description: description, items: ordered)
+            let playlist = try await MusicLibrary.shared.createPlaylist(name: name, description: description, items: ordered)
+            return (playlist.url, playlist.id.rawValue)
         } catch {
             throw translated(error)
+        }
+    }
+
+    /// Appends tracks to an existing library playlist. Silently skips tracks already in the playlist.
+    func addTracksToPlaylist(playlistID: String, trackIDs: [String]) async throws {
+        guard !trackIDs.isEmpty else { return }
+        guard await requestAccess(), !isNotSetUp else { return }
+
+        var playlistRequest = MusicLibraryRequest<Playlist>()
+        playlistRequest.filter(matching: \.id, equalTo: MusicItemID(playlistID))
+        guard let playlist = try await playlistRequest.response().items.first else { return }
+
+        let songRequest = MusicCatalogResourceRequest<MusicKit.Song>(
+            matching: \.id, memberOf: trackIDs.map { MusicItemID($0) }
+        )
+        let songs: MusicItemCollection<MusicKit.Song>
+        do {
+            songs = try await songRequest.response().items
+        } catch {
+            throw translated(error)
+        }
+        let byID = Dictionary(songs.map { ($0.id.rawValue, $0) }, uniquingKeysWith: { first, _ in first })
+        for trackID in trackIDs {
+            guard let song = byID[trackID] else { continue }
+            do {
+                try await MusicLibrary.shared.add(song, to: playlist)
+            } catch MusicLibrary.Error.itemAlreadyAdded {
+                continue
+            }
         }
     }
 
@@ -199,6 +235,7 @@ final class AppleMusicReference {
             return
         }
 
+        clearLoopRegion()
         loadingTrackID = trackID
         defer { loadingTrackID = nil }
         do {
@@ -227,10 +264,46 @@ final class AppleMusicReference {
         player.playbackTime = max(0, player.playbackTime + seconds)
     }
 
+    /// Seeks to an absolute time in the loaded track.
+    func seek(to time: TimeInterval) {
+        guard loadedTrackID != nil else { return }
+        player.playbackTime = max(0, time)
+    }
+
+    // MARK: - Loop
+
+    func setLoopRegion(start: TimeInterval, end: TimeInterval) {
+        guard start < end else { return }
+        loopRegion = start...end
+        restartLoopEnforcer()
+    }
+
+    func clearLoopRegion() {
+        loopRegion = nil
+        loopEnforcer?.invalidate()
+        loopEnforcer = nil
+    }
+
+    private func restartLoopEnforcer() {
+        loopEnforcer?.invalidate()
+        loopEnforcer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor [weak self] in self?.enforceLoopIfNeeded() }
+        }
+    }
+
+    private func enforceLoopIfNeeded() {
+        guard let region = loopRegion, isPlaying else { return }
+        if player.playbackTime >= region.upperBound {
+            player.playbackTime = region.lowerBound
+        }
+    }
+
     func stop() {
         guard loadedTrackID != nil else { return }
         player.stop()
         loadedTrackID = nil
+        clearLoopRegion()
         syncPlaybackState()
     }
 

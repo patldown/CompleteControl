@@ -410,8 +410,10 @@ class MIDIManager {
     }
 
     /// Sends one snapshot's commands in order.
-    func sendSnapshot(_ index: Int, of song: Song) async throws {
-        let ctx = FormulaEvaluator.Context.forSong(bpm: song.bpm)
+    /// `practiceRate` scales the {bpm} formula variable (1.0 = full tempo).
+    func sendSnapshot(_ index: Int, of song: Song, practiceRate: Double = 1.0) async throws {
+        let adjustedBPM = song.bpm.map { max(1, Int((Double($0) * practiceRate).rounded())) }
+        let ctx = FormulaEvaluator.Context.forSong(bpm: adjustedBPM)
         try await sendCommandSequence(song.commands(inSnapshot: index), formulaContext: ctx)
     }
     

@@ -37,15 +37,55 @@ class BandRole: NSManagedObject, Identifiable {
         ("B0000000-0000-4000-8000-000000000005", "Drums",  "🥁"),
     ]
 
-    /// Adds the built-in roles the first time the app runs (or after a restore without any)
+    /// Adds any missing built-in roles. Checks each UUID individually so it's safe to call
+    /// on every launch and on every device — won't double-create after CloudKit sync.
     static func seedDefaultsIfNeeded(in context: NSManagedObjectContext) {
-        let request = NSFetchRequest<BandRole>(entityName: "BandRole")
-        guard (try? context.count(for: request)) == 0 else { return }
+        var created = false
         for (index, builtIn) in builtIns.enumerated() {
             guard let id = UUID(uuidString: builtIn.id) else { continue }
+            let request = NSFetchRequest<BandRole>(entityName: "BandRole")
+            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+            guard (try? context.count(for: request)) == 0 else { continue }
             create(name: builtIn.name, emoji: builtIn.emoji, id: id, order: index, in: context)
+            created = true
         }
-        try? context.save()
+        if created { try? context.save() }
+    }
+
+    /// Removes duplicate built-in BandRole records caused by concurrent CloudKit seeding.
+    /// Keeps the record with the smallest objectID (deterministic), re-points all SongPart
+    /// and Song relationships to the canonical record, then deletes the extras.
+    static func deduplicateBuiltIns(in context: NSManagedObjectContext) {
+        var changed = false
+        for builtIn in builtIns {
+            guard let id = UUID(uuidString: builtIn.id) else { continue }
+            let request = NSFetchRequest<BandRole>(entityName: "BandRole")
+            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+            guard let all = try? context.fetch(request), all.count > 1 else { continue }
+
+            let sorted = all.sorted { $0.objectID.uriRepresentation().absoluteString < $1.objectID.uriRepresentation().absoluteString }
+            let canonical = sorted[0]
+
+            for dup in sorted.dropFirst() {
+                // Re-point SongPart.rolesRaw before nullify-on-delete drops the reference
+                for case let part as NSManagedObject in (dup.value(forKey: "partsRaw") as? NSSet ?? NSSet()) {
+                    var roles = Set((part.value(forKey: "rolesRaw") as? NSSet ?? NSSet()).compactMap { $0 as? BandRole })
+                    roles.remove(dup)
+                    roles.insert(canonical)
+                    part.setValue(NSSet(set: roles), forKey: "rolesRaw")
+                }
+                // Re-point Song.chartRolesRaw
+                for case let song as NSManagedObject in (dup.value(forKey: "chartSongsRaw") as? NSSet ?? NSSet()) {
+                    var roles = Set((song.value(forKey: "chartRolesRaw") as? NSSet ?? NSSet()).compactMap { $0 as? BandRole })
+                    roles.remove(dup)
+                    roles.insert(canonical)
+                    song.setValue(NSSet(set: roles), forKey: "chartRolesRaw")
+                }
+                context.delete(dup)
+                changed = true
+            }
+        }
+        if changed { try? context.save() }
     }
 
     @discardableResult

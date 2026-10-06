@@ -20,7 +20,10 @@ enum SongSortOption: String, CaseIterable, Identifiable {
 
 struct SongsLibraryView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @FetchRequest(sortDescriptors: [SortDescriptor(\.name)]) private var songs: FetchedResults<Song>
+    @FetchRequest(
+        sortDescriptors: [SortDescriptor(\.name)],
+        predicate: NSPredicate(format: "canonicalID == nil")
+    ) private var songs: FetchedResults<Song>
 
     @State private var showingAddSong = false
     @State private var searchText = ""

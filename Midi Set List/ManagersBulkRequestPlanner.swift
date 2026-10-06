@@ -187,7 +187,7 @@ extension BulkRequestPlanner {
             ? "No devices in library yet."
             : "Known devices: \(context.deviceSummary)."
         let instructions = """
-            You classify requests sent to a device library assistant in Midi Set List.
+            You classify requests sent to a device library assistant in Complete Control.
             \(deviceLine)
             \(libraryActionDefinition)
             Answer true only if the request clearly asks for more than one action, e.g. \

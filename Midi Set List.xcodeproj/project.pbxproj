@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		AE80A9F130700733009CC1AA /* ViewsComponentsSystemStatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE80A9F030700733009CC1AA /* ViewsComponentsSystemStatsView.swift */; };
+		AE8AED1C3071F4E0005F12AB /* ViewsSetListsCloudSharingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE8AED1B3071F4E0005F12AB /* ViewsSetListsCloudSharingViews.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +33,7 @@
 		AE0F80A23067479C0088BB80 /* Midi Set ListTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Midi Set ListTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AE0F80AC3067479C0088BB80 /* Midi Set ListUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Midi Set ListUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AE80A9F030700733009CC1AA /* ViewsComponentsSystemStatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewsComponentsSystemStatsView.swift; sourceTree = "<group>"; };
+		AE8AED1B3071F4E0005F12AB /* ViewsSetListsCloudSharingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewsSetListsCloudSharingViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -85,6 +87,7 @@
 				AE0F80AF3067479C0088BB80 /* Midi Set ListUITests */,
 				AE0F80963067479B0088BB80 /* Products */,
 				AE80A9F030700733009CC1AA /* ViewsComponentsSystemStatsView.swift */,
+				AE8AED1B3071F4E0005F12AB /* ViewsSetListsCloudSharingViews.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -243,6 +246,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AE80A9F130700733009CC1AA /* ViewsComponentsSystemStatsView.swift in Sources */,
+				AE8AED1C3071F4E0005F12AB /* ViewsSetListsCloudSharingViews.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -397,6 +401,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Midi Set List/Midi Set List.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = PQWSQX2Y4N;
@@ -406,7 +411,8 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Midi-Set-List-Info.plist";
-				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Set List plays reference tracks and creates playlists from your set lists in Apple Music.";
+				INFOPLIST_KEY_CFBundleDisplayName = "Complete Control";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Songs allow users to link to Apple Music songs for quick referencing when practicing. Additionally, playlists for setlists can be generated and shared.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Midi Set List connects to MIDI and OSC devices, and to bandmates for Live Follow, on your local network.";
@@ -445,6 +451,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Midi Set List/Midi Set List.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = PQWSQX2Y4N;
@@ -454,7 +461,8 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Midi-Set-List-Info.plist";
-				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Set List plays reference tracks and creates playlists from your set lists in Apple Music.";
+				INFOPLIST_KEY_CFBundleDisplayName = "Complete Control";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Songs allow users to link to Apple Music songs for quick referencing when practicing. Additionally, playlists for setlists can be generated and shared.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Midi Set List connects to MIDI and OSC devices, and to bandmates for Live Follow, on your local network.";

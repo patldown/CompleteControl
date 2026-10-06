@@ -343,7 +343,7 @@ struct SettingsView: View {
         } header: {
             Text("Siri Shortcuts")
         } footer: {
-            Text("Find these in the Shortcuts app under Midi Set List, or ask Siri — e.g. \"Create song in Midi Set List\".")
+            Text("Find these in the Shortcuts app under Complete Control, or ask Siri — e.g. \"Create song in Complete Control\".")
         }
     }
 

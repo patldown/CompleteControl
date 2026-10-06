@@ -28,6 +28,12 @@ struct LaunchContainer<Content: View>: View {
             }
         }
         .task {
+            // UI tests need elements to be accessible immediately; skip the splash.
+            if ProcessInfo.processInfo.arguments.contains("-ui-testing") {
+                isLoading = false
+                return
+            }
+
             let started = Date()
 
             status = "Loading your library…"
@@ -66,7 +72,7 @@ struct LaunchSplashView: View {
     private var appName: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
-            ?? "Midi Set List"
+            ?? "Complete Control"
     }
 
     var body: some View {

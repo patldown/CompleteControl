@@ -2,6 +2,33 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>msl</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Complete Control Archive</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.patrick-downey.midi-set-list.archive</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_apple-midi._udp</string>
+		<string>_msl-live._tcp</string>
+		<string>_msl-live._udp</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
@@ -14,14 +41,14 @@
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>com.patrick-downey.midi-set-list.archive</string>
-			<key>UTTypeDescription</key>
-			<string>Midi Set List Archive</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.json</string>
 			</array>
+			<key>UTTypeDescription</key>
+			<string>Complete Control Archive</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.patrick-downey.midi-set-list.archive</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>
@@ -36,14 +63,14 @@
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>org.chordpro.chordpro</string>
-			<key>UTTypeDescription</key>
-			<string>ChordPro Song</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.plain-text</string>
 			</array>
+			<key>UTTypeDescription</key>
+			<string>ChordPro Song</string>
+			<key>UTTypeIdentifier</key>
+			<string>org.chordpro.chordpro</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>
@@ -56,29 +83,6 @@
 				</array>
 			</dict>
 		</dict>
-	</array>
-	<key>CFBundleDocumentTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeName</key>
-			<string>Midi Set List Archive</string>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>LSItemContentTypes</key>
-			<array>
-				<string>com.patrick-downey.midi-set-list.archive</string>
-			</array>
-			<key>CFBundleTypeExtensions</key>
-			<array>
-				<string>msl</string>
-			</array>
-		</dict>
-	</array>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_apple-midi._udp</string>
-		<string>_msl-live._tcp</string>
-		<string>_msl-live._udp</string>
 	</array>
 </dict>
 </plist>

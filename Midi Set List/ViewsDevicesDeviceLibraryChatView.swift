@@ -547,7 +547,7 @@ struct DeviceLibraryChatView: View {
 
     private func makeOnDeviceSession() -> LanguageModelSession {
         var instructions = """
-            You are a device library assistant for the app "Midi Set List."
+            You are a device library assistant for the app "Complete Control."
             You help create MIDI instruments and add command macros to them.
             """
         if !deviceSummary.isEmpty {
@@ -754,7 +754,7 @@ struct DeviceLibraryChatView: View {
 
     private var externalSystemPrompt: String {
         var prompt = """
-            You are a device library assistant for the app "Midi Set List."
+            You are a device library assistant for the app "Complete Control."
             You help build a library of MIDI devices and command macros.
             """
         if !deviceSummary.isEmpty {
