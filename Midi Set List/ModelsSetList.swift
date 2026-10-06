@@ -17,6 +17,10 @@ class SetList: NSManagedObject, Identifiable {
     @NSManaged var notes: String?
     /// JSON-encoded [String] of song UUID strings, in display order.
     @NSManaged var songOrderData: String?
+    /// Deep link URL to the Apple Music playlist created from this set list.
+    @NSManaged var playlistURL: String?
+    /// MusicKit library playlist ID, used to append new tracks when songs are added.
+    @NSManaged var playlistID: String?
 
     // ── Relationships (raw) ────────────────────────────────────────────
     @NSManaged private var songsRaw: NSSet

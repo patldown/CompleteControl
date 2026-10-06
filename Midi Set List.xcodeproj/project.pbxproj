@@ -412,7 +412,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Midi-Set-List-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Complete Control";
-				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Set List plays reference tracks and creates playlists from your set lists in Apple Music.";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Songs allow users to link to Apple Music songs for quick referencing when practicing. Additionally, playlists for setlists can be generated and shared.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Midi Set List connects to MIDI and OSC devices, and to bandmates for Live Follow, on your local network.";
@@ -462,7 +462,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Midi-Set-List-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Complete Control";
-				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Set List plays reference tracks and creates playlists from your set lists in Apple Music.";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Songs allow users to link to Apple Music songs for quick referencing when practicing. Additionally, playlists for setlists can be generated and shared.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "Set List uses Bluetooth to connect wireless MIDI instruments.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Midi Set List connects to MIDI and OSC devices, and to bandmates for Live Follow, on your local network.";

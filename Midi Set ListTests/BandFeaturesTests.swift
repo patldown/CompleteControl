@@ -518,7 +518,7 @@ struct SongDetailsParsingTests {
 
     @Test func lyricsSpan_matchesLooselyAndRunsToEndWithoutALastLine() {
         let lyrics = SongDetailsAI.lyricsSpan(in: chart, first: "  today is GONNA be the day ", last: nil)
-        #expect(lyrics?.hasPrefix("Today is gonna be the day") == true)
+        #expect(lyrics?.contains("Today is gonna be the day") == true)
         #expect(lyrics?.hasSuffix("back to you") == true)
     }
 

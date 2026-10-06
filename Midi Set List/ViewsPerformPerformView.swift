@@ -258,7 +258,11 @@ private struct PerformPlayingView: View {
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showingReferencePlayer.toggle()
-                    if !showingReferencePlayer { music.stop() }
+                    if !showingReferencePlayer {
+                        music.stop()
+                        performance.practiceRate = 1.0
+                        performance.applyPracticeRate()
+                    }
                 } label: {
                     Label("Reference Track", systemImage: showingReferencePlayer ? "headphones.circle.fill" : "headphones.circle")
                         .foregroundStyle(showingReferencePlayer ? Color.accentColor : .primary)
@@ -440,28 +444,16 @@ private struct PerformSongHeader: View {
     var nextSongName: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             Text("Song \(index + 1) of \(total)")
-                .font(.subheadline.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            Text(song.name)
-                .font(.title.bold())
-                .lineLimit(2)
+
+            // Bold title + secondary metadata, all on one line
+            compactInfoLine
+                .lineLimit(1)
                 .minimumScaleFactor(0.6)
-            if let artist = song.artist, !artist.isEmpty {
-                Text(artist)
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-            }
-            if song.bpm != nil || song.currentKey != nil || song.capoEnabled {
-                // Wraps onto a second line on narrow screens rather than truncating
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 14) { musicDetails }
-                    VStack(alignment: .leading, spacing: 4) { musicDetails }
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            }
+
             if song.bpm != nil {
                 MetronomeControl(song: song)
             }
@@ -469,6 +461,7 @@ private struct PerformSongHeader: View {
                 Text(notes)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
             if let next = nextSongName {
                 HStack(spacing: 4) {
@@ -484,35 +477,41 @@ private struct PerformSongHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
-    private var musicDetails: some View {
-        if let bpm = song.bpm {
-            let signature = song.timeSignature.map { " · " + $0 } ?? ""
-            Label("\(bpm) BPM\(signature)", systemImage: "metronome")
+    /// Title is bold+primary at title3 size; artist, BPM, time sig, key are
+    /// regular+secondary at the same size. Built with AttributedString so each
+    /// segment keeps its own styling without using the deprecated Text + operator.
+    private var compactInfoLine: Text {
+        var result = AttributedString(song.name)
+        result.font = .title3.bold()
+
+        func secondary(_ s: String) -> AttributedString {
+            var a = AttributedString(s)
+            a.font = .title3
+            a.foregroundColor = Color.secondary
+            return a
         }
-        // The key the audience hears; the offset shows only when transposing really moved it
+
+        if let artist = song.artist, !artist.isEmpty {
+            result += secondary(" · \(artist)")
+        }
+        if let bpm = song.bpm {
+            var seg = " · \(bpm) BPM"
+            if let sig = song.timeSignature { seg += " · \(sig)" }
+            result += secondary(seg)
+        }
         if let key = song.currentKey {
-            HStack(spacing: 4) {
-                Label(key.displayName, systemImage: "music.note")
-                if song.transpose != 0 && !song.isCapoKeepingKey {
-                    Text("(\(TransposeMenu.offsetLabel(song.transpose)))")
-                        .monospacedDigit()
-                }
+            var keySeg = " · \(key.displayName)"
+            if song.transpose != 0 && !song.isCapoKeepingKey {
+                keySeg += " (\(TransposeMenu.offsetLabel(song.transpose)))"
             }
+            result += secondary(keySeg)
         }
         if song.capoEnabled {
-            HStack(spacing: 4) {
-                if let fret = song.effectiveCapo {
-                    Label(fret == 0 ? "No Capo" : "Capo \(fret)", systemImage: "guitars")
-                } else {
-                    Label("Capo: out of range", systemImage: "guitars")
-                }
-                // What the fingers play, when that's not the key being heard
-                if let shapes = song.chordShapeKey, shapes != song.currentKey {
-                    Text("· \(shapes.displayName) shapes")
-                }
+            if let fret = song.effectiveCapo {
+                result += secondary(fret == 0 ? " · No Capo" : " · Capo \(fret)")
             }
         }
+        return Text(result)
     }
 }
 
@@ -645,6 +644,7 @@ private struct PerformSnapshotStrip: View {
 
 private struct PracticePlayerPanel: View {
     @ObservedObject var song: Song
+    @Environment(PerformanceSession.self) private var performance
     private let music = AppleMusicReference.shared
 
     @State private var isDragging = false
@@ -660,7 +660,53 @@ private struct PracticePlayerPanel: View {
     private var hasLoop: Bool { music.loopRegion != nil }
 
     var body: some View {
+        let rate = performance.practiceRate
         VStack(alignment: .leading, spacing: 8) {
+            // Practice tempo slider (60%–110%) with notched tick marks at each 5% step
+            HStack(spacing: 8) {
+                Image(systemName: "tortoise.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                VStack(spacing: 2) {
+                    Slider(
+                        value: Binding(get: { performance.practiceRate },
+                                       set: { performance.practiceRate = $0 }),
+                        in: 0.6...1.1,
+                        step: 0.05
+                    ) { editing in
+                        if !editing { performance.applyPracticeRate() }
+                    }
+                    .tint(rate == 1.0 ? Color.secondary : Color.accentColor)
+                    // Tick marks: 11 positions (0.60, 0.65 … 1.10); 100% mark is taller
+                    GeometryReader { geo in
+                        let steps = 10
+                        let thumbR: CGFloat = 14
+                        let trackW = geo.size.width - 2 * thumbR
+                        ZStack(alignment: .topLeading) {
+                            ForEach(0...steps, id: \.self) { i in
+                                let x = thumbR + CGFloat(i) / CGFloat(steps) * trackW
+                                let isCenter = i == 8  // step 8 = 100%
+                                Rectangle()
+                                    .fill(isCenter
+                                          ? Color.secondary.opacity(0.65)
+                                          : Color.secondary.opacity(0.3))
+                                    .frame(width: isCenter ? 2 : 1.5,
+                                           height: isCenter ? 7 : 4)
+                                    .position(x: x, y: isCenter ? 3.5 : 2)
+                            }
+                        }
+                    }
+                    .frame(height: 7)
+                }
+                Image(systemName: "hare.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("\(Int((rate * 100).rounded()))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(rate == 1.0 ? .secondary : .primary)
+                    .frame(minWidth: 36, alignment: .trailing)
+            }
+
             // Track info + total duration
             HStack(alignment: .firstTextBaseline) {
                 if let title = song.referenceTrack?.title {
@@ -689,58 +735,50 @@ private struct PracticePlayerPanel: View {
                 }
             }
 
-            // Scrub bar + time position
-            if hasTrack, let dur = duration, dur > 0 {
-                TimelineView(.periodic(from: .now, by: 0.25)) { _ in
-                    let current = isDragging ? dragTime : music.currentPlaybackTime
-                    VStack(spacing: 4) {
-                        scrubBar(current: current, duration: dur)
-                        HStack {
-                            Text(timeLabel(current))
-                            Spacer()
+            // Transport controls + scrub bar + loop, all in one row
+            TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+                let current = isDragging ? dragTime : music.currentPlaybackTime
+                HStack(spacing: 10) {
+                    Button { music.restart() } label: {
+                        Image(systemName: "backward.end.fill").font(.subheadline.weight(.semibold))
+                    }
+                    .disabled(!hasTrack)
+
+                    Button { music.skip(by: -15) } label: {
+                        Image(systemName: "gobackward.15").font(.subheadline)
+                    }
+                    .disabled(!hasTrack)
+
+                    Button {
+                        guard let id = trackID else { return }
+                        Task { await music.togglePlayback(of: id) }
+                    } label: {
+                        if isLoading {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: isThisTrackPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.title2)
                         }
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
                     }
-                }
-            }
+                    .disabled(!hasTrack)
 
-            // Transport controls + loop buttons
-            HStack(spacing: 16) {
-                Button { music.restart() } label: {
-                    Image(systemName: "backward.end.fill").font(.body.weight(.semibold))
-                }
-                .disabled(!hasTrack)
+                    Button { music.skip(by: 15) } label: {
+                        Image(systemName: "goforward.15").font(.subheadline)
+                    }
+                    .disabled(!hasTrack)
 
-                Button { music.skip(by: -15) } label: {
-                    Image(systemName: "gobackward.15").font(.body)
-                }
-                .disabled(!hasTrack)
-
-                Button {
-                    guard let id = trackID else { return }
-                    Task { await music.togglePlayback(of: id) }
-                } label: {
-                    if isLoading {
-                        ProgressView().controlSize(.regular)
+                    if let dur = duration, dur > 0 {
+                        scrubBar(current: current, duration: dur)
+                            .frame(maxWidth: .infinity)
                     } else {
-                        Image(systemName: isThisTrackPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.title)
+                        Spacer()
                     }
+
+                    if hasTrack { loopControls }
                 }
-                .disabled(!hasTrack)
-
-                Button { music.skip(by: 15) } label: {
-                    Image(systemName: "goforward.15").font(.body)
-                }
-                .disabled(!hasTrack)
-
-                Spacer()
-
-                if hasTrack { loopControls }
+                .buttonStyle(.plain)
+                .foregroundStyle(hasTrack ? Color.primary : Color.secondary)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(hasTrack ? Color.primary : Color.secondary)
 
             if let error = music.lastError {
                 Text(error)
@@ -802,7 +840,7 @@ private struct PracticePlayerPanel: View {
                     }
             )
         }
-        .frame(height: 20)
+        .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20)
     }
 
     // MARK: Loop controls

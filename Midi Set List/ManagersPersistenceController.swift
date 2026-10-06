@@ -84,6 +84,7 @@ final class PersistenceController {
         c.viewContext.automaticallyMergesChangesFromParent = true
         c.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
 
+        BandRole.deduplicateBuiltIns(in: c.viewContext)
         BandRole.seedDefaultsIfNeeded(in: c.viewContext)
     }
 
@@ -185,6 +186,8 @@ final class PersistenceController {
             attr("dateModified",  .dateAttributeType,   optional: true),
             attr("notes",         .stringAttributeType, optional: true),
             attr("songOrderData", .stringAttributeType, optional: true),
+            attr("playlistURL",   .stringAttributeType, optional: true),
+            attr("playlistID",    .stringAttributeType, optional: true),
         ]
 
         deviceE.properties = [

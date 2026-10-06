@@ -25,6 +25,7 @@ struct SetListPlaylistView: View {
     @State private var isCreating = false
     @State private var createError: String?
     @State private var created = false
+    @State private var playlistURL: URL?
 
     struct Row: Identifiable {
         enum Status { case searching, linked, matched, notFound }
@@ -56,10 +57,17 @@ struct SetListPlaylistView: View {
                     } description: {
                         Text("\"\(playlistName)\" is in your Apple Music library with \(addCount) song\(addCount == 1 ? "" : "s").")
                     } actions: {
-                        Button("Open Music") {
-                            if let url = URL(string: "music://") { openURL(url) }
+                        if let playlistURL {
+                            Button("Open Playlist") {
+                                openURL(playlistURL)
+                            }
+                            .buttonStyle(.borderedProminent)
+                        } else {
+                            Button("Open Music") {
+                                if let url = URL(string: "music://") { openURL(url) }
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-                        .buttonStyle(.borderedProminent)
                     }
                 } else {
                     form
@@ -204,11 +212,17 @@ struct SetListPlaylistView: View {
         defer { isCreating = false }
         let adding = rows.filter(\.willAdd)
         do {
-            try await music.createPlaylist(
+            let result = try await music.createPlaylist(
                 name: playlistName.trimmingCharacters(in: .whitespaces),
                 description: setList.notes,
                 trackIDs: adding.compactMap { $0.track?.id }
             )
+            // Persist the playlist link and ID so SetListDetailView can open it and
+            // future song additions can append tracks automatically.
+            let urlToStore = result.url ?? URL(string: "music://")
+            setList.playlistURL = urlToStore?.absoluteString
+            setList.playlistID = result.playlistID
+            playlistURL = result.url
             if saveMatches {
                 for row in adding where row.status == .matched {
                     guard let track = row.track else { continue }
