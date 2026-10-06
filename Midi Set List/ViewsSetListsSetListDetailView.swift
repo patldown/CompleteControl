@@ -10,6 +10,7 @@ import CoreData
 
 struct SetListDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.openURL) private var openURL
     @Environment(MIDIManager.self) private var midiManager
     @FetchRequest(
         sortDescriptors: [SortDescriptor(\.name)],
@@ -21,10 +22,10 @@ struct SetListDetailView: View {
     @State private var showingAssistant = false
     @State private var showingAddSongs = false
     @State private var selectedSong: Song?
-    @State private var isSendingSetList = false
     @State private var sendError: String?
     @State private var showingSendError = false
     @State private var showingPlaylist = false
+    @State private var showingPlaylistSyncNote = false
     
     var body: some View {
         let songs = setList.songs
@@ -52,47 +53,19 @@ struct SetListDetailView: View {
                 LabeledContent("Commands", value: "\(commandCount)")
             }
 
-            // MIDI Send Section for entire set list
-            if !songs.isEmpty && midiManager.isInitialized {
-                Section {
-                    Button {
-                        Task {
-                            await sendEntireSetList()
-                        }
-                    } label: {
-                        HStack {
-                            if isSendingSetList {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "play.fill")
-                            }
-                            Text("Send Entire Set List")
-                            Spacer()
-                            if !midiManager.connectedDevices.isEmpty {
-                                Text("\(commandCount) cmd")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .disabled(isSendingSetList || midiManager.connectedDevices.isEmpty)
-                } header: {
-                    Text("Performance")
-                } footer: {
-                    if midiManager.connectedDevices.isEmpty {
-                        Text("Connect a MIDI device to send commands")
-                    } else {
-                        Text("Sends Snapshot 1 of every song, in order. To step through songs live, use the Perform tab.")
-                    }
-                }
-            }
-            
             if !setList.songs.isEmpty {
                 Section {
                     Button {
                         showingPlaylist = true
                     } label: {
                         Label("Create Apple Music Playlist", systemImage: "music.note.list")
+                    }
+                    if let urlString = setList.playlistURL, let url = URL(string: urlString) {
+                        Button {
+                            openURL(url)
+                        } label: {
+                            Label("Open Playlist in Music", systemImage: "arrow.up.right.square")
+                        }
                     }
                 } footer: {
                     Text("Makes a playlist called \"\(setList.name)\" with these songs, in order, to listen along or rehearse with.")
@@ -187,6 +160,14 @@ struct SetListDetailView: View {
                 Text(error)
             }
         }
+        .alert("Update Playlist in Music", isPresented: $showingPlaylistSyncNote) {
+            Button("OK", role: .cancel) {}
+            if let urlString = setList.playlistURL, let url = URL(string: urlString) {
+                Button("Open Playlist") { openURL(url) }
+            }
+        } message: {
+            Text("This set list has a linked Apple Music playlist. Remove the song from it manually in the Music app to keep them in sync.")
+        }
     }
     
     private var availableSongs: [Song] {
@@ -195,11 +176,15 @@ struct SetListDetailView: View {
     }
     
     private func removeSongs(at offsets: IndexSet) {
+        let hasLinkedPlaylist = setList.playlistID != nil
+        var removedTrackedSong = false
         for index in offsets {
             let song = setList.songs[index]
+            if hasLinkedPlaylist && song.referenceTrackID != nil { removedTrackedSong = true }
             setList.removeSong(song)
         }
         try? viewContext.save()
+        if removedTrackedSong { showingPlaylistSyncNote = true }
     }
 
     private func moveSongs(from source: IndexSet, to destination: Int) {
@@ -216,21 +201,6 @@ struct SetListDetailView: View {
         }
     }
     
-    private func sendEntireSetList() async {
-        isSendingSetList = true
-        for song in setList.songs {
-            do {
-                try await midiManager.sendSong(song)
-                // Small delay between songs
-                try await Task.sleep(nanoseconds: 100_000_000) // 100ms
-            } catch {
-                sendError = error.localizedDescription
-                showingSendError = true
-                break
-            }
-        }
-        isSendingSetList = false
-    }
 }
 
 struct SetListSongRowView: View {
@@ -425,6 +395,15 @@ struct AddSongsToSetListView: View {
         let songsToAdd = availableSongs.filter { selectedSongs.contains($0.id) }
         for song in songsToAdd { setList.addSong(song) }
         try? viewContext.save()
+
+        // If the set list has a linked playlist, append reference tracks for any added songs that have one.
+        if let playlistID = setList.playlistID {
+            let trackIDs = songsToAdd.compactMap { $0.referenceTrackID }
+            if !trackIDs.isEmpty {
+                Task { try? await AppleMusicReference.shared.addTracksToPlaylist(playlistID: playlistID, trackIDs: trackIDs) }
+            }
+        }
+
         dismiss()
     }
 }

@@ -144,8 +144,10 @@ private struct PerformPlayingView: View {
     @Environment(PerformanceSession.self) private var performance
     @Environment(MIDIManager.self) private var midiManager
     @ObservedObject private var remote = MIDIRemoteSettings.shared
+    private let music = AppleMusicReference.shared
 
     @State private var showingBTMIDI = false
+    @State private var showingReferencePlayer = false
     /// Lyrics fill the window; the snapshot strip stays above them
     @State private var lyricsExpanded = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -163,17 +165,33 @@ private struct PerformPlayingView: View {
         let songs = performance.songs
         VStack(spacing: 0) {
             if let song = performance.currentSong {
-                VStack(alignment: .leading, spacing: 12) {
-                    if !lyricsExpanded {
+                if !lyricsExpanded {
+                    VStack(alignment: .leading, spacing: 8) {
                         PerformSongHeader(song: song, index: performance.songIndex, total: songs.count,
                                           nextSongName: name(in: songs, at: performance.songIndex + 1))
+                        if let error = performance.lastError {
+                            errorBanner(error)
+                        }
+                        if showingReferencePlayer {
+                            Divider()
+                            PracticePlayerPanel(song: song)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+                } else {
                     if let error = performance.lastError {
                         errorBanner(error)
+                            .padding(.horizontal)
+                            .padding(.top, 8)
+                    }
+                    if showingReferencePlayer {
+                        PracticePlayerPanel(song: song)
+                            .padding(.horizontal)
+                            .padding(.top, 8)
                     }
                 }
-                .padding(.horizontal)
-                .padding(.top, lyricsExpanded ? 8 : 12)
 
                 PerformSnapshotStrip(song: song)
                     .id(song.objectID)
@@ -225,21 +243,7 @@ private struct PerformPlayingView: View {
                 .tint(.red)
             }
             ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    ForEach(Array(songs.enumerated()), id: \.element.objectID) { index, song in
-                        Button {
-                            performance.goToSong(index)
-                        } label: {
-                            if index == performance.songIndex {
-                                Label("\(index + 1). \(song.name)", systemImage: "play.fill")
-                            } else {
-                                Text("\(index + 1). \(song.name)")
-                            }
-                        }
-                    }
-                } label: {
-                    Label("Songs", systemImage: "list.number")
-                }
+                songListMenu(songs: songs)
             }
             ToolbarItem(placement: .primaryAction) {
                 LiveFollowButton()
@@ -251,9 +255,43 @@ private struct PerformPlayingView: View {
                     Label("Bluetooth MIDI", systemImage: "wave.3.right")
                 }
             }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingReferencePlayer.toggle()
+                    if !showingReferencePlayer { music.stop() }
+                } label: {
+                    Label("Reference Track", systemImage: showingReferencePlayer ? "headphones.circle.fill" : "headphones.circle")
+                        .foregroundStyle(showingReferencePlayer ? Color.accentColor : .primary)
+                }
+                .accessibilityValue(showingReferencePlayer ? "On" : "Off")
+            }
         }
         .sheet(isPresented: $showingBTMIDI) {
             BTMIDIConnectSheet()
+        }
+        .onChange(of: performance.songIndex) { _, _ in
+            if showingReferencePlayer { music.stop() }
+        }
+        .onDisappear {
+            music.stop()
+        }
+    }
+
+    private func songListMenu(songs: [Song]) -> some View {
+        Menu {
+            ForEach(Array(songs.enumerated()), id: \.element.objectID) { index, song in
+                Button {
+                    performance.goToSong(index)
+                } label: {
+                    if index == performance.songIndex {
+                        Label("\(index + 1). \(song.name)", systemImage: "play.fill")
+                    } else {
+                        Text("\(index + 1). \(song.name)")
+                    }
+                }
+            }
+        } label: {
+            Label("Songs", systemImage: "list.number")
         }
     }
 
@@ -573,8 +611,7 @@ private struct PerformSnapshotStrip: View {
                 }
                 Text(song.snapshotName(index))
                     .font(.subheadline.weight(.semibold))
-                    .lineLimit(2, reservesSpace: true)
-                    .multilineTextAlignment(.leading)
+                    .lineLimit(1)
                 Text(count == 0 ? "Empty" : "\(count) command\(count == 1 ? "" : "s")")
                     .font(.caption2)
                     .opacity(0.8)
@@ -601,6 +638,223 @@ private struct PerformSnapshotStrip: View {
         .disabled(locked)
         .accessibilityAddTraits(isActive ? .isSelected : [])
         .accessibilityHint(locked ? "The leader controls snapshots" : "")
+    }
+}
+
+// MARK: - Practice player panel
+
+private struct PracticePlayerPanel: View {
+    @ObservedObject var song: Song
+    private let music = AppleMusicReference.shared
+
+    @State private var isDragging = false
+    @State private var dragTime: TimeInterval = 0
+    @State private var loopIn: TimeInterval? = nil
+    @State private var loopOut: TimeInterval? = nil
+
+    private var trackID: String? { song.referenceTrackID }
+    private var hasTrack: Bool { trackID != nil }
+    private var isThisTrackPlaying: Bool { music.isPlaying(trackID ?? "") }
+    private var isLoading: Bool { music.loadingTrackID != nil && music.loadingTrackID == trackID }
+    private var duration: TimeInterval? { song.referenceTrack?.duration }
+    private var hasLoop: Bool { music.loopRegion != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Track info + total duration
+            HStack(alignment: .firstTextBaseline) {
+                if let title = song.referenceTrack?.title {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        if let artist = song.referenceTrack?.artist {
+                            Text(artist)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                } else {
+                    Text("No reference track")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .italic()
+                }
+                Spacer()
+                if let dur = duration {
+                    Text(timeLabel(dur))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Scrub bar + time position
+            if hasTrack, let dur = duration, dur > 0 {
+                TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+                    let current = isDragging ? dragTime : music.currentPlaybackTime
+                    VStack(spacing: 4) {
+                        scrubBar(current: current, duration: dur)
+                        HStack {
+                            Text(timeLabel(current))
+                            Spacer()
+                        }
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Transport controls + loop buttons
+            HStack(spacing: 16) {
+                Button { music.restart() } label: {
+                    Image(systemName: "backward.end.fill").font(.body.weight(.semibold))
+                }
+                .disabled(!hasTrack)
+
+                Button { music.skip(by: -15) } label: {
+                    Image(systemName: "gobackward.15").font(.body)
+                }
+                .disabled(!hasTrack)
+
+                Button {
+                    guard let id = trackID else { return }
+                    Task { await music.togglePlayback(of: id) }
+                } label: {
+                    if isLoading {
+                        ProgressView().controlSize(.regular)
+                    } else {
+                        Image(systemName: isThisTrackPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.title)
+                    }
+                }
+                .disabled(!hasTrack)
+
+                Button { music.skip(by: 15) } label: {
+                    Image(systemName: "goforward.15").font(.body)
+                }
+                .disabled(!hasTrack)
+
+                Spacer()
+
+                if hasTrack { loopControls }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(hasTrack ? Color.primary : Color.secondary)
+
+            if let error = music.lastError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .onChange(of: song.referenceTrackID) { _, _ in
+            music.clearLoopRegion()
+            loopIn = nil
+            loopOut = nil
+        }
+        .padding(.bottom, 4)
+    }
+
+    // MARK: Scrub bar
+
+    private func scrubBar(current: TimeInterval, duration: TimeInterval) -> some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let progress = CGFloat(max(0, min(1, current / duration)))
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.secondary.opacity(0.25))
+                    .frame(height: 6)
+
+                if let region = music.loopRegion {
+                    let lx = CGFloat(region.lowerBound / duration) * w
+                    let rw = CGFloat((region.upperBound - region.lowerBound) / duration) * w
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.accentColor.opacity(0.4))
+                        .frame(width: max(0, rw), height: 6)
+                        .offset(x: lx)
+                }
+
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.primary.opacity(0.7))
+                    .frame(width: max(0, progress * w), height: 6)
+
+                Circle()
+                    .fill(Color.primary)
+                    .frame(width: 14, height: 14)
+                    .offset(x: max(0, min(w - 14, progress * w - 7)))
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        isDragging = true
+                        dragTime = max(0, min(duration, Double(value.location.x / w) * duration))
+                    }
+                    .onEnded { value in
+                        let t = max(0, min(duration, Double(value.location.x / w) * duration))
+                        music.seek(to: t)
+                        isDragging = false
+                    }
+            )
+        }
+        .frame(height: 20)
+    }
+
+    // MARK: Loop controls
+
+    @ViewBuilder
+    private var loopControls: some View {
+        if hasLoop {
+            Button {
+                music.clearLoopRegion()
+                loopIn = nil
+                loopOut = nil
+            } label: {
+                Image(systemName: "repeat.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(Color.accentColor)
+            }
+        } else {
+            HStack(spacing: 6) {
+                loopPointButton("IN", isSet: loopIn != nil) {
+                    loopIn = music.currentPlaybackTime
+                    tryActivateLoop()
+                }
+                loopPointButton("OUT", isSet: loopOut != nil) {
+                    loopOut = music.currentPlaybackTime
+                    tryActivateLoop()
+                }
+            }
+        }
+    }
+
+    private func loopPointButton(_ label: String, isSet: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.caption.weight(.bold).monospacedDigit())
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    isSet ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
+                .foregroundStyle(isSet ? Color.accentColor : Color.secondary)
+        }
+    }
+
+    private func tryActivateLoop() {
+        guard let inTime = loopIn, let outTime = loopOut, outTime > inTime else { return }
+        music.setLoopRegion(start: inTime, end: outTime)
+    }
+
+    private func timeLabel(_ t: TimeInterval) -> String {
+        let s = Int(max(0, t))
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 }
 

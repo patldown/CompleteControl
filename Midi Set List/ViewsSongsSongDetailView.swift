@@ -37,6 +37,8 @@ struct SongDetailView: View {
     @State private var showingSendError = false
     @State private var showingLyricsPerformance = false
     @State private var clockSendTransport = false
+    @State private var bpmText: String = ""
+    @FocusState private var bpmFieldFocused: Bool
 
     // Track if we're in a navigation stack or presented as sheet
     var isInSheet: Bool = false
@@ -84,20 +86,15 @@ struct SongDetailView: View {
                         .buttonStyle(.borderless)
                     }
                     compactField("BPM") {
-                        TextField("—", value: Binding<Int?>(
-                            get: { song.bpm },
-                            set: { newBPM in
-                                song.bpm = newBPM.map { max(20, min(300, $0)) }
-                                if let bpm = song.clockBPM, midiManager.isClockRunning {
-                                    midiManager.startClock(bpm: bpm, sendTransport: clockSendTransport)
-                                } else if song.clockBPM == nil, midiManager.isClockRunning {
-                                    midiManager.stopClock()
-                                }
+                        TextField("—", text: $bpmText)
+                            .keyboardType(.numberPad)
+                            .monospacedDigit()
+                            .padding(.vertical, 6)
+                            .focused($bpmFieldFocused)
+                            .onSubmit { commitBPM() }
+                            .onChange(of: bpmFieldFocused) { _, focused in
+                                if !focused { commitBPM() }
                             }
-                        ), format: .number)
-                        .keyboardType(.numberPad)
-                        .monospacedDigit()
-                        .padding(.vertical, 6)
                     }
                     compactField("Time Sig.") {
                         Picker("Time Signature", selection: Binding(
@@ -294,6 +291,7 @@ struct SongDetailView: View {
         }
         .onAppear {
             selectedGenres = Set(song.genres)
+            bpmText = song.bpm.map(String.init) ?? ""
             // MIDI snapshot recalls act on the open song when no set list is playing
             performance.focus(song)
         }
@@ -314,7 +312,11 @@ struct SongDetailView: View {
         .onChange(of: song.artist) { _, _ in song.dateModified = Date(); try? viewContext.save() }
         .onChange(of: song.notes)  { _, _ in song.dateModified = Date(); try? viewContext.save() }
         .onChange(of: song.lyrics) { _, _ in song.dateModified = Date(); try? viewContext.save() }
-        .onChange(of: song.bpm)    { _, _ in song.dateModified = Date(); try? viewContext.save() }
+        .onChange(of: song.bpm)    { _, newBPM in
+            song.dateModified = Date()
+            try? viewContext.save()
+            if !bpmFieldFocused { bpmText = newBPM.map(String.init) ?? "" }
+        }
     }
 
     // MARK: - Key, transpose & capo
@@ -322,6 +324,23 @@ struct SongDetailView: View {
     private func saveSong() {
         song.dateModified = Date()
         try? viewContext.save()
+    }
+
+    private func commitBPM() {
+        if bpmText.isEmpty {
+            song.bpm = nil
+        } else if let value = Int(bpmText) {
+            let clamped = max(20, min(300, value))
+            song.bpm = clamped
+            bpmText = String(clamped)
+        } else {
+            bpmText = song.bpm.map(String.init) ?? ""
+        }
+        if let bpm = song.clockBPM, midiManager.isClockRunning {
+            midiManager.startClock(bpm: bpm, sendTransport: clockSendTransport)
+        } else if song.clockBPM == nil, midiManager.isClockRunning {
+            midiManager.stopClock()
+        }
     }
 
     /// Key and Scale side by side; Transpose, Capo and Sounds In below them. The capo's

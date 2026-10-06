@@ -49,6 +49,7 @@ struct MIDICommandTypeTests {
 // MARK: - MIDICommand
 
 @Suite("MIDICommand")
+@MainActor
 struct MIDICommandTests {
 
     let controller = PersistenceController(inMemory: true)
@@ -214,6 +215,7 @@ struct MIDICommandTests {
 // MARK: - DeviceMacro
 
 @Suite("DeviceMacro")
+@MainActor
 struct DeviceMacroTests {
 
     let controller = PersistenceController(inMemory: true)
@@ -668,6 +670,7 @@ struct OSCEncoderTests {
 // MARK: - Song
 
 @Suite("Song")
+@MainActor
 struct SongTests {
 
     let controller = PersistenceController(inMemory: true)
