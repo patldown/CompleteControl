@@ -1030,11 +1030,14 @@ struct MetronomeStripView: View {
                     Text("Out").font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Picker("Output", selection: Binding(
-                        get: { prefs.metronomeOutputBus },
-                        set: { prefs.metronomeOutputBus = $0 }
+                        get: { prefs.metronomeOutput },
+                        set: { prefs.metronomeOutput = $0 }
                     )) {
-                        ForEach(0..<store.availableOutputBusPairCount, id: \.self) { bus in
-                            Text(store.outputBusLabel(bus)).tag(bus)
+                        Section("Stereo") {
+                            ForEach(store.outputRoutes.filter(\.stereo), id: \.self) { Text($0.label).tag($0) }
+                        }
+                        Section("Mono") {
+                            ForEach(store.outputRoutes.filter { !$0.stereo }, id: \.self) { Text($0.label).tag($0) }
                         }
                     }
                     .pickerStyle(.menu).font(.caption)

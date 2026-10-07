@@ -90,6 +90,11 @@ final class Metronome {
     /// Time from pressing start to the first click: long enough for the audio to get going
     static let leadIn: Double = 0.12
 
+    /// Number of output channels on the current audio route (2 without an interface)
+    static var currentOutputChannelCount: Int {
+        max(2, AVAudioSession.sharedInstance().maximumOutputNumberOfChannels)
+    }
+
     /// Number of stereo output channel pairs available on the current audio route.
     /// 1 = standard stereo; 2+ = multi-channel interface (Ch 1-2, Ch 3-4, …).
     static var currentOutputBusPairCount: Int {
@@ -124,18 +129,19 @@ final class Metronome {
 
         engine.connect(source, to: engine.mainMixerNode, format: monoFormat)
 
-        // An interface's outputs are one multichannel bus, so a pair is chosen with the
-        // output unit's channel map (index = hardware channel, value = engine channel),
-        // not by connecting to "bus N"
-        let targetBus = prefs.metronomeOutputBus
-        if targetBus > 0 {
+        // An interface's outputs are one multichannel bus, so the click's output is chosen
+        // with the output unit's channel map (index = hardware channel, value = engine
+        // channel), not by connecting to "bus N". Stereo on Ch 1–2 needs no map.
+        let route = prefs.metronomeOutput
+        if route.channel > 0 || !route.stereo {
             try? session.setPreferredOutputNumberOfChannels(session.maximumOutputNumberOfChannels)
             let hardwareChannels = Int(engine.outputNode.outputFormat(forBus: 0).channelCount)
-            if 2 * targetBus + 1 < hardwareChannels,
+            let lastNeeded = route.channel + (route.stereo ? 1 : 0)
+            if lastNeeded < hardwareChannels,
                let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) {
                 var map = [NSNumber](repeating: -1, count: hardwareChannels)
-                map[2 * targetBus] = 0
-                map[2 * targetBus + 1] = 1
+                map[route.channel] = 0                              // the click is mono: left carries it
+                if route.stereo { map[route.channel + 1] = 1 }
                 engine.outputNode.auAudioUnit.channelMap = map
                 engine.connect(engine.mainMixerNode, to: engine.outputNode, format: stereoFormat)
             }

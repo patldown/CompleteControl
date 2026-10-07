@@ -194,12 +194,6 @@ final class AudioRoutingStore {
         return pairs + monos
     }
 
-    /// Kept for the metronome strip, which picks stereo pairs
-    var availableOutputBusPairCount: Int { max(1, outputChannelCount / 2) }
-
-    func outputBusLabel(_ bus: Int) -> String {
-        "Ch \(bus * 2 + 1)–\(bus * 2 + 2)"
-    }
 
     func inputPort(for channel: AudioChannel) -> AudioInputPort? {
         availableInputs.first { $0.monoIndex == channel.inputIndex }
