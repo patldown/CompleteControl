@@ -262,6 +262,13 @@ enum AppOSC {
         name.lowercased().filter { !" -_".contains($0) }
     }
 
+    /// Names a channel can't take: they'd be read as a position (ch2) or the engine address
+    static func isReservedName(_ name: String) -> Bool {
+        let n = normalize(name)
+        if n == "engine" { return true }
+        return n.hasPrefix("ch") && n.count > 2 && n.dropFirst(2).allSatisfy(\.isNumber)
+    }
+
     /// The address segment for a channel: its name, or ch<n> when it has none
     static func channelSegment(_ channel: AudioChannel, index: Int) -> String {
         channel.name.trimmingCharacters(in: .whitespaces).isEmpty ? "ch\(index + 1)" : channel.name

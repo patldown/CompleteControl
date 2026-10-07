@@ -33,6 +33,9 @@ messages, so any macro, song command or AI assistant can change any effect setti
 - The channel's **name** as shown on its strip, e.g. `Lead Vox`.
   Matching ignores case, spaces, `-` and `_`, so `lead-vox`, `LeadVox` and `lead_vox`
   all reach `Lead Vox`.
+- **Names are always unique** under that matching, so a name reaches exactly one
+  channel. The app enforces it: a taken name gets a number ("Vox" → "Vox 2"), and names
+  that look like a position (`ch2`) or are `engine` are not allowed.
 - Or its **position**: `ch1` is the first strip, `ch2` the second, and so on.
   Unnamed channels can only be reached this way.
 - **Renaming a channel updates macros automatically**: when you finish editing the name

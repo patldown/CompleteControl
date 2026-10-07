@@ -166,6 +166,7 @@ struct ChannelStripView: View {
     @FocusState private var nameFocused: Bool
     @State private var nameBeforeEdit: String?
     @State private var renamedMacroCount = 0
+    @State private var renameNotice: String?
     @State private var fxEditTarget: FXEditTarget?
     @State private var showingMacroSave = false
     @State private var newMacroName = ""
@@ -251,6 +252,15 @@ struct ChannelStripView: View {
 
             Text(store.inputPort(for: channel)?.displayName ?? "Input \(channel.inputIndex + 1)")
                 .font(.caption).foregroundStyle(.secondary)
+
+            if let renameNotice {
+                Text(renameNotice)
+                    .font(.caption2).foregroundStyle(.orange)
+                    .task {
+                        try? await Task.sleep(for: .seconds(4))
+                        self.renameNotice = nil
+                    }
+            }
 
             if renamedMacroCount > 0 {
                 Text("Updated \(renamedMacroCount) OSC address\(renamedMacroCount == 1 ? "" : "es")")
@@ -385,6 +395,15 @@ struct ChannelStripView: View {
     /// Name editing ended: point /app/ macros and song commands at the new name
     private func finishRename() {
         defer { nameBeforeEdit = nil }
+        // Names are OSC addresses, so they must be unique: "Vox" taken → "Vox 2"
+        let unique = store.uniqueName(channel.name, excluding: channelID)
+        if unique != channel.name {
+            if !channel.name.trimmingCharacters(in: .whitespaces).isEmpty
+                && unique != channel.name.trimmingCharacters(in: .whitespaces) {
+                renameNotice = "\"\(channel.name)\" is taken — named \"\(unique)\""
+            }
+            var c = channel; c.name = unique; commit(c)
+        }
         guard let old = nameBeforeEdit, old != channel.name,
               let index = store.channels.firstIndex(where: { $0.id == channelID }) else { return }
         let newSegment = AppOSC.channelSegment(channel, index: index)
@@ -1058,8 +1077,16 @@ struct AddChannelSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Channel Name") {
+                Section {
                     TextField("e.g. Keys L, Vox, Guitar", text: $name)
+                } header: {
+                    Text("Channel Name")
+                } footer: {
+                    let unique = store.uniqueName(name, excluding: nil)
+                    if unique != name.trimmingCharacters(in: .whitespaces) {
+                        Text("That name is taken — it will be added as \"\(unique)\". Names must be unique because macros use them as OSC addresses.")
+                            .foregroundStyle(.orange)
+                    }
                 }
 
                 Section("Hardware Input") {

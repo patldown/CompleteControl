@@ -67,7 +67,45 @@ final class AudioRoutingStore {
         guard let data = try? Data(contentsOf: Self.fileURL),
               let decoded = try? JSONDecoder().decode([AudioChannel].self, from: data)
         else { return }
-        channels = decoded
+        // Older saves could hold duplicate names; make them unique so /app/ addresses are unambiguous
+        var fixed: [AudioChannel] = []
+        for var channel in decoded {
+            channel.name = Self.uniqueName(channel.name, excluding: channel.id, among: fixed)
+            fixed.append(channel)
+        }
+        channels = fixed
+        if fixed.map(\.name) != decoded.map(\.name) { save() }
+    }
+
+    // MARK: - Unique names
+    // Channel names are OSC addresses (/app/<name>/…), so no two may match once case, spaces,
+    // "-" and "_" are ignored, and none may look like a position (ch2) or "engine".
+    // Empty names are allowed; those channels are addressed by position.
+
+    func isNameAvailable(_ name: String, excluding id: UUID?) -> Bool {
+        Self.isNameAvailable(name, excluding: id, among: channels)
+    }
+
+    /// `name` if it's free, otherwise "name 2", "name 3"…
+    func uniqueName(_ name: String, excluding id: UUID?) -> String {
+        Self.uniqueName(name, excluding: id, among: channels)
+    }
+
+    private static func isNameAvailable(_ name: String, excluding id: UUID?, among list: [AudioChannel]) -> Bool {
+        let n = AppOSC.normalize(name)
+        guard !n.isEmpty else { return true }
+        guard !AppOSC.isReservedName(name) else { return false }
+        return !list.contains { $0.id != id && AppOSC.normalize($0.name) == n }
+    }
+
+    private static func uniqueName(_ name: String, excluding id: UUID?, among list: [AudioChannel]) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        if isNameAvailable(trimmed, excluding: id, among: list) { return trimmed }
+        let base = AppOSC.isReservedName(trimmed) ? "Channel \(trimmed)" : trimmed
+        if isNameAvailable(base, excluding: id, among: list) { return base }
+        var n = 2
+        while !isNameAvailable("\(base) \(n)", excluding: id, among: list) { n += 1 }
+        return "\(base) \(n)"
     }
 
     func save() {
@@ -78,6 +116,8 @@ final class AudioRoutingStore {
     // MARK: - Channel management
 
     func add(_ channel: AudioChannel) {
+        var channel = channel
+        channel.name = uniqueName(channel.name, excluding: channel.id)
         channels.append(channel)
         save()
     }
