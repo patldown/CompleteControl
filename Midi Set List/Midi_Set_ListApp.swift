@@ -62,6 +62,7 @@ struct Midi_Set_ListApp: App {
                     midiManager.oscManager = oscManager
                     midiManager.activityLog = activityLog
                     oscManager.activityLog = activityLog
+                    AudioRoutingEngine.shared.activityLog = activityLog
                     performance.midiManager = midiManager
                     performance.activityLog = activityLog
                     let session = performance

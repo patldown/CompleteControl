@@ -122,19 +122,23 @@ final class Metronome {
         let source = Self.makeSourceNode(render: render, format: monoFormat)
         engine.attach(source)
 
+        engine.connect(source, to: engine.mainMixerNode, format: monoFormat)
+
+        // An interface's outputs are one multichannel bus, so a pair is chosen with the
+        // output unit's channel map (index = hardware channel, value = engine channel),
+        // not by connecting to "bus N"
         let targetBus = prefs.metronomeOutputBus
-        let busPairCount = Self.currentOutputBusPairCount
-        if targetBus > 0, targetBus < busPairCount,
-           let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) {
-            // Bypass the main mixer and send the click directly to the chosen channel pair.
-            // An upmix mixer expands mono to stereo before the output node.
-            let upmix = AVAudioMixerNode()
-            engine.attach(upmix)
-            engine.connect(source, to: upmix, format: monoFormat)
-            engine.connect(upmix, to: engine.outputNode, fromBus: 0,
-                           toBus: AVAudioNodeBus(targetBus), format: stereoFormat)
-        } else {
-            engine.connect(source, to: engine.mainMixerNode, format: monoFormat)
+        if targetBus > 0 {
+            try? session.setPreferredOutputNumberOfChannels(session.maximumOutputNumberOfChannels)
+            let hardwareChannels = Int(engine.outputNode.outputFormat(forBus: 0).channelCount)
+            if 2 * targetBus + 1 < hardwareChannels,
+               let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) {
+                var map = [NSNumber](repeating: -1, count: hardwareChannels)
+                map[2 * targetBus] = 0
+                map[2 * targetBus + 1] = 1
+                engine.outputNode.auAudioUnit.channelMap = map
+                engine.connect(engine.mainMixerNode, to: engine.outputNode, format: stereoFormat)
+            }
         }
 
         engine.prepare()

@@ -269,7 +269,7 @@ struct ChannelStripView: View {
                     get: { channel.isStereoLinked },
                     set: { val in
                         var c = channel; c.isStereoLinked = val; store.update(c)
-                        engine.syncChannel(channelID)
+                        engine.updateInput(of: c)   // instant; no rebuild
                     }
                 ))
                 .font(.caption).toggleStyle(.button).buttonStyle(.bordered).controlSize(.mini)

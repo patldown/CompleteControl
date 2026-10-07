@@ -20,9 +20,7 @@ struct AudioInputPort: Identifiable, Equatable {
     let channelIndex: Int   // within the port (0-based)
     let monoIndex: Int      // global 0-based mono bus index on inputNode
 
-    var displayName: String {
-        channelIndex == 0 ? portName : "\(portName) · Ch \(channelIndex + 1)"
-    }
+    var displayName: String { "\(portName) · In \(channelIndex + 1)" }
 }
 
 // MARK: - Store
@@ -152,24 +150,22 @@ final class AudioRoutingStore {
         guard isExternalInterfaceConnected else { availableInputs = []; return }
         // Keep the last known input list while the category hides inputs (e.g. metronome
         // switched to .playback), so existing channel strips keep their input names.
-        guard categorySupportsInput(session.category), let inputs = session.availableInputs
-        else { return }
-        var ports: [AudioInputPort] = []
-        var mono = 0
-        for input in inputs {
-            let count = max(1, input.channels?.count ?? 1)
-            for ch in 0..<count {
-                ports.append(AudioInputPort(
-                    id: "\(input.uid):\(ch)",
-                    portUID: input.uid,
-                    portName: input.portName,
-                    channelIndex: ch,
-                    monoIndex: mono
-                ))
-                mono += 1
-            }
+        guard categorySupportsInput(session.category), let port = externalInputPort else { return }
+        // The engine records from this one port, so its channels are the engine's input
+        // channels 0…N-1 (the picker selects among them). While the session is active the
+        // live channel count is the truth; the port's own list is the fallback.
+        let liveCount = session.isInputAvailable ? session.inputNumberOfChannels : 0
+        let count = max(1, max(liveCount, port.channels?.count ?? 1))
+        availableInputs = (0..<count).map { ch in
+            AudioInputPort(id: "\(port.uid):\(ch)", portUID: port.uid, portName: port.portName,
+                           channelIndex: ch, monoIndex: ch)
         }
-        availableInputs = ports
+    }
+
+    /// The interface the routing engine records from (USB, line in, Thunderbolt)
+    var externalInputPort: AVAudioSessionPortDescription? {
+        let externalTypes: Set<AVAudioSession.Port> = [.usbAudio, .lineIn, .thunderbolt]
+        return AVAudioSession.sharedInstance().availableInputs?.first { externalTypes.contains($0.portType) }
     }
 
     /// Switches the session to .playAndRecord so the interface's inputs can be listed.
