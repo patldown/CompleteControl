@@ -53,6 +53,12 @@ final class AudioRoutingEngine {
             name: "FET Comp",
             version: 1
         )
+        AUAudioUnit.registerSubclass(
+            FeedbackNotchAudioUnit.self,
+            as: FeedbackNotchAudioUnit.componentDescription,
+            name: "Feedback Notch",
+            version: 1
+        )
     }
 
     // MARK: - Lifecycle
@@ -188,6 +194,11 @@ final class AudioRoutingEngine {
                 audioComponentDescription: VintageCompressorAudioUnit.fetDescription)
             (effect.auAudioUnit as? VintageCompressorAudioUnit)?.kernel.applyParams(slot.fetComp)
             return effect
+        case .feedbackNotch:
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: FeedbackNotchAudioUnit.componentDescription)
+            (effect.auAudioUnit as? FeedbackNotchAudioUnit)?.kernel.applyParams(slot.feedbackNotch)
+            return effect
         case .pitchGuide:
             return nil  // DSP not yet implemented; slot passes signal through unaffected
         }
@@ -216,6 +227,14 @@ final class AudioRoutingEngine {
         }
     }
 
+    /// The running Feedback Notch kernel in a channel's slot, for ring-out. Nil when the
+    /// engine is stopped or the slot's current graph node isn't a Feedback Notch.
+    func feedbackNotchKernel(channelID: UUID, slotIndex: Int) -> FeedbackNotchKernel? {
+        guard let nodes = graphs[channelID]?.fxNodes, nodes.indices.contains(slotIndex),
+              let effect = nodes[slotIndex] as? AVAudioUnitEffect else { return nil }
+        return (effect.auAudioUnit as? FeedbackNotchAudioUnit)?.kernel
+    }
+
     func applyVolume(of channel: AudioChannel) {
         graphs[channel.id]?.inputMixer.volume = channel.isMuted ? 0 : channel.volume
     }
@@ -242,6 +261,9 @@ final class AudioRoutingEngine {
         case .fetComp:
             ((node as? AVAudioUnitEffect)?.auAudioUnit as? VintageCompressorAudioUnit)?
                 .kernel.applyParams(slot.fetComp)
+        case .feedbackNotch:
+            ((node as? AVAudioUnitEffect)?.auAudioUnit as? FeedbackNotchAudioUnit)?
+                .kernel.applyParams(slot.feedbackNotch)
         case .pitchGuide:
             break
         case nil:

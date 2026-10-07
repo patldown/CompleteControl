@@ -14,7 +14,7 @@ import Foundation
 // MARK: - FX type
 
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
-    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, pitchGuide
+    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide
 
     var id: String { rawValue }
 
@@ -27,6 +27,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .levelRider: "Level Rider"
         case .optoComp:   "Opto Comp (LA-2A style)"
         case .fetComp:    "FET Comp (1176 style)"
+        case .feedbackNotch: "Feedback Notch"
         case .pitchGuide: "Pitch Guide"
         }
     }
@@ -40,6 +41,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .levelRider: "dial.medium"
         case .optoComp:   "lightbulb"
         case .fetComp:    "bolt"
+        case .feedbackNotch: "waveform.path.badge.minus"
         case .pitchGuide: "music.note"
         }
     }
@@ -119,6 +121,29 @@ struct FETCompParams: Codable, Equatable {
     var release: Float = 5          // 1 (slow, 1.1 s) ... 7 (fast, 50 ms)
 }
 
+// MARK: - Feedback Notch parameters
+
+/// One narrow cut placed by ring-out.
+struct FeedbackNotch: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var frequency: Float            // Hz
+    var depth: Float                // dB, negative
+    var q: Float = 10               // ~1/7 octave wide
+
+    var label: String { Self.label(for: frequency) }
+
+    static func label(for frequency: Float) -> String {
+        frequency < 1_000 ? "\(Int(frequency.rounded())) Hz"
+                          : String(format: "%.2f kHz", frequency / 1_000)
+    }
+}
+
+struct FeedbackNotchParams: Codable, Equatable {
+    var notches: [FeedbackNotch] = []
+    var sensitivity: Float = 50     // 0...100; higher catches ringing sooner
+    var maxDepth: Float = -12       // dB, -18...-6; deepest any one notch may go
+}
+
 // MARK: - Pitch Guide parameters
 
 enum PitchScale: String, Codable, CaseIterable, Identifiable {
@@ -187,6 +212,7 @@ struct ChannelFXSlot: Codable, Equatable {
     var levelRider: LevelRiderParams = .init()
     var optoComp: OptoCompParams = .init()
     var fetComp: FETCompParams = .init()
+    var feedbackNotch: FeedbackNotchParams = .init()
     var pitchGuide: PitchGuideParams = .init()
 
     init() {}
@@ -203,6 +229,7 @@ struct ChannelFXSlot: Codable, Equatable {
         levelRider = try c.decodeIfPresent(LevelRiderParams.self, forKey: .levelRider) ?? .init()
         optoComp = try c.decodeIfPresent(OptoCompParams.self, forKey: .optoComp) ?? .init()
         fetComp = try c.decodeIfPresent(FETCompParams.self, forKey: .fetComp) ?? .init()
+        feedbackNotch = try c.decodeIfPresent(FeedbackNotchParams.self, forKey: .feedbackNotch) ?? .init()
         pitchGuide = try c.decodeIfPresent(PitchGuideParams.self, forKey: .pitchGuide) ?? .init()
     }
 }

@@ -139,7 +139,11 @@ struct ChannelStripView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
         .sheet(item: $fxEditTarget) { target in
-            FXSlotEditorSheet(slot: channel.slots[target.slotIndex]) { updatedSlot in
+            FXSlotEditorSheet(
+                slot: channel.slots[target.slotIndex],
+                feedbackKernel: engine.feedbackNotchKernel(channelID: channelID,
+                                                           slotIndex: target.slotIndex)
+            ) { updatedSlot in
                 let typeChanged = updatedSlot.type != channel.slots[target.slotIndex].type
                 var c = channel
                 c.slots[target.slotIndex] = updatedSlot
@@ -370,10 +374,16 @@ struct FXSlotRowView: View {
 struct FXSlotEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var slot: ChannelFXSlot
+    private let original: ChannelFXSlot
+    /// Live kernel when this slot is a running Feedback Notch — enables ring-out
+    let feedbackKernel: FeedbackNotchKernel?
     let onSave: (ChannelFXSlot) -> Void
 
-    init(slot: ChannelFXSlot, onSave: @escaping (ChannelFXSlot) -> Void) {
+    init(slot: ChannelFXSlot, feedbackKernel: FeedbackNotchKernel? = nil,
+         onSave: @escaping (ChannelFXSlot) -> Void) {
         _slot = State(initialValue: slot)
+        original = slot
+        self.feedbackKernel = feedbackKernel
         self.onSave = onSave
     }
 
@@ -401,6 +411,9 @@ struct FXSlotEditorSheet: View {
                     case .levelRider: LevelRiderEditor(params: $slot.levelRider)
                     case .optoComp:   OptoCompEditor(params: $slot.optoComp)
                     case .fetComp:    FETCompEditor(params: $slot.fetComp)
+                    case .feedbackNotch:
+                        FeedbackNotchEditor(params: $slot.feedbackNotch,
+                                            kernel: slot.type == original.type ? feedbackKernel : nil)
                     case .pitchGuide: PitchGuideEditor(params: $slot.pitchGuide)
                     }
                 }
@@ -408,7 +421,13 @@ struct FXSlotEditorSheet: View {
             .navigationTitle("FX Slot")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel", role: .cancel) { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", role: .cancel) {
+                        // Ring-out changes the running filters live; put them back
+                        feedbackKernel?.applyParams(original.feedbackNotch)
+                        dismiss()
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { onSave(slot); dismiss() } }
             }
         }
@@ -586,6 +605,79 @@ private struct FETCompEditor: View {
         } footer: {
             Text("Fast and punchy. More Input = more compression; use Output to match level. Attack and Release: 7 is fastest. \"All\" is the aggressive all-buttons-in sound.")
         }
+    }
+}
+
+private struct FeedbackNotchEditor: View {
+    @Binding var params: FeedbackNotchParams
+    let kernel: FeedbackNotchKernel?
+    @State private var analyzer: RingOutAnalyzer?
+
+    var body: some View {
+        Section {
+            if let kernel {
+                let running = analyzer?.isRunning == true
+                Button {
+                    if running {
+                        analyzer?.stop()
+                    } else {
+                        let a = analyzer ?? RingOutAnalyzer(kernel: kernel)
+                        analyzer = a
+                        a.start(get: { params }, set: { params = $0 })
+                    }
+                } label: {
+                    Label(running ? "Stop Ring-Out" : "Start Ring-Out",
+                          systemImage: running ? "stop.circle.fill" : "ear")
+                }
+                .tint(running ? .red : .accentColor)
+
+                if running {
+                    LabeledContent("Listening") {
+                        Text(analyzer?.candidateFrequency.map { "ringing near \(FeedbackNotch.label(for: $0))" }
+                             ?? "no ringing")
+                            .foregroundStyle(analyzer?.candidateFrequency == nil ? .secondary : Color.orange)
+                    }
+                }
+                if let action = analyzer?.lastAction {
+                    Text(action).font(.callout)
+                }
+            } else {
+                Text("Tap Done, start the engine (restart it if asked), then reopen this slot to ring out.")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Ring-Out")
+        } footer: {
+            Text("With the band quiet and the mic in its show position, start ring-out and slowly raise the channel's gain on the XR18 until it rings. Each ring gets notched; keep going until you've gained a few dB, then stop and back off a little. Put this effect first in the chain.")
+        }
+
+        Section("Detection") {
+            LabeledContent("Sensitivity: \(Int(params.sensitivity))") {
+                Slider(value: $params.sensitivity, in: 0.0...100.0)
+            }
+            LabeledContent("Max Depth: \(Int(params.maxDepth)) dB") {
+                Slider(value: $params.maxDepth, in: -18.0...(-6.0), step: 1)
+            }
+        }
+
+        Section {
+            if params.notches.isEmpty {
+                Text("No notches yet").foregroundStyle(.secondary)
+            } else {
+                ForEach(params.notches) { notch in
+                    LabeledContent(notch.label) {
+                        Text("\(Int(notch.depth)) dB").monospacedDigit()
+                    }
+                }
+                .onDelete { params.notches.remove(atOffsets: $0) }
+                Button("Clear All Notches", role: .destructive) { params.notches.removeAll() }
+            }
+        } header: {
+            Text("Notches (\(params.notches.count)/\(FeedbackNotchKernel.maxNotches))")
+        }
+        // Deleting or clearing notches takes effect immediately. Ring-out stops by itself
+        // when the sheet closes: the analyzer is released and its timer invalidates.
+        .onChange(of: params) { kernel?.applyParams(params) }
     }
 }
 
