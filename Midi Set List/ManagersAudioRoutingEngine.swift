@@ -41,6 +41,18 @@ final class AudioRoutingEngine {
             name: "LevelRider",
             version: 1
         )
+        AUAudioUnit.registerSubclass(
+            VintageCompressorAudioUnit.self,
+            as: VintageCompressorAudioUnit.optoDescription,
+            name: "Opto Comp",
+            version: 1
+        )
+        AUAudioUnit.registerSubclass(
+            VintageCompressorAudioUnit.self,
+            as: VintageCompressorAudioUnit.fetDescription,
+            name: "FET Comp",
+            version: 1
+        )
     }
 
     // MARK: - Lifecycle
@@ -166,6 +178,16 @@ final class AudioRoutingEngine {
                 audioComponentDescription: LevelRiderAudioUnit.componentDescription)
             (effect.auAudioUnit as? LevelRiderAudioUnit)?.kernel.applyParams(slot.levelRider)
             return effect
+        case .optoComp:
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: VintageCompressorAudioUnit.optoDescription)
+            (effect.auAudioUnit as? VintageCompressorAudioUnit)?.kernel.applyParams(slot.optoComp)
+            return effect
+        case .fetComp:
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: VintageCompressorAudioUnit.fetDescription)
+            (effect.auAudioUnit as? VintageCompressorAudioUnit)?.kernel.applyParams(slot.fetComp)
+            return effect
         case .pitchGuide:
             return nil  // DSP not yet implemented; slot passes signal through unaffected
         }
@@ -214,6 +236,12 @@ final class AudioRoutingEngine {
                let au = effect.auAudioUnit as? LevelRiderAudioUnit {
                 au.kernel.applyParams(slot.levelRider)
             }
+        case .optoComp:
+            ((node as? AVAudioUnitEffect)?.auAudioUnit as? VintageCompressorAudioUnit)?
+                .kernel.applyParams(slot.optoComp)
+        case .fetComp:
+            ((node as? AVAudioUnitEffect)?.auAudioUnit as? VintageCompressorAudioUnit)?
+                .kernel.applyParams(slot.fetComp)
         case .pitchGuide:
             break
         case nil:

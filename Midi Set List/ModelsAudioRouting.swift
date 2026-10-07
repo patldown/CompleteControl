@@ -5,8 +5,8 @@
 //  Pure Codable model types for the audio routing system.
 //  Stored as JSON (not CoreData) — hardware configuration, not song content.
 //
-//  Compressor and limiter are deferred: AVAudioUnitDynamicsProcessor is macOS-only;
-//  the iOS equivalents require async AU instantiation and will be added in a future version.
+//  Compressors are in-house DSP (VintageCompressorKernel): AVAudioUnitDynamicsProcessor
+//  is macOS-only.
 //
 
 import Foundation
@@ -14,7 +14,7 @@ import Foundation
 // MARK: - FX type
 
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
-    case gain, eq3Band, reverb, delay, levelRider, pitchGuide
+    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, pitchGuide
 
     var id: String { rawValue }
 
@@ -25,6 +25,8 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .reverb:     "Reverb"
         case .delay:      "Delay"
         case .levelRider: "Level Rider"
+        case .optoComp:   "Opto Comp (LA-2A style)"
+        case .fetComp:    "FET Comp (1176 style)"
         case .pitchGuide: "Pitch Guide"
         }
     }
@@ -36,6 +38,8 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .reverb:     "waveform"
         case .delay:      "repeat"
         case .levelRider: "dial.medium"
+        case .optoComp:   "lightbulb"
+        case .fetComp:    "bolt"
         case .pitchGuide: "music.note"
         }
     }
@@ -82,6 +86,37 @@ struct LevelRiderParams: Codable, Equatable {
     var boostSpeed: Float = 600     // ms, 200...2000 (how fast to boost)
     var gateThreshold: Float = -50  // dBFS, -60...-20; below this, gain freezes
     var outputTrim: Float = 0       // dB, -12...+12; applied after rider
+}
+
+// MARK: - Compressor parameters
+
+/// LA-2A style: two knobs and a Compress/Limit switch.
+struct OptoCompParams: Codable, Equatable {
+    var peakReduction: Float = 40   // 0...100; higher = more compression
+    var gain: Float = 6             // dB makeup, 0...40
+    var limitMode: Bool = false     // false = Compress (~3:1), true = Limit (~10:1)
+}
+
+/// 1176 style: Input drives into a fixed threshold, Output sets level.
+struct FETCompParams: Codable, Equatable {
+    enum Ratio: Int, Codable, CaseIterable, Identifiable {
+        case r4, r8, r12, r20, allButtons
+        var id: Int { rawValue }
+        var label: String {
+            switch self {
+            case .r4: "4"
+            case .r8: "8"
+            case .r12: "12"
+            case .r20: "20"
+            case .allButtons: "All"
+            }
+        }
+    }
+    var input: Float = 6            // dB, 0...48
+    var output: Float = 0           // dB, -24...+12
+    var ratio: Ratio = .r4
+    var attack: Float = 3           // 1 (slow, 800 µs) ... 7 (fast, 20 µs)
+    var release: Float = 5          // 1 (slow, 1.1 s) ... 7 (fast, 50 ms)
 }
 
 // MARK: - Pitch Guide parameters
@@ -150,7 +185,26 @@ struct ChannelFXSlot: Codable, Equatable {
     var reverb: ReverbParams = .init()
     var delay: DelayParams = .init()
     var levelRider: LevelRiderParams = .init()
+    var optoComp: OptoCompParams = .init()
+    var fetComp: FETCompParams = .init()
     var pitchGuide: PitchGuideParams = .init()
+
+    init() {}
+
+    // Decode missing keys as defaults so channels saved before a new effect existed still load
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try? c.decodeIfPresent(BuiltInFXType.self, forKey: .type)
+        isBypassed = try c.decodeIfPresent(Bool.self, forKey: .isBypassed) ?? false
+        gain = try c.decodeIfPresent(GainParams.self, forKey: .gain) ?? .init()
+        eq = try c.decodeIfPresent(EQ3BandParams.self, forKey: .eq) ?? .init()
+        reverb = try c.decodeIfPresent(ReverbParams.self, forKey: .reverb) ?? .init()
+        delay = try c.decodeIfPresent(DelayParams.self, forKey: .delay) ?? .init()
+        levelRider = try c.decodeIfPresent(LevelRiderParams.self, forKey: .levelRider) ?? .init()
+        optoComp = try c.decodeIfPresent(OptoCompParams.self, forKey: .optoComp) ?? .init()
+        fetComp = try c.decodeIfPresent(FETCompParams.self, forKey: .fetComp) ?? .init()
+        pitchGuide = try c.decodeIfPresent(PitchGuideParams.self, forKey: .pitchGuide) ?? .init()
+    }
 }
 
 // MARK: - Channel macro (named preset for one channel)

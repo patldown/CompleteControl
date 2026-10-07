@@ -399,6 +399,8 @@ struct FXSlotEditorSheet: View {
                     case .reverb:     ReverbEditor(params: $slot.reverb)
                     case .delay:      DelayEditor(params: $slot.delay)
                     case .levelRider: LevelRiderEditor(params: $slot.levelRider)
+                    case .optoComp:   OptoCompEditor(params: $slot.optoComp)
+                    case .fetComp:    FETCompEditor(params: $slot.fetComp)
                     case .pitchGuide: PitchGuideEditor(params: $slot.pitchGuide)
                     }
                 }
@@ -532,6 +534,57 @@ private struct LevelRiderEditor: View {
             LabeledContent("Trim: \(String(format: "%+.1f", params.outputTrim)) dB") {
                 Slider(value: $params.outputTrim, in: -12.0...12.0)
             }
+        }
+    }
+}
+
+private struct OptoCompEditor: View {
+    @Binding var params: OptoCompParams
+    var body: some View {
+        Section {
+            Picker("Mode", selection: $params.limitMode) {
+                Text("Compress").tag(false)
+                Text("Limit").tag(true)
+            }
+            .pickerStyle(.segmented)
+            LabeledContent("Peak Reduction: \(Int(params.peakReduction))") {
+                Slider(value: $params.peakReduction, in: 0.0...100.0)
+            }
+            LabeledContent("Gain: +\(Int(params.gain)) dB") {
+                Slider(value: $params.gain, in: 0.0...40.0)
+            }
+        } header: {
+            Text("Opto Compressor")
+        } footer: {
+            Text("Smooth, slow-releasing leveling. Turn up Peak Reduction for more squeeze, then Gain to make up level.")
+        }
+    }
+}
+
+private struct FETCompEditor: View {
+    @Binding var params: FETCompParams
+    var body: some View {
+        Section {
+            Picker("Ratio", selection: $params.ratio) {
+                ForEach(FETCompParams.Ratio.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            LabeledContent("Input: \(Int(params.input)) dB") {
+                Slider(value: $params.input, in: 0.0...48.0)
+            }
+            LabeledContent("Output: \(String(format: "%+.0f", params.output)) dB") {
+                Slider(value: $params.output, in: -24.0...12.0)
+            }
+            LabeledContent("Attack: \(Int(params.attack))") {
+                Slider(value: $params.attack, in: 1.0...7.0, step: 1)
+            }
+            LabeledContent("Release: \(Int(params.release))") {
+                Slider(value: $params.release, in: 1.0...7.0, step: 1)
+            }
+        } header: {
+            Text("FET Compressor")
+        } footer: {
+            Text("Fast and punchy. More Input = more compression; use Output to match level. Attack and Release: 7 is fastest. \"All\" is the aggressive all-buttons-in sound.")
         }
     }
 }
