@@ -7,7 +7,9 @@
 //  Only shown when an external audio interface is connected.
 //
 
+import AVFoundation
 import SwiftUI
+import Synchronization
 
 // MARK: - Top-level tab view
 
@@ -186,8 +188,7 @@ struct ChannelStripView: View {
         .sheet(item: $fxEditTarget) { target in
             FXSlotEditorSheet(
                 slot: channel.slots[target.slotIndex],
-                feedbackKernel: engine.feedbackNotchKernel(channelID: channelID,
-                                                           slotIndex: target.slotIndex)
+                liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: target.slotIndex)
             ) { updatedSlot in
                 let typeChanged = updatedSlot.type != channel.slots[target.slotIndex].type
                 var c = channel
@@ -420,16 +421,21 @@ struct FXSlotEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var slot: ChannelFXSlot
     private let original: ChannelFXSlot
-    /// Live kernel when this slot is a running Feedback Notch — enables ring-out
-    let feedbackKernel: FeedbackNotchKernel?
+    /// The slot's running AU (Feedback Notch ring-out, Pitch Guide live tuning and meter)
+    let liveUnit: AUAudioUnit?
     let onSave: (ChannelFXSlot) -> Void
 
-    init(slot: ChannelFXSlot, feedbackKernel: FeedbackNotchKernel? = nil,
+    init(slot: ChannelFXSlot, liveUnit: AUAudioUnit? = nil,
          onSave: @escaping (ChannelFXSlot) -> Void) {
         _slot = State(initialValue: slot)
         original = slot
-        self.feedbackKernel = feedbackKernel
+        self.liveUnit = liveUnit
         self.onSave = onSave
+    }
+
+    /// Only hand the live unit to an editor of the same type it was built for
+    private func live<T: AUAudioUnit>(_: T.Type) -> T? {
+        slot.type == original.type ? liveUnit as? T : nil
     }
 
     var body: some View {
@@ -458,8 +464,10 @@ struct FXSlotEditorSheet: View {
                     case .fetComp:    FETCompEditor(params: $slot.fetComp)
                     case .feedbackNotch:
                         FeedbackNotchEditor(params: $slot.feedbackNotch,
-                                            kernel: slot.type == original.type ? feedbackKernel : nil)
-                    case .pitchGuide: PitchGuideEditor(params: $slot.pitchGuide)
+                                            kernel: live(FeedbackNotchAudioUnit.self)?.kernel)
+                    case .pitchGuide:
+                        PitchGuideEditor(params: $slot.pitchGuide,
+                                         kernel: live(PitchGuideAudioUnit.self)?.kernel)
                     }
                 }
             }
@@ -468,8 +476,9 @@ struct FXSlotEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", role: .cancel) {
-                        // Ring-out changes the running filters live; put them back
-                        feedbackKernel?.applyParams(original.feedbackNotch)
+                        // Ring-out and pitch tweaks change the running effect live; put them back
+                        (liveUnit as? FeedbackNotchAudioUnit)?.kernel.applyParams(original.feedbackNotch)
+                        (liveUnit as? PitchGuideAudioUnit)?.kernel.applyParams(original.pitchGuide)
                         dismiss()
                     }
                 }
@@ -728,16 +737,101 @@ private struct FeedbackNotchEditor: View {
 
 private struct PitchGuideEditor: View {
     @Binding var params: PitchGuideParams
+    let kernel: PitchGuideKernel?
+
     var body: some View {
-        Section("Pitch Guide") {
-            Text("Real-time pitch correction — coming soon.")
-                .foregroundStyle(.secondary)
+        Section {
+            if let kernel {
+                TimelineView(.animation(minimumInterval: 0.05)) { _ in
+                    PitchMeter(kernel: kernel)
+                }
+            } else {
+                Text("Tap Done and start the engine (restart it if asked), then reopen this slot to see what it hears.")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Live")
+        } footer: {
+            Text("Mono: corrects the first input of the channel. Put it before reverb and delay.")
         }
-        Section("Mix") {
-            LabeledContent("Mix: \(Int(params.mix))%") {
-                Slider(value: $params.mix, in: 0.0...100.0)
+
+        Section("Key") {
+            Picker("Key", selection: $params.key) {
+                ForEach(0..<12, id: \.self) { Text(PitchGuideParams.noteNames[$0]).tag($0) }
+            }
+            Picker("Scale", selection: $params.scale) {
+                ForEach(PitchScale.allCases) { Text($0.displayName).tag($0) }
+            }
+            Picker("Voice Range", selection: $params.voiceRange) {
+                ForEach(VoiceRange.allCases) { Text($0.displayName).tag($0) }
             }
         }
+
+        Section {
+            LabeledContent("Retune Speed: \(params.retuneSpeed < 1 ? "Instant" : "\(Int(params.retuneSpeed)) ms")") {
+                Slider(value: $params.retuneSpeed, in: 0.0...400.0, step: 5)
+            }
+            LabeledContent("Amount: \(Int(params.amount))%") {
+                Slider(value: $params.amount, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Humanize: \(Int(params.humanize))%") {
+                Slider(value: $params.humanize, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Tolerance: ±\(Int(params.tolerance)) cents") {
+                Slider(value: $params.tolerance, in: 0.0...50.0, step: 1)
+            }
+        } header: {
+            Text("Correction")
+        } footer: {
+            Text("Tolerance: notes within this many cents are left alone; past it, correction kicks in. Amount: how far toward the note it pulls. Humanize: loosens the retune on long held notes.")
+        }
+
+        Section {
+            LabeledContent("Pickiness: \(Int(params.pickiness))%") {
+                Slider(value: $params.pickiness, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Gate: \(Int(params.gateThreshold)) dBFS") {
+                Slider(value: $params.gateThreshold, in: -70.0...(-20.0), step: 1)
+            }
+        } header: {
+            Text("Only Correct Real Notes")
+        } footer: {
+            Text("Higher Pickiness only corrects clear, steady sung notes. Raise the Gate until bleed from other instruments stops showing up in the Live meter.")
+        }
+        .onChange(of: params) { kernel?.applyParams(params) }
+    }
+}
+
+/// What the pitch kernel hears and what it's doing about it
+private struct PitchMeter: View {
+    let kernel: PitchGuideKernel
+
+    var body: some View {
+        let detected = Float(bitPattern: kernel.detectedMidiBits.load(ordering: .relaxed))
+        let target = Float(bitPattern: kernel.targetMidiBits.load(ordering: .relaxed))
+        let cents = Float(bitPattern: kernel.correctionBits.load(ordering: .relaxed))
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent("Hearing") {
+                Text(detected < 0 ? "—" : Self.describe(detected))
+                    .monospacedDigit()
+                    .foregroundStyle(detected < 0 ? .secondary : .primary)
+            }
+            LabeledContent("Correcting") {
+                Text(target < 0 ? "No" : "→ \(Self.noteName(Int(target)))  \(String(format: "%+.0f", cents))¢")
+                    .monospacedDigit()
+                    .foregroundStyle(target < 0 ? Color.secondary : Color.orange)
+            }
+        }
+    }
+
+    static func noteName(_ midi: Int) -> String {
+        PitchGuideParams.noteNames[((midi % 12) + 12) % 12] + "\(midi / 12 - 1)"
+    }
+
+    /// e.g. "A3 −12¢"
+    static func describe(_ midi: Float) -> String {
+        let nearest = Int(midi.rounded())
+        return "\(noteName(nearest))  \(String(format: "%+.0f", (midi - Float(nearest)) * 100))¢"
     }
 }
 

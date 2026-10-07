@@ -180,18 +180,72 @@ enum VoiceRange: String, Codable, CaseIterable, Identifiable {
         case .high: "High (180–1200 Hz)"
         }
     }
+
+    var minHz: Float {
+        switch self { case .low: 70; case .mid: 120; case .high: 180 }
+    }
+
+    var maxHz: Float {
+        switch self { case .low: 400; case .mid: 800; case .high: 1200 }
+    }
+}
+
+extension PitchScale {
+    /// Semitones above the key that belong to the scale
+    var intervals: [Int] {
+        switch self {
+        case .chromatic:       Array(0..<12)
+        case .major:           [0, 2, 4, 5, 7, 9, 11]
+        case .naturalMinor:    [0, 2, 3, 5, 7, 8, 10]
+        case .harmonicMinor:   [0, 2, 3, 5, 7, 8, 11]
+        case .melodicMinor:    [0, 2, 3, 5, 7, 9, 11]
+        case .dorian:          [0, 2, 3, 5, 7, 9, 10]
+        case .mixolydian:      [0, 2, 4, 5, 7, 9, 10]
+        case .majorPentatonic: [0, 2, 4, 7, 9]
+        case .minorPentatonic: [0, 3, 5, 7, 10]
+        case .blues:           [0, 3, 5, 6, 7, 10]
+        }
+    }
 }
 
 struct PitchGuideParams: Codable, Equatable {
     var key: Int = 0                    // 0=C … 11=B
     var scale: PitchScale = .major
-    var retuneSpeed: Float = 100        // ms, 0...400
-    var tolerance: Float = 25           // cents, 0...100
+    var retuneSpeed: Float = 50         // ms, 0...400; 0 = instant (robotic)
+    var tolerance: Float = 10           // cents, 0...50; deviations this small are left alone
+    var amount: Float = 100             // %, 0...100; how much of the error is removed
+    var humanize: Float = 0             // %, 0...100; slows retune on held notes
+    var pickiness: Float = 50           // %, 0...100; higher = only clear, steady notes
+    var gateThreshold: Float = -45      // dBFS, -70...-20; quieter input (bleed) is ignored
     var voiceRange: VoiceRange = .mid
-    var mix: Float = 100                // %, 0...100
     var songKeyDrive: Bool = false
     var songKey: Int = 0
     var songScale: PitchScale = .major
+
+    init() {}
+
+    // Decode missing keys as defaults so slots saved by the placeholder version still load
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PitchGuideParams()
+        key = try c.decodeIfPresent(Int.self, forKey: .key) ?? d.key
+        scale = (try? c.decodeIfPresent(PitchScale.self, forKey: .scale)) ?? d.scale
+        retuneSpeed = try c.decodeIfPresent(Float.self, forKey: .retuneSpeed) ?? d.retuneSpeed
+        tolerance = try min(50, c.decodeIfPresent(Float.self, forKey: .tolerance) ?? d.tolerance)
+        amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? d.amount
+        humanize = try c.decodeIfPresent(Float.self, forKey: .humanize) ?? d.humanize
+        pickiness = try c.decodeIfPresent(Float.self, forKey: .pickiness) ?? d.pickiness
+        gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
+        voiceRange = (try? c.decodeIfPresent(VoiceRange.self, forKey: .voiceRange)) ?? d.voiceRange
+        songKeyDrive = try c.decodeIfPresent(Bool.self, forKey: .songKeyDrive) ?? d.songKeyDrive
+        songKey = try c.decodeIfPresent(Int.self, forKey: .songKey) ?? d.songKey
+        songScale = (try? c.decodeIfPresent(PitchScale.self, forKey: .songScale)) ?? d.songScale
+    }
+
+    /// 12-bit mask of the pitch classes in key + scale (bit 0 = C)
+    var allowedPitchClassMask: UInt32 {
+        scale.intervals.reduce(0) { $0 | (1 << UInt32((key + $1) % 12)) }
+    }
 }
 
 extension PitchGuideParams {
