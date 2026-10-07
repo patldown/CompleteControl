@@ -6,8 +6,11 @@
 //  Graph topology per channel:
 //    inputNode[bus N] → inputMixer → [FX1] → [FX2] → [FX3] → [FX4] → outputBusMixer → outputNode[bus M]
 //
-//  All built-in FX nodes are in-process: parameter updates are live without engine restart.
-//  LevelRider is also in-process via a registered AUAudioUnit subclass loaded with .loadInProcess.
+//  All built-in FX nodes (including LevelRider) are in-process. Custom AUAudioUnit
+//  subclasses are found synchronously via AVAudioUnitEffect(audioComponentDescription:),
+//  which calls AudioComponentFindNext and picks up classes registered with
+//  AUAudioUnit.registerSubclass — no async instantiation or App Extension required.
+//
 //  Only changing an FX *type* in a slot requires a restart (different node class needed).
 //
 //  Note: starting this engine sets AVAudioSession to .playAndRecord. The Metronome uses
@@ -56,7 +59,7 @@ final class AudioRoutingEngine {
                 channels: 2
             ), stereo.sampleRate > 0 else { throw RoutingError.noOutput }
 
-            try await buildGraph(in: eng, format: stereo)
+            try buildGraph(in: eng, format: stereo)
             eng.prepare()
             try eng.start()
             engine = eng
@@ -77,7 +80,7 @@ final class AudioRoutingEngine {
 
     // MARK: - Graph construction
 
-    private func buildGraph(in eng: AVAudioEngine, format: AVAudioFormat) async throws {
+    private func buildGraph(in eng: AVAudioEngine, format: AVAudioFormat) throws {
         // One output-bus mixer per hardware output pair — multiple channels targeting
         // the same output pair share a mixer rather than fighting over the connection.
         var outputMixers: [Int: AVAudioMixerNode] = [:]
@@ -105,7 +108,7 @@ final class AudioRoutingEngine {
             var fxNodes: [AVAudioNode?] = []
             var tail: AVAudioNode = inputMixer
             for slot in channel.slots {
-                if let node = await makeNode(for: slot) {
+                if let node = makeNode(for: slot) {
                     eng.attach(node)
                     eng.connect(tail, to: node, format: format)
                     tail = node
@@ -135,7 +138,7 @@ final class AudioRoutingEngine {
 
     // MARK: - Node factory
 
-    private func makeNode(for slot: ChannelFXSlot) async -> AVAudioNode? {
+    private func makeNode(for slot: ChannelFXSlot) -> AVAudioNode? {
         guard let type = slot.type, !slot.isBypassed else { return nil }
         switch type {
         case .gain:
@@ -156,28 +159,15 @@ final class AudioRoutingEngine {
             applyDelay(slot.delay, to: dl)
             return dl
         case .levelRider:
-            let params = slot.levelRider
-            return try? await instantiateInProcess(LevelRiderAudioUnit.componentDescription) { unit in
-                (unit.auAudioUnit as? LevelRiderAudioUnit)?.kernel.applyParams(params)
-            }
+            // AVAudioUnitEffect(audioComponentDescription:) calls AudioComponentFindNext,
+            // which finds subclasses registered via AUAudioUnit.registerSubclass — sync,
+            // in-process, no App Extension or XPC required.
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: LevelRiderAudioUnit.componentDescription)
+            (effect.auAudioUnit as? LevelRiderAudioUnit)?.kernel.applyParams(slot.levelRider)
+            return effect
         case .pitchGuide:
             return nil  // DSP not yet implemented; slot passes signal through unaffected
-        }
-    }
-
-    private func instantiateInProcess(
-        _ desc: AudioComponentDescription,
-        configure: @escaping (AVAudioUnit) -> Void
-    ) async throws -> AVAudioUnit {
-        try await withCheckedThrowingContinuation { continuation in
-            AVAudioUnit.instantiate(with: desc, options: []) { unit, error in
-                if let unit {
-                    configure(unit)
-                    continuation.resume(returning: unit)
-                } else {
-                    continuation.resume(throwing: error ?? RoutingError.instantiationFailed)
-                }
-            }
         }
     }
 
@@ -220,8 +210,8 @@ final class AudioRoutingEngine {
         case .delay:
             if let dl = node as? AVAudioUnitDelay { applyDelay(slot.delay, to: dl) }
         case .levelRider:
-            if let unit = node as? AVAudioUnit,
-               let au = unit.auAudioUnit as? LevelRiderAudioUnit {
+            if let effect = node as? AVAudioUnitEffect,
+               let au = effect.auAudioUnit as? LevelRiderAudioUnit {
                 au.kernel.applyParams(slot.levelRider)
             }
         case .pitchGuide:
@@ -266,11 +256,5 @@ private struct ChannelGraph {
 
 enum RoutingError: LocalizedError {
     case noOutput
-    case instantiationFailed
-    var errorDescription: String? {
-        switch self {
-        case .noOutput:            "No audio output available."
-        case .instantiationFailed: "Failed to instantiate audio effect."
-        }
-    }
+    var errorDescription: String? { "No audio output available." }
 }
