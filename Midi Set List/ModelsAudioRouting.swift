@@ -274,12 +274,12 @@ struct PitchGuideParams: Codable, Equatable {
         formantShift = try c.decodeIfPresent(Float.self, forKey: .formantShift) ?? d.formantShift
     }
 
-    /// These params with key and scale taken from the song, when following it and it has a key.
-    /// The song key is what the audience hears, so the singer's key is that minus the transpose.
+    /// These params with the correction's key and scale taken from the song, when following
+    /// it and it has a key. Only the correction follows the song; Transpose is untouched.
     func resolved(songKey: MusicalKey?) -> PitchGuideParams {
         guard songKeyDrive, let songKey, let pc = songKey.pitchClass else { return self }
         var p = self
-        p.key = ((pc - transpose) % 12 + 12) % 12
+        p.key = ((pc % 12) + 12) % 12
         p.scale = PitchScale(songKey.scale)
         return p
     }
