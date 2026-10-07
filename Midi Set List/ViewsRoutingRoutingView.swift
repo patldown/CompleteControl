@@ -121,6 +121,11 @@ struct RoutingView: View {
             }
         }
         ToolbarItem(placement: .secondaryAction) {
+            ShareLink(item: AppOSC.referenceMarkdown(channels: store.channels)) {
+                Label("Share OSC Reference", systemImage: "doc.text")
+            }
+        }
+        ToolbarItem(placement: .secondaryAction) {
             Button {
                 Task {
                     if engine.isRunning { engine.stop() } else { await engine.start() }

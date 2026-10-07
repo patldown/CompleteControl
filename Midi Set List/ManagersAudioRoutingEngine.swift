@@ -267,8 +267,20 @@ final class AudioRoutingEngine {
         guard let graph = graphs[channelID] else { return }
         graph.inputMixer.volume = macro.isMuted ? 0 : macro.volume
         for (i, slot) in macro.slots.enumerated() where i < graph.fxNodes.count {
-            applySlotParams(slot, to: graph.fxNodes[i])
+            applySlot(slot, channelID: channelID, slotIndex: i)
         }
+    }
+
+    /// Applies one slot's settings to the running graph (OSC control, live edits). Bypass
+    /// flips the node's bypass; a slot built while bypassed has no node, so un-bypassing
+    /// it asks for a restart.
+    func applySlot(_ slot: ChannelFXSlot, channelID: UUID, slotIndex: Int) {
+        guard let graph = graphs[channelID], graph.fxNodes.indices.contains(slotIndex) else { return }
+        guard let node = graph.fxNodes[slotIndex] else {
+            if slot.type != nil && !slot.isBypassed { needsRestart = true }
+            return
+        }
+        applySlotParams(slot, to: node)
     }
 
     /// The running in-house AU in a channel's slot, for live editing, ring-out and meters.
@@ -298,13 +310,17 @@ final class AudioRoutingEngine {
 
     private func applySlotParams(_ slot: ChannelFXSlot, to node: AVAudioNode?) {
         guard let node else { return }
+        (node as? AVAudioUnitEffect)?.bypass = slot.isBypassed
         switch slot.type {
         case .gain:
-            if let m = node as? AVAudioMixerNode { m.volume = slot.gain.volume; m.pan = slot.gain.pan }
+            if let m = node as? AVAudioMixerNode {
+                m.volume = slot.isBypassed ? 1 : slot.gain.volume
+                m.pan = slot.isBypassed ? 0 : slot.gain.pan
+            }
         case .eq3Band:
             if let eq = node as? AVAudioUnitEQ { applyEQ(slot.eq, to: eq) }
         case .reverb:
-            if let rv = node as? AVAudioUnitReverb { rv.wetDryMix = slot.reverb.wetDryMix }
+            if let rv = node as? AVAudioUnitReverb { applyReverb(slot.reverb, to: rv) }
         case .delay:
             if let dl = node as? AVAudioUnitDelay { applyDelay(slot.delay, to: dl) }
         case .levelRider:

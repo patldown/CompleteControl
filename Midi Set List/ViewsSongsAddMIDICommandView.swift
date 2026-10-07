@@ -112,6 +112,7 @@ struct AddMIDICommandView: View {
                             .keyboardType(.URL)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
+                        AppEffectPickerButton(address: $oscAddress, value: $oscFloatArg)
                         HStack {
                             Text("Float Value")
                                 .foregroundStyle(oscFormula.trimmingCharacters(in: .whitespaces).isEmpty ? .primary : .tertiary)
@@ -315,6 +316,7 @@ struct EditMIDICommandView: View {
                             .keyboardType(.URL)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
+                        AppEffectPickerButton(address: $oscAddress, value: $oscFloatArg)
                         HStack {
                             Text("Float Value")
                                 .foregroundStyle(oscFormula.trimmingCharacters(in: .whitespaces).isEmpty ? .primary : .tertiary)
