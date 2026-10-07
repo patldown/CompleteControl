@@ -64,6 +64,8 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     let targetMidiBits     = Atomic<UInt32>(Float(-1).bitPattern)
     /// Correction being applied right now, in cents
     let correctionBits     = Atomic<UInt32>(Float(0).bitPattern)
+    /// Input level of the latest analysis window, dBFS RMS (Learn Voice reads this)
+    let inputLevelBits     = Atomic<UInt32>(Float(-120).bitPattern)
     /// Whether the singer counts as singing right now (opens the shift and the duck)
     let singingFlag        = Atomic<Bool>(false)
     /// Effect latency right now, in ms (depends on the singer's pitch and the mode)
@@ -365,6 +367,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         vDSP_sve(squares, 1, &e0, vDSP_Length(window))
 
         let levelDB = 10 * log10(max(e0 / Float(window), 1e-12))
+        inputLevelBits.store(levelDB.bitPattern, ordering: .relaxed)
         let gateDB = Float(bitPattern: gateDBBits.load(ordering: .relaxed))
         let pickiness = Float(bitPattern: pickinessBits.load(ordering: .relaxed))
         let threshold = 0.25 - 0.15 * pickiness            // lenient 0.25 … strict 0.10

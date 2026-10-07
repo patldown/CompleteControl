@@ -464,7 +464,9 @@ struct FXSlotEditorSheet: View {
                     case .eq3Band:    EQ3BandEditor(params: $slot.eq)
                     case .reverb:     ReverbEditor(params: $slot.reverb)
                     case .delay:      DelayEditor(params: $slot.delay)
-                    case .levelRider: LevelRiderEditor(params: $slot.levelRider)
+                    case .levelRider:
+                        LevelRiderEditor(params: $slot.levelRider,
+                                         kernel: live(LevelRiderAudioUnit.self)?.kernel)
                     case .optoComp:   OptoCompEditor(params: $slot.optoComp)
                     case .fetComp:    FETCompEditor(params: $slot.fetComp)
                     case .feedbackNotch:
@@ -581,7 +583,25 @@ private struct DelayEditor: View {
 
 private struct LevelRiderEditor: View {
     @Binding var params: LevelRiderParams
+    let kernel: LevelRiderKernel?
+
     var body: some View {
+        if let kernel {
+            LearnVoiceSection(
+                readLevel: { Float(bitPattern: kernel.levelDBBits.load(ordering: .relaxed)) },
+                describe: { levels in
+                    let s = Self.settings(for: levels)
+                    return "Apply sets Target \(Int(s.target)) dBFS, Max Boost +\(Int(s.maxBoost)) dB, Max Cut \(Int(s.maxCut)) dB and Gate \(Int(s.gate)) dBFS. Tap Done to keep them."
+                },
+                apply: { levels in
+                    let s = Self.settings(for: levels)
+                    params.targetLevel = s.target
+                    params.maxBoost = s.maxBoost
+                    params.maxCut = s.maxCut
+                    params.gateThreshold = s.gate
+                }
+            )
+        }
         Section("Input") {
             LabeledContent("Trim: \(String(format: "%+.1f", params.inputTrim)) dB") {
                 Slider(value: $params.inputTrim, in: -12.0...12.0)
@@ -614,6 +634,17 @@ private struct LevelRiderEditor: View {
                 Slider(value: $params.outputTrim, in: -12.0...12.0)
             }
         }
+    }
+}
+
+extension LevelRiderEditor {
+    /// Aim between the softest and loudest lines; allow just enough boost and cut to reach them
+    static func settings(for levels: VoiceLevels) -> (target: Float, maxBoost: Float, maxCut: Float, gate: Float) {
+        let target = min(-6, max(-30, ((levels.softest + levels.loudest) / 2).rounded()))
+        return (target,
+                min(9, max(0, (target - levels.softest).rounded())),
+                min(0, max(-18, (target - levels.loudest).rounded())),
+                min(-20, max(-60, levels.gate.rounded())))
     }
 }
 
@@ -759,6 +790,19 @@ private struct PitchGuideEditor: View {
             Text("Live")
         } footer: {
             Text("Mono: corrects the first input of the channel. Put it before reverb and delay.")
+        }
+
+        if let kernel {
+            LearnVoiceSection(
+                readLevel: { Float(bitPattern: kernel.inputLevelBits.load(ordering: .relaxed)) },
+                describe: { levels in
+                    "Apply sets Gate to \(Int(min(-20, max(-70, levels.gate.rounded())))) dBFS and Bleed Duck to \(Int(levels.bleedDuck)) dB."
+                },
+                apply: { levels in
+                    params.gateThreshold = min(-20, max(-70, levels.gate.rounded()))
+                    params.bleedDuck = levels.bleedDuck
+                }
+            )
         }
 
         Section {

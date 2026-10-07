@@ -35,6 +35,7 @@ nonisolated final class LevelRiderKernel: @unchecked Sendable {
     let outputPeakBits    = Atomic<UInt32>(Float(0).bitPattern)     // linear 0..1
     let gainReductionBits = Atomic<UInt32>(Float(0).bitPattern)     // dB (current fader)
     let clipLatch         = Atomic<Bool>(false)                      // input ≥ -0.5 dBFS
+    let levelDBBits       = Atomic<UInt32>(Float(-100).bitPattern)  // dBFS RMS after input trim (Learn Voice)
 
     // MARK: - Audio thread state (render thread only)
     private var sampleRate: Double = 48_000
@@ -119,6 +120,7 @@ nonisolated final class LevelRiderKernel: @unchecked Sendable {
         // Compute desired gain from measured level
         let rms = sqrt(max(0, envelope))
         let measuredDB = rms > 1.0e-10 ? 20.0 * log10(rms) : -100.0
+        levelDBBits.store(Float(measuredDB).bitPattern, ordering: .relaxed)
 
         if measuredDB < gateThreshDB {
             gainDB *= 0.9999   // gate: drift slowly toward 0 dB, don't boost noise
