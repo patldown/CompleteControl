@@ -830,10 +830,14 @@ private struct PitchGuideEditor: View {
             LabeledContent("Gate: \(Int(params.gateThreshold)) dBFS") {
                 Slider(value: $params.gateThreshold, in: -70.0...(-20.0), step: 1)
             }
+            Toggle("Shift Only While Singing", isOn: $params.shiftOnlyWhileSinging)
+            LabeledContent("Bleed Duck: \(params.bleedDuck == 0 ? "Off" : "\(Int(params.bleedDuck)) dB")") {
+                Slider(value: $params.bleedDuck, in: -20.0...0.0, step: 1)
+            }
         } header: {
-            Text("Only Correct Real Notes")
+            Text("Bleed")
         } footer: {
-            Text("Higher Pickiness only corrects clear, steady sung notes. Raise the Gate until bleed from other instruments stops showing up in the Live meter.")
+            Text("Higher Pickiness only corrects clear, steady sung notes. Raise the Gate until bleed stops showing up in the Live meter. Between phrases (after a 0.3 s hold), Shift Only While Singing lets bleed through without Transpose or Formant, and Bleed Duck turns the mic down. Bleed under the singing itself can't be separated.")
         }
         .onChange(of: params) {
             kernel?.applyParams(params.resolved(songKey: AudioRoutingEngine.shared.songKey))
@@ -876,6 +880,11 @@ private struct PitchMeter: View {
                 Text(detected < 0 ? "—" : Self.describe(detected))
                     .monospacedDigit()
                     .foregroundStyle(detected < 0 ? .secondary : .primary)
+            }
+            LabeledContent("Singing") {
+                let singing = kernel.singingFlag.load(ordering: .relaxed)
+                Text(singing ? "Yes" : "No")
+                    .foregroundStyle(singing ? Color.green : Color.secondary)
             }
             LabeledContent("Latency") {
                 Text(String(format: "%.1f ms", Float(bitPattern: kernel.latencyMsBits.load(ordering: .relaxed))))

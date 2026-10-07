@@ -19,6 +19,10 @@
 //  tuning + transposing costs no extra latency. The Formant knob moves the voice's
 //  resonances up (smaller/brighter) or down (bigger/darker) on top of that.
 //
+//  Bleed — "singing" means a voiced, in-range note above the gate within the last 300 ms.
+//  With Only While Singing, Transpose and the Formant knob glide off between phrases so
+//  bleed in the gaps passes unshifted; Bleed Duck turns the gaps down by a set amount.
+//
 //  Shifting, two modes:
 //    • Preserve Formants (PSOLA) — one-period-wide grains cut from the input every
 //      period and laid back down every period ÷ ratio. Each grain keeps its own waveform,
@@ -50,6 +54,8 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     private let formantsBits   = Atomic<Bool>(true)                  // automatic formant preservation
     private let transposeBits  = Atomic<UInt32>(Float(0).bitPattern)  // semitones
     private let formantBits    = Atomic<UInt32>(Float(0).bitPattern)  // semitones, manual offset
+    private let onlySingingBits = Atomic<Bool>(true)
+    private let duckDBBits     = Atomic<UInt32>(Float(0).bitPattern)  // ≤ 0; 0 = off
 
     // MARK: - Meters (audio thread → main thread)
     /// Detected input note as fractional MIDI number; < 0 when nothing is being tracked
@@ -58,6 +64,8 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     let targetMidiBits     = Atomic<UInt32>(Float(-1).bitPattern)
     /// Correction being applied right now, in cents
     let correctionBits     = Atomic<UInt32>(Float(0).bitPattern)
+    /// Whether the singer counts as singing right now (opens the shift and the duck)
+    let singingFlag        = Atomic<Bool>(false)
     /// Effect latency right now, in ms (depends on the singer's pitch and the mode)
     let latencyMsBits      = Atomic<UInt32>(Float(0).bitPattern)
 
@@ -102,6 +110,11 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     private var grainLatency: Double = 0    // samples, of the last grain laid down
     private var formantFactor: Double = 1   // input samples read per output sample within a grain
 
+    // Bleed handling
+    private var lastVoicedIndex = Int.min / 2
+    private var shiftEnv: Double = 0        // 0 = Transpose/Formant off, 1 = fully on
+    private var duckGain: Double = 1
+
     init() {
         ring.initialize(repeating: 0, count: Self.ringSize)
         frame.initialize(repeating: 0, count: Self.maxLag * 2 + 4)
@@ -141,6 +154,8 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         formantsBits.store(p.preserveFormants, ordering: .relaxed)
         transposeBits.store(Float(p.transpose).bitPattern, ordering: .relaxed)
         formantBits.store(p.formantShift.bitPattern, ordering: .relaxed)
+        onlySingingBits.store(p.shiftOnlyWhileSinging, ordering: .relaxed)
+        duckDBBits.store(min(0, p.bleedDuck).bitPattern, ordering: .relaxed)
     }
 
     // MARK: - Render (audio thread only — no allocations, no runtime)
@@ -154,10 +169,17 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         let autoFormants = formantsBits.load(ordering: .relaxed)
         let formantSemis = Double(Float(bitPattern: formantBits.load(ordering: .relaxed)))
         let transposeCents = Double(Float(bitPattern: transposeBits.load(ordering: .relaxed))) * 100
-        let manualFormant = exp2(max(-12, min(12, formantSemis)) / 12)
+        let clampedFormant = max(-12, min(12, formantSemis))
         // Grains are needed whenever formants are controlled; plain auto-off with no offset
         // uses the lower-latency taps (formants then follow the pitch, like tape)
         let formants = autoFormants || abs(formantSemis) > 0.01
+        let onlyWhileSinging = onlySingingBits.load(ordering: .relaxed)
+        let duckFloor = pow(10, Double(Float(bitPattern: duckDBBits.load(ordering: .relaxed))) / 20)
+        let holdSamples = Int(sampleRate * 0.3)
+        // Open fast so a phrase's first syllable isn't missed; close gently after the hold
+        let openCoeff = 1 - exp(-1 / (sampleRate * 0.005))
+        let shiftCloseCoeff = 1 - exp(-1 / (sampleRate * 0.06))
+        let duckCloseCoeff = 1 - exp(-1 / (sampleRate * 0.15))
         if formants != formantMode {
             // Switching modes: start the new shifter clean (a brief glitch is expected)
             formantMode = formants
@@ -175,13 +197,21 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
                 analyze()
             }
 
+            // Bleed handling: is the singer singing (or within the hold after a phrase)?
+            let singing = writeIndex - lastVoicedIndex < holdSamples
+            let shiftTarget: Double = onlyWhileSinging ? (singing ? 1 : 0) : 1
+            shiftEnv += (shiftTarget > shiftEnv ? openCoeff : shiftCloseCoeff) * (shiftTarget - shiftEnv)
+            let duckTarget = singing ? 1 : duckFloor
+            duckGain += (duckTarget > duckGain ? openCoeff : duckCloseCoeff) * (duckTarget - duckGain)
+
             // Glide toward the desired correction (Retune Speed)
             correction += smoothCoeff * (desiredCents - correction)
             if (i & 15) == 0 {
-                ratio = exp2((Double(correction) + transposeCents) / 1200)
+                ratio = exp2((Double(correction) + transposeCents * shiftEnv) / 1200)
                 // Auto on: formants stay put, then the knob moves them. Auto off: they follow
                 // the pitch shift, then the knob moves them from there.
-                formantFactor = (autoFormants ? 1 : ratio) * manualFormant
+                let knob = exp2(clampedFormant * shiftEnv / 12)
+                formantFactor = (autoFormants ? 1 : ratio) * knob
             }
 
             if formantMode {
@@ -192,12 +222,12 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
                 var y = ola[idx] / max(olaWin[idx], 0.25)
                 ola[idx] = 0; olaWin[idx] = 0
                 if y.isNaN || y.isInfinite { y = 0 }
-                io[i] = y
+                io[i] = y * Float(duckGain)
                 continue
             }
 
             var r = ratio
-            if desiredCents == 0 && abs(correction) < 0.1 && transposeCents == 0 {
+            if desiredCents == 0 && abs(correction) < 0.1 && abs(transposeCents * shiftEnv) < 0.1 {
                 // Idle: drift (≤ ~2 cents, inaudible) until one tap sits mid-span at full gain
                 let leadIsA = gain(dA, wA) >= gain(dB, wB)
                 let d = leadIsA ? dA : dB, w = leadIsA ? wA : wB
@@ -213,7 +243,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
 
             let gA = gain(dA, wA), gB = gain(dB, wB)
             let norm = 1 / max(1e-6, gA + gB)
-            var y = Float((gA * read(dA) + gB * read(dB)) * norm)
+            var y = Float((gA * read(dA) + gB * read(dB)) * norm * duckGain)
             if y.isNaN || y.isInfinite { y = 0 }
             io[i] = y
         }
@@ -225,6 +255,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         }
 
         correctionBits.store(correction.bitPattern, ordering: .relaxed)
+        singingFlag.store(writeIndex - lastVoicedIndex < holdSamples, ordering: .relaxed)
         let latencySamples = formantMode ? grainLatency : period
         latencyMsBits.store(Float(latencySamples / sampleRate * 1000).bitPattern, ordering: .relaxed)
     }
@@ -364,6 +395,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         }
 
         guard foundTau > 0 else { release(); return }
+        lastVoicedIndex = writeIndex   // in range, above the gate and clearly pitched
 
         // Parabolic interpolation for sub-sample period
         let a = cmnd[foundTau - 1], b = cmnd[foundTau], c = cmnd[foundTau + 1]

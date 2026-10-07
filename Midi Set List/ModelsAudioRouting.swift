@@ -252,6 +252,10 @@ struct PitchGuideParams: Codable, Equatable {
     /// Moves the voice's resonances: + smaller/brighter, − bigger/darker. On top of the
     /// automatic preservation, or on top of the pitch shift when that's off.
     var formantShift: Float = 0         // semitones, -6...6
+    /// Transpose and Formant switch off between phrases, so bleed in the gaps isn't shifted
+    var shiftOnlyWhileSinging: Bool = true
+    /// How far to turn the mic down between phrases; 0 = off
+    var bleedDuck: Float = 0            // dB, -20...0
 
     init() {}
 
@@ -272,6 +276,8 @@ struct PitchGuideParams: Codable, Equatable {
         preserveFormants = try c.decodeIfPresent(Bool.self, forKey: .preserveFormants) ?? d.preserveFormants
         transpose = try c.decodeIfPresent(Int.self, forKey: .transpose) ?? d.transpose
         formantShift = try c.decodeIfPresent(Float.self, forKey: .formantShift) ?? d.formantShift
+        shiftOnlyWhileSinging = try c.decodeIfPresent(Bool.self, forKey: .shiftOnlyWhileSinging) ?? d.shiftOnlyWhileSinging
+        bleedDuck = try c.decodeIfPresent(Float.self, forKey: .bleedDuck) ?? d.bleedDuck
     }
 
     /// These params with the correction's key and scale taken from the song, when following
