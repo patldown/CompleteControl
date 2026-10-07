@@ -8,6 +8,7 @@
 //  engine immediately (values jump; no glide).
 //
 
+import CoreData
 import Foundation
 
 enum AppOSCRouter {
@@ -110,4 +111,44 @@ enum AppOSCRouter {
     }
 
     private static func format(_ v: Double) -> String { String(format: "%g", v) }
+}
+
+// MARK: - Channel renames
+
+extension AppOSCRouter {
+    /// A channel was renamed: rewrite /app/<old>/… in every device macro and song command to
+    /// /app/<new>/…, so name-based macros keep working. Position-based (ch1…) addresses are
+    /// left alone. Returns how many addresses changed.
+    @discardableResult
+    static func retargetChannel(from oldName: String, to newSegment: String,
+                                in context: NSManagedObjectContext) -> Int {
+        let old = AppOSC.normalize(oldName)
+        guard !old.isEmpty, old != AppOSC.normalize(newSegment) else { return 0 }
+
+        func rewritten(_ address: String?) -> String? {
+            guard let address, AppOSC.isAppAddress(address) else { return nil }
+            let rest = address.dropFirst(AppOSC.prefix.count)
+            guard let slash = rest.firstIndex(of: "/"),
+                  AppOSC.normalize(String(rest[..<slash])) == old else { return nil }
+            return AppOSC.prefix + newSegment + rest[slash...]
+        }
+
+        let predicate = NSPredicate(format: "oscAddress BEGINSWITH %@", AppOSC.prefix)
+        var changed = 0
+
+        let macros = NSFetchRequest<DeviceMacro>(entityName: "DeviceMacro")
+        macros.predicate = predicate
+        for macro in (try? context.fetch(macros)) ?? [] {
+            if let new = rewritten(macro.oscAddress) { macro.oscAddress = new; changed += 1 }
+        }
+
+        let commands = NSFetchRequest<MIDICommand>(entityName: "MIDICommand")
+        commands.predicate = predicate
+        for command in (try? context.fetch(commands)) ?? [] {
+            if let new = rewritten(command.oscAddress) { command.oscAddress = new; changed += 1 }
+        }
+
+        if changed > 0 { try? context.save() }
+        return changed
+    }
 }

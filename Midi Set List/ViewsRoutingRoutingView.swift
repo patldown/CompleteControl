@@ -8,6 +8,7 @@
 //
 
 import AVFoundation
+import CoreData
 import SwiftUI
 import Synchronization
 
@@ -161,6 +162,10 @@ private struct FXEditTarget: Identifiable {
 
 struct ChannelStripView: View {
     let channelID: UUID
+    @Environment(\.managedObjectContext) private var viewContext
+    @FocusState private var nameFocused: Bool
+    @State private var nameBeforeEdit: String?
+    @State private var renamedMacroCount = 0
     @State private var fxEditTarget: FXEditTarget?
     @State private var showingMacroSave = false
     @State private var newMacroName = ""
@@ -230,6 +235,11 @@ struct ChannelStripView: View {
                     set: { var c = channel; c.name = $0; commit(c) }
                 ))
                 .font(.headline).textFieldStyle(.plain)
+                .focused($nameFocused)
+                .onSubmit { nameFocused = false }
+                .onChange(of: nameFocused) { _, focused in
+                    if focused { nameBeforeEdit = channel.name } else { finishRename() }
+                }
 
                 Button(role: .destructive) {
                     store.remove(channel)
@@ -241,6 +251,15 @@ struct ChannelStripView: View {
 
             Text(store.inputPort(for: channel)?.displayName ?? "Input \(channel.inputIndex + 1)")
                 .font(.caption).foregroundStyle(.secondary)
+
+            if renamedMacroCount > 0 {
+                Text("Updated \(renamedMacroCount) OSC address\(renamedMacroCount == 1 ? "" : "es")")
+                    .font(.caption2).foregroundStyle(.green)
+                    .task {
+                        try? await Task.sleep(for: .seconds(3))
+                        renamedMacroCount = 0
+                    }
+            }
 
             let nextExists = store.availableInputs.contains {
                 $0.monoIndex == channel.inputIndex + 1
@@ -361,6 +380,15 @@ struct ChannelStripView: View {
             }
         }
         .padding(10)
+    }
+
+    /// Name editing ended: point /app/ macros and song commands at the new name
+    private func finishRename() {
+        defer { nameBeforeEdit = nil }
+        guard let old = nameBeforeEdit, old != channel.name,
+              let index = store.channels.firstIndex(where: { $0.id == channelID }) else { return }
+        let newSegment = AppOSC.channelSegment(channel, index: index)
+        renamedMacroCount = AppOSCRouter.retargetChannel(from: old, to: newSegment, in: viewContext)
     }
 
     private func saveMacro() {

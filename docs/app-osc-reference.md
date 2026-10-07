@@ -35,8 +35,11 @@ messages, so any macro, song command or AI assistant can change any effect setti
   all reach `Lead Vox`.
 - Or its **position**: `ch1` is the first strip, `ch2` the second, and so on.
   Unnamed channels can only be reached this way.
-- Renaming a channel changes its name-based address; position-based addresses change
-  if strips are added or removed in front of it.
+- **Renaming a channel updates macros automatically**: when you finish editing the name
+  on its strip, every device macro and song command addressed `/app/<old name>/…` is
+  rewritten to `/app/<new name>/…` (the strip briefly shows how many were updated).
+  Position-based addresses (`ch1`…) are not rewritten, and they change if strips are
+  added or removed in front of the channel — prefer names.
 
 ### `<fx>` — which effect on that channel
 
