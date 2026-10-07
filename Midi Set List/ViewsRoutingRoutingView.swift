@@ -30,6 +30,7 @@ struct RoutingView: View {
             .navigationTitle("Routing")
             .toolbar { toolbar }
             .sheet(isPresented: $showingAddChannel) { AddChannelSheet() }
+            .task { store.enableInputEnumeration() }
             .safeAreaInset(edge: .top) {
                 if engine.needsRestart && engine.isRunning { restartBanner }
             }
@@ -652,6 +653,7 @@ struct AddChannelSheet: View {
             }
             .navigationTitle("Add Channel")
             .navigationBarTitleDisplayMode(.inline)
+            .task { store.enableInputEnumeration() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", role: .cancel) { dismiss() }

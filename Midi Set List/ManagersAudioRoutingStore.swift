@@ -9,6 +9,7 @@
 import AVFoundation
 import Foundation
 import Observation
+import UIKit
 
 // MARK: - Hardware input descriptor
 
@@ -50,6 +51,14 @@ final class AudioRoutingStore {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refreshHardwareInfo() }
         }
+        // Route changes made while the app was in the background aren't delivered,
+        // so re-check when returning to the foreground (e.g. XR18 plugged in meanwhile).
+        for name in [UIApplication.didBecomeActiveNotification,
+                     AVAudioSession.mediaServicesWereResetNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.refreshHardwareInfo() }
+            }
+        }
     }
 
     // MARK: - Persistence
@@ -88,16 +97,23 @@ final class AudioRoutingStore {
 
     func refreshHardwareInfo() {
         let session = AVAudioSession.sharedInstance()
-        // Use availableInputs (not currentRoute.inputs) so detection works regardless of
-        // the active session category — currentRoute.inputs is empty in .playback mode.
-        let externalTypes: Set<AVAudioSession.Port> = [.usbAudio, .lineIn, .thunderbolt]
-        isExternalInterfaceConnected = session.availableInputs?
-            .contains { externalTypes.contains($0.portType) } ?? false
+        // Inputs are only listed when the session category supports recording; at launch
+        // the category is .soloAmbient and the metronome uses .playback, so availableInputs
+        // is empty. The output side of the route is reported in every category, and a USB
+        // interface like the XR18 shows up there too, so check both.
+        let externalTypes: Set<AVAudioSession.Port> = [.usbAudio, .lineIn, .lineOut, .thunderbolt]
+        let route = session.currentRoute
+        let routePorts = route.outputs + route.inputs + (session.availableInputs ?? [])
+        isExternalInterfaceConnected = routePorts.contains { externalTypes.contains($0.portType) }
 
         let outChannels = session.maximumOutputNumberOfChannels
         availableOutputBusPairCount = outChannels > 0 ? max(1, outChannels / 2) : 1
 
-        guard let inputs = session.availableInputs else { availableInputs = []; return }
+        guard isExternalInterfaceConnected else { availableInputs = []; return }
+        // Keep the last known input list while the category hides inputs (e.g. metronome
+        // switched to .playback), so existing channel strips keep their input names.
+        guard categorySupportsInput(session.category), let inputs = session.availableInputs
+        else { return }
         var ports: [AudioInputPort] = []
         var mono = 0
         for input in inputs {
@@ -114,6 +130,22 @@ final class AudioRoutingStore {
             }
         }
         availableInputs = ports
+    }
+
+    /// Switches the session to .playAndRecord so the interface's inputs can be listed.
+    /// Skipped while the metronome is clicking so its output isn't interrupted.
+    func enableInputEnumeration() {
+        let session = AVAudioSession.sharedInstance()
+        if !categorySupportsInput(session.category) && !Metronome.shared.isRunning {
+            try? session.setCategory(.playAndRecord, mode: .default,
+                                     options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
+            try? session.setActive(true)
+        }
+        refreshHardwareInfo()
+    }
+
+    private func categorySupportsInput(_ category: AVAudioSession.Category) -> Bool {
+        category == .playAndRecord || category == .record || category == .multiRoute
     }
 
     // MARK: - Helpers
