@@ -30,6 +30,29 @@ final class AudioRoutingEngine {
     /// Set true when a slot's FX type changed — a restart applies the new graph.
     var needsRestart = false
 
+    // MARK: Buffer size / latency
+
+    static let bufferSizeOptions = [64, 128, 256, 512]
+    private static let bufferFramesKey = "routingBufferFrames"
+
+    /// Requested I/O buffer in samples. Smaller = less latency but more risk of crackles.
+    /// Device-specific, so it lives in UserDefaults rather than synced preferences.
+    var bufferFrames: Int = {
+        let saved = UserDefaults.standard.integer(forKey: AudioRoutingEngine.bufferFramesKey)
+        return AudioRoutingEngine.bufferSizeOptions.contains(saved) ? saved : 128
+    }() {
+        didSet {
+            UserDefaults.standard.set(bufferFrames, forKey: Self.bufferFramesKey)
+            if isRunning { Task { await start() } }
+        }
+    }
+    /// What iOS actually granted — it may round the request
+    private(set) var actualBufferFrames: Int?
+    /// Input → app → output, as reported by iOS: both converter/driver latencies plus
+    /// one input and one output buffer. The built-in effects add none (no lookahead).
+    private(set) var roundTripLatency: TimeInterval?
+    private(set) var sampleRate: Double?
+
     private var engine: AVAudioEngine?
     private var graphs: [UUID: ChannelGraph] = [:]
     private let store = AudioRoutingStore.shared
@@ -69,6 +92,8 @@ final class AudioRoutingEngine {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default,
                                     options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
+            // A preference only: iOS may round it, so the granted size is read back below
+            try? session.setPreferredIOBufferDuration(Double(bufferFrames) / max(1, session.sampleRate))
             try session.setActive(true)
 
             let eng = AVAudioEngine()
@@ -84,6 +109,9 @@ final class AudioRoutingEngine {
             isRunning = true
             needsRestart = false
             lastError = nil
+            sampleRate = session.sampleRate
+            actualBufferFrames = Int((session.ioBufferDuration * session.sampleRate).rounded())
+            roundTripLatency = session.inputLatency + session.outputLatency + 2 * session.ioBufferDuration
         } catch {
             lastError = error.localizedDescription
         }
@@ -94,6 +122,9 @@ final class AudioRoutingEngine {
         engine = nil
         graphs = [:]
         isRunning = false
+        actualBufferFrames = nil
+        roundTripLatency = nil
+        sampleRate = nil
     }
 
     // MARK: - Graph construction

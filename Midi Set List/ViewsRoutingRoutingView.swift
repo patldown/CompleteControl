@@ -34,6 +34,51 @@ struct RoutingView: View {
             .safeAreaInset(edge: .top) {
                 if engine.needsRestart && engine.isRunning { restartBanner }
             }
+            .safeAreaInset(edge: .bottom) {
+                if store.isExternalInterfaceConnected { latencyBar }
+            }
+        }
+    }
+
+    private var latencyBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "timer").foregroundStyle(.secondary)
+            if let latency = engine.roundTripLatency {
+                let ms = latency * 1000
+                Text("Latency ≈ \(String(format: "%.1f", ms)) ms")
+                    .monospacedDigit()
+                    .foregroundStyle(ms <= 10 ? Color.green : ms <= 20 ? Color.orange : Color.red)
+                if let granted = engine.actualBufferFrames, granted != engine.bufferFrames {
+                    Text("(iOS gave \(granted))").foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Start the engine to measure latency").foregroundStyle(.secondary)
+            }
+            Spacer()
+            Menu {
+                Picker("Buffer Size", selection: Binding(
+                    get: { engine.bufferFrames },
+                    set: { engine.bufferFrames = $0 }
+                )) {
+                    ForEach(AudioRoutingEngine.bufferSizeOptions, id: \.self) { frames in
+                        Text(Self.bufferLabel(frames)).tag(frames)
+                    }
+                }
+            } label: {
+                Label("Buffer \(engine.bufferFrames)", systemImage: "slider.horizontal.below.rectangle")
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.regularMaterial, in: Rectangle())
+    }
+
+    private static func bufferLabel(_ frames: Int) -> String {
+        switch frames {
+        case 64:  "64 samples (lowest latency, may crackle)"
+        case 128: "128 samples (recommended)"
+        case 512: "512 samples (safest, most latency)"
+        default:  "\(frames) samples"
         }
     }
 
