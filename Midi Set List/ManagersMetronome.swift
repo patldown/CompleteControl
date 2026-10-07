@@ -101,11 +101,12 @@ final class Metronome {
 
     private func startAudio() throws {
         let session = AVAudioSession.sharedInstance()
-        // Use playAndRecord when the routing engine is active (it needs input access).
+        // While the routing engine runs, leave its session exactly as it set it: changing the
+        // category or its options re-routes the hardware and would interrupt live audio.
         // Otherwise playback is sufficient for the click output.
-        let category: AVAudioSession.Category = AudioRoutingEngine.shared.isRunning
-            ? .playAndRecord : .playback
-        try session.setCategory(category, mode: .default, options: [.mixWithOthers, .defaultToSpeaker])
+        if !AudioRoutingEngine.shared.isRunning {
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers, .defaultToSpeaker])
+        }
         try session.setActive(true)
         routeWarning = Self.wirelessWarning(for: session.currentRoute)
 

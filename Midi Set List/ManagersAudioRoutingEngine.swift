@@ -11,7 +11,12 @@
 //  which calls AudioComponentFindNext and picks up classes registered with
 //  AUAudioUnit.registerSubclass — no async instantiation or App Extension required.
 //
-//  Only changing an FX *type* in a slot requires a restart (different node class needed).
+//  Nothing a performer changes restarts the engine. Parameter, bypass, volume and mute
+//  changes apply to the running nodes. Structural changes (an FX type, adding/removing a
+//  channel, stereo link, output pair) rebuild only that channel's nodes via syncChannel
+//  while every other channel keeps playing. Only the I/O buffer size, chosen at setup,
+//  restarts, and the engine restarts itself if iOS stops it (interface reconnect,
+//  sample-rate change, interruption).
 //
 //  Note: starting this engine sets AVAudioSession to .playAndRecord. The Metronome uses
 //  the same category when this engine is running — see ManagersMetronome.swift.
@@ -27,8 +32,6 @@ final class AudioRoutingEngine {
 
     private(set) var isRunning = false
     private(set) var lastError: String?
-    /// Set true when a slot's FX type changed — a restart applies the new graph.
-    var needsRestart = false
 
     // MARK: Buffer size / latency
 
@@ -58,6 +61,9 @@ final class AudioRoutingEngine {
 
     private var engine: AVAudioEngine?
     private var graphs: [UUID: ChannelGraph] = [:]
+    /// One mixer per hardware output pair, shared by every channel sent there
+    private var outputMixers: [Int: AVAudioMixerNode] = [:]
+    private var graphFormat: AVAudioFormat?
     private let store = AudioRoutingStore.shared
 
     private init() {
@@ -91,6 +97,29 @@ final class AudioRoutingEngine {
             name: "Pitch Guide",
             version: 1
         )
+
+        // iOS stops the engine when the hardware configuration changes (interface
+        // re-plugged, sample rate) — bring it straight back rather than going silent
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main
+        ) { [weak self] note in
+            let changed = note.object as AnyObject?
+            MainActor.assumeIsolated {
+                guard let self, self.isRunning, let engine = self.engine, changed === engine else { return }
+                Task { await self.start() }
+            }
+        }
+        // A phone call or Siri interrupts the session; resume when it's over
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            MainActor.assumeIsolated {
+                guard let self, self.isRunning, raw == AVAudioSession.InterruptionType.ended.rawValue,
+                      self.engine?.isRunning != true else { return }
+                Task { await self.start() }
+            }
+        }
     }
 
     // MARK: - Lifecycle
@@ -115,8 +144,8 @@ final class AudioRoutingEngine {
             eng.prepare()
             try eng.start()
             engine = eng
+            graphFormat = stereo
             isRunning = true
-            needsRestart = false
             lastError = nil
             sampleRate = session.sampleRate
             actualBufferFrames = Int((session.ioBufferDuration * session.sampleRate).rounded())
@@ -130,6 +159,8 @@ final class AudioRoutingEngine {
         engine?.stop()
         engine = nil
         graphs = [:]
+        outputMixers = [:]
+        graphFormat = nil
         isRunning = false
         actualBufferFrames = nil
         roundTripLatency = nil
@@ -139,60 +170,80 @@ final class AudioRoutingEngine {
     // MARK: - Graph construction
 
     private func buildGraph(in eng: AVAudioEngine, format: AVAudioFormat) throws {
-        // One output-bus mixer per hardware output pair — multiple channels targeting
-        // the same output pair share a mixer rather than fighting over the connection.
-        var outputMixers: [Int: AVAudioMixerNode] = [:]
-
+        outputMixers = [:]
+        graphs = [:]
         for channel in store.channels {
-            let inputMixer = AVAudioMixerNode()
-            eng.attach(inputMixer)
-            inputMixer.volume = channel.isMuted ? 0 : channel.volume
-
-            let inputBus = AVAudioNodeBus(channel.inputIndex)
-            let inputFormat = eng.inputNode.outputFormat(forBus: inputBus)
-            let connFormat = inputFormat.sampleRate > 0 ? inputFormat : format
-            eng.connect(eng.inputNode, to: inputMixer,
-                        fromBus: inputBus, toBus: 0, format: connFormat)
-
-            if channel.isStereoLinked {
-                let nextBus = AVAudioNodeBus(channel.inputIndex + 1)
-                let nextFmt = eng.inputNode.outputFormat(forBus: nextBus)
-                if nextFmt.sampleRate > 0 {
-                    eng.connect(eng.inputNode, to: inputMixer,
-                                fromBus: nextBus, toBus: 1, format: nextFmt)
-                }
-            }
-
-            var fxNodes: [AVAudioNode?] = []
-            var tail: AVAudioNode = inputMixer
-            for slot in channel.slots {
-                if let node = makeNode(for: slot) {
-                    eng.attach(node)
-                    eng.connect(tail, to: node, format: format)
-                    tail = node
-                    fxNodes.append(node)
-                    if slot.isBypassed { applySlotParams(slot, to: node) }
-                } else {
-                    fxNodes.append(nil)
-                }
-            }
-
-            let busMixer: AVAudioMixerNode
-            if let existing = outputMixers[channel.outputBus] {
-                busMixer = existing
-            } else {
-                busMixer = AVAudioMixerNode()
-                eng.attach(busMixer)
-                let safeBus = min(channel.outputBus, store.availableOutputBusPairCount - 1)
-                eng.connect(busMixer, to: eng.outputNode,
-                            fromBus: 0, toBus: AVAudioNodeBus(safeBus), format: format)
-                outputMixers[channel.outputBus] = busMixer
-            }
-            eng.connect(tail, to: busMixer, format: format)
-
-            graphs[channel.id] = ChannelGraph(inputMixer: inputMixer, fxNodes: fxNodes,
-                                               outputBus: channel.outputBus)
+            buildChannel(channel, in: eng, format: format)
         }
+    }
+
+    /// Rebuilds one channel's nodes on the running engine — after an FX type change,
+    /// stereo link, output change, or the channel being added or removed. Only that
+    /// channel drops out, for a moment; the rest keep playing.
+    func syncChannel(_ id: UUID) {
+        guard isRunning, let eng = engine, let format = graphFormat else { return }
+        if let old = graphs.removeValue(forKey: id) {
+            for node in [old.inputMixer] + old.fxNodes.compactMap({ $0 }) {
+                eng.disconnectNodeInput(node)
+                eng.disconnectNodeOutput(node)
+                eng.detach(node)
+            }
+        }
+        if let channel = store.channels.first(where: { $0.id == id }) {
+            buildChannel(channel, in: eng, format: format)
+        }
+        if !eng.isRunning { try? eng.start() }
+    }
+
+    private func buildChannel(_ channel: AudioChannel, in eng: AVAudioEngine, format: AVAudioFormat) {
+        let inputMixer = AVAudioMixerNode()
+        eng.attach(inputMixer)
+        inputMixer.volume = channel.isMuted ? 0 : channel.volume
+
+        let inputBus = AVAudioNodeBus(channel.inputIndex)
+        let inputFormat = eng.inputNode.outputFormat(forBus: inputBus)
+        let connFormat = inputFormat.sampleRate > 0 ? inputFormat : format
+        eng.connect(eng.inputNode, to: inputMixer,
+                    fromBus: inputBus, toBus: 0, format: connFormat)
+
+        if channel.isStereoLinked {
+            let nextBus = AVAudioNodeBus(channel.inputIndex + 1)
+            let nextFmt = eng.inputNode.outputFormat(forBus: nextBus)
+            if nextFmt.sampleRate > 0 {
+                eng.connect(eng.inputNode, to: inputMixer,
+                            fromBus: nextBus, toBus: 1, format: nextFmt)
+            }
+        }
+
+        var fxNodes: [AVAudioNode?] = []
+        var tail: AVAudioNode = inputMixer
+        for slot in channel.slots {
+            if let node = makeNode(for: slot) {
+                eng.attach(node)
+                eng.connect(tail, to: node, format: format)
+                tail = node
+                fxNodes.append(node)
+                if slot.isBypassed { applySlotParams(slot, to: node) }
+            } else {
+                fxNodes.append(nil)
+            }
+        }
+
+        let busMixer: AVAudioMixerNode
+        if let existing = outputMixers[channel.outputBus] {
+            busMixer = existing
+        } else {
+            busMixer = AVAudioMixerNode()
+            eng.attach(busMixer)
+            let safeBus = min(channel.outputBus, store.availableOutputBusPairCount - 1)
+            eng.connect(busMixer, to: eng.outputNode,
+                        fromBus: 0, toBus: AVAudioNodeBus(safeBus), format: format)
+            outputMixers[channel.outputBus] = busMixer
+        }
+        eng.connect(tail, to: busMixer, format: format)
+
+        graphs[channel.id] = ChannelGraph(inputMixer: inputMixer, fxNodes: fxNodes,
+                                           outputBus: channel.outputBus)
     }
 
     // MARK: - Node factory
@@ -253,8 +304,8 @@ final class AudioRoutingEngine {
     // MARK: - Live parameter application
 
     /// Applies a macro to a running channel without stopping the engine.
-    /// Only volume, mute, and same-type FX params update live.
-    /// If any slot's FX type changes, `needsRestart` is set instead.
+    /// Volume, mute and same-type FX params update live; if any slot's FX type changed,
+    /// only this channel is rebuilt.
     func applyMacro(_ macro: ChannelMacro, to channelID: UUID) {
         guard var channel = store.channels.first(where: { $0.id == channelID }) else { return }
         let previousTypes = channel.slots.map(\.type)
@@ -264,7 +315,10 @@ final class AudioRoutingEngine {
         channel.isMuted = macro.isMuted
         store.update(channel)
 
-        if macro.slots.map(\.type) != previousTypes { needsRestart = true }
+        if macro.slots.map(\.type) != previousTypes {
+            syncChannel(channelID)
+            return
+        }
 
         guard let graph = graphs[channelID] else { return }
         graph.inputMixer.volume = macro.isMuted ? 0 : macro.volume
@@ -279,7 +333,7 @@ final class AudioRoutingEngine {
     func applySlot(_ slot: ChannelFXSlot, channelID: UUID, slotIndex: Int) {
         guard let graph = graphs[channelID], graph.fxNodes.indices.contains(slotIndex) else { return }
         guard let node = graph.fxNodes[slotIndex] else {
-            if slot.type != nil && !slot.isBypassed { needsRestart = true }
+            if slot.type != nil { syncChannel(channelID) }
             return
         }
         applySlotParams(slot, to: node)

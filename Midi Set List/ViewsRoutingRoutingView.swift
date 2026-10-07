@@ -34,9 +34,6 @@ struct RoutingView: View {
             .toolbar { toolbar }
             .sheet(isPresented: $showingAddChannel) { AddChannelSheet() }
             .task { store.enableInputEnumeration() }
-            .safeAreaInset(edge: .top) {
-                if engine.needsRestart && engine.isRunning { restartBanner }
-            }
             .safeAreaInset(edge: .bottom) {
                 if store.isExternalInterfaceConnected { latencyBar }
             }
@@ -59,12 +56,15 @@ struct RoutingView: View {
             }
             Spacer()
             Menu {
-                Picker("Buffer Size", selection: Binding(
-                    get: { engine.bufferFrames },
-                    set: { engine.bufferFrames = $0 }
-                )) {
-                    ForEach(AudioRoutingEngine.bufferSizeOptions, id: \.self) { frames in
-                        Text(Self.bufferLabel(frames)).tag(frames)
+                // The one routing change that restarts all audio — a setup choice, not a live one
+                Section("Changing this restarts all audio briefly. Set it before the show.") {
+                    Picker("Buffer Size", selection: Binding(
+                        get: { engine.bufferFrames },
+                        set: { engine.bufferFrames = $0 }
+                    )) {
+                        ForEach(AudioRoutingEngine.bufferSizeOptions, id: \.self) { frames in
+                            Text(Self.bufferLabel(frames)).tag(frames)
+                        }
                     }
                 }
             } label: {
@@ -141,16 +141,6 @@ struct RoutingView: View {
         }
     }
 
-    private var restartBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            Text("FX type changed — restart to apply.").font(.caption)
-            Spacer()
-            Button("Restart") { Task { await engine.start() } }.font(.caption.bold())
-        }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(.regularMaterial, in: Rectangle())
-    }
 }
 
 // MARK: - Channel strip
@@ -207,7 +197,7 @@ struct ChannelStripView: View {
                 store.update(c)
                 guard engine.isRunning else { return }
                 if typeChanged {
-                    engine.needsRestart = true
+                    engine.syncChannel(channelID)   // rebuilds this channel only
                 } else {
                     engine.applyMacro(
                         ChannelMacro(slots: c.slots, outputBus: c.outputBus,
@@ -244,7 +234,7 @@ struct ChannelStripView: View {
 
                 Button(role: .destructive) {
                     store.remove(channel)
-                    if engine.isRunning { Task { await engine.start() } }
+                    engine.syncChannel(channelID)
                 } label: {
                     Image(systemName: "minus.circle.fill").foregroundStyle(.red)
                 }
@@ -279,7 +269,7 @@ struct ChannelStripView: View {
                     get: { channel.isStereoLinked },
                     set: { val in
                         var c = channel; c.isStereoLinked = val; store.update(c)
-                        if engine.isRunning { Task { await engine.start() } }
+                        engine.syncChannel(channelID)
                     }
                 ))
                 .font(.caption).toggleStyle(.button).buttonStyle(.bordered).controlSize(.mini)
@@ -323,7 +313,7 @@ struct ChannelStripView: View {
                     get: { channel.outputBus },
                     set: { val in
                         var c = channel; c.outputBus = val; store.update(c)
-                        if engine.isRunning { Task { await engine.start() } }
+                        engine.syncChannel(channelID)
                     }
                 )) {
                     ForEach(0..<store.availableOutputBusPairCount, id: \.self) { bus in
@@ -780,7 +770,7 @@ private struct FeedbackNotchEditor: View {
                     Text(action).font(.callout)
                 }
             } else {
-                Text("Tap Done, start the engine (restart it if asked), then reopen this slot to ring out.")
+                Text("Tap Done (and start the engine if it’s off), then reopen this slot to ring out.")
                     .foregroundStyle(.secondary)
             }
         } header: {
@@ -830,7 +820,7 @@ private struct PitchGuideEditor: View {
                     PitchMeter(kernel: kernel)
                 }
             } else {
-                Text("Tap Done and start the engine (restart it if asked), then reopen this slot to see what it hears.")
+                Text("Tap Done (and start the engine if it’s off), then reopen this slot to see what it hears.")
                     .foregroundStyle(.secondary)
             }
         } header: {
@@ -1128,7 +1118,7 @@ struct AddChannelSheet: View {
                             isStereoLinked: stereoLink
                         )
                         store.add(ch)
-                        if engine.isRunning { Task { await engine.start() } }
+                        engine.syncChannel(ch.id)
                         dismiss()
                     }
                     .disabled(store.availableInputs.isEmpty)
