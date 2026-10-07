@@ -10,6 +10,7 @@
 
 import AVFoundation
 import AudioToolbox
+import Synchronization
 
 final class FeedbackNotchAudioUnit: AUAudioUnit {
 
@@ -45,12 +46,22 @@ final class FeedbackNotchAudioUnit: AUAudioUnit {
         kernel.setSampleRate(outputBusses[0].format.sampleRate)
     }
 
+    private let bypassFlag = AUBypassFlag()
+
+    // Set by AVAudioUnitEffect.bypass; the render block passes audio straight through
+    override var shouldBypassEffect: Bool {
+        get { bypassFlag.isOn.load(ordering: .relaxed) }
+        set { bypassFlag.isOn.store(newValue, ordering: .relaxed) }
+    }
+
     override var internalRenderBlock: AUInternalRenderBlock {
         let k = kernel
+        let bypass = bypassFlag
         return { actionFlags, timestamp, frameCount, outputBus, outputData, eventList, pullInput in
             var renderFlags: AudioUnitRenderActionFlags = []
             let status = pullInput?(&renderFlags, timestamp, frameCount, 0, outputData) ?? noErr
             guard status == noErr else { return status }
+            if bypass.isOn.load(ordering: .relaxed) { return noErr }
             k.process(outputData, frameCount: Int(frameCount))
             return noErr
         }

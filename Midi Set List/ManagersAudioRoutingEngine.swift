@@ -171,6 +171,7 @@ final class AudioRoutingEngine {
                     eng.connect(tail, to: node, format: format)
                     tail = node
                     fxNodes.append(node)
+                    if slot.isBypassed { applySlotParams(slot, to: node) }
                 } else {
                     fxNodes.append(nil)
                 }
@@ -197,7 +198,8 @@ final class AudioRoutingEngine {
     // MARK: - Node factory
 
     private func makeNode(for slot: ChannelFXSlot) -> AVAudioNode? {
-        guard let type = slot.type, !slot.isBypassed else { return nil }
+        // Bypassed slots are still built (then bypassed below) so bypass can toggle live
+        guard let type = slot.type else { return nil }
         switch type {
         case .gain:
             let mixer = AVAudioMixerNode()
