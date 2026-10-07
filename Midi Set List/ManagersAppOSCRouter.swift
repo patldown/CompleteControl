@@ -53,16 +53,23 @@ enum AppOSCRouter {
             throw RouteError.unknownChannel(parts[0])
         }
 
-        // /app/<channel>/volume | mute
+        // /app/<channel>/volume | mute | output | stereoOut
         if parts.count == 2 {
             guard let value else { throw RouteError.needsValue }
             switch parts[1].lowercased() {
             case "volume": channel.volume = Float(min(1, max(0, value)))
             case "mute":   channel.isMuted = value >= 0.5
+            case "output":
+                // 1-based first hardware output, as labelled on the interface
+                channel.output.channel = min(store.outputChannelCount - 1, max(0, Int(value.rounded()) - 1))
+            case "stereoout": channel.output.stereo = value >= 0.5
             default:       throw RouteError.unknownParam(parts[1])
             }
             store.update(channel)
-            if engine.isRunning { engine.applyVolume(of: channel) }
+            if engine.isRunning {
+                engine.applyVolume(of: channel)
+                engine.updateOutput(of: channel)
+            }
             return "\(channel.displayName) \(parts[1]) → \(format(value))"
         }
 

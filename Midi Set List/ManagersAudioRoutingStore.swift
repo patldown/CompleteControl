@@ -32,7 +32,8 @@ final class AudioRoutingStore {
 
     var channels: [AudioChannel] = []
     private(set) var availableInputs: [AudioInputPort] = []
-    private(set) var availableOutputBusPairCount: Int = 1
+    /// Hardware output channels on the interface (2 without one)
+    private(set) var outputChannelCount: Int = 2
     private(set) var isExternalInterfaceConnected: Bool = false
 
     private static let fileURL: URL = {
@@ -145,7 +146,7 @@ final class AudioRoutingStore {
         isExternalInterfaceConnected = routePorts.contains { externalTypes.contains($0.portType) }
 
         let outChannels = session.maximumOutputNumberOfChannels
-        availableOutputBusPairCount = outChannels > 0 ? max(1, outChannels / 2) : 1
+        outputChannelCount = max(2, outChannels)
 
         guard isExternalInterfaceConnected else { availableInputs = []; return }
         // Keep the last known input list while the category hides inputs (e.g. metronome
@@ -185,6 +186,16 @@ final class AudioRoutingStore {
     }
 
     // MARK: - Helpers
+
+    /// Every output a channel can use: stereo pairs (1–2, 3–4…) first, then single outputs
+    var outputRoutes: [OutputRoute] {
+        let pairs = stride(from: 0, to: outputChannelCount - 1, by: 2).map { OutputRoute(channel: $0, stereo: true) }
+        let monos = (0..<outputChannelCount).map { OutputRoute(channel: $0, stereo: false) }
+        return pairs + monos
+    }
+
+    /// Kept for the metronome strip, which picks stereo pairs
+    var availableOutputBusPairCount: Int { max(1, outputChannelCount / 2) }
 
     func outputBusLabel(_ bus: Int) -> String {
         "Ch \(bus * 2 + 1)–\(bus * 2 + 2)"

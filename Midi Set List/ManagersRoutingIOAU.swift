@@ -9,8 +9,9 @@
 //    • InputPickerAudioUnit — fed the whole N-channel input; outputs stereo holding the
 //      chosen hardware channel (both sides) or a stereo-linked pair (L/R). The choice is
 //      an atomic, so changing a channel's input or stereo link is live.
-//    • OutputPackerAudioUnit — 16 stereo input busses (one per output pair) in, the whole
-//      M-channel output out: bus k lands on hardware channels 2k+1 and 2k+2.
+//    • OutputPackerAudioUnit — one stereo input bus per routing channel in, the whole
+//      M-channel output out. Each bus is placed on one output (summed to mono) or a pair
+//      (L/R); the placement is an atomic, so changing a channel's output is live.
 //
 //  Strict real-time contract: buffers are allocated in allocateRenderResources; the
 //  render blocks only copy.
@@ -154,6 +155,34 @@ final class InputPickerAudioUnit: AUAudioUnit {
 
 // MARK: - Output packer
 
+/// Where each packer input bus goes. One Int32 per bus, written on the main thread and read
+/// by the render block (aligned 32-bit loads/stores don't tear): -1 = off, otherwise
+/// start channel × 2 + (1 if stereo).
+nonisolated final class OutputRoutes: @unchecked Sendable {
+    let count: Int
+    private let codes: UnsafeMutablePointer<Int32>
+
+    init(count: Int) {
+        self.count = count
+        codes = .allocate(capacity: count)
+        codes.initialize(repeating: -1, count: count)
+    }
+
+    deinit { codes.deallocate() }
+
+    func set(bus: Int, channel: Int, stereo: Bool) {
+        guard bus >= 0, bus < count else { return }
+        codes[bus] = Int32(channel * 2 + (stereo ? 1 : 0))
+    }
+
+    func clear(bus: Int) {
+        guard bus >= 0, bus < count else { return }
+        codes[bus] = -1
+    }
+
+    @inline(__always) func code(_ bus: Int) -> Int32 { codes[bus] }
+}
+
 final class OutputPackerAudioUnit: AUAudioUnit {
 
     static let componentDescription = AudioComponentDescription(
@@ -164,10 +193,12 @@ final class OutputPackerAudioUnit: AUAudioUnit {
         componentFlagsMask: 0
     )
 
-    /// Output pairs supported: 32 hardware channels
-    static let maxPairs = 16
+    /// One input bus per routing channel
+    static let maxChannels = 32
 
-    private let pairScratch = (0..<OutputPackerAudioUnit.maxPairs).map { _ in RoutingScratch() }
+    /// Each channel's destination: stereo L/R onto two outputs, or summed onto one
+    let routes = OutputRoutes(count: OutputPackerAudioUnit.maxChannels)
+    private let busScratch = (0..<OutputPackerAudioUnit.maxChannels).map { _ in RoutingScratch() }
     private let outputScratch = RoutingScratch()
     private var _inputBusses: AUAudioUnitBusArray!
     private var _outputBusses: AUAudioUnitBusArray!
@@ -177,13 +208,13 @@ final class OutputPackerAudioUnit: AUAudioUnit {
         try super.init(componentDescription: componentDescription, options: options)
         let fmt = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
         _inputBusses  = AUAudioUnitBusArray(audioUnit: self, busType: .input,
-                                             busses: try (0..<Self.maxPairs).map { _ in try AUAudioUnitBus(format: fmt) })
+                                             busses: try (0..<Self.maxChannels).map { _ in try AUAudioUnitBus(format: fmt) })
         let output = try AUAudioUnitBus(format: fmt)
         output.maximumChannelCount = 64    // feeds the interface's whole output
         _outputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .output, busses: [output])
     }
 
-    /// Stereo in (per pair), any number of channels out
+    /// Stereo in (per channel), any number of channels out
     override var channelCapabilities: [NSNumber]? { [2, -1] }
     override var inputBusses:  AUAudioUnitBusArray { _inputBusses  }
     override var outputBusses: AUAudioUnitBusArray { _outputBusses }
@@ -192,18 +223,18 @@ final class OutputPackerAudioUnit: AUAudioUnit {
     override func allocateRenderResources() throws {
         try super.allocateRenderResources()
         let frames = Int(maximumFramesToRender)
-        for s in pairScratch { s.allocate(channels: 2, frames: frames) }
+        for s in busScratch { s.allocate(channels: 2, frames: frames) }
         outputScratch.allocate(channels: Int(outputBusses[0].format.channelCount), frames: frames)
     }
 
     override func deallocateRenderResources() {
-        for s in pairScratch { s.deallocate() }
+        for s in busScratch { s.deallocate() }
         outputScratch.deallocate()
         super.deallocateRenderResources()
     }
 
     override var internalRenderBlock: AUInternalRenderBlock {
-        let pairs = pairScratch, outBuf = outputScratch
+        let scratch = busScratch, outBuf = outputScratch, routes = routes
         return { _, timestamp, frameCount, _, outputData, _, pullInput in
             guard let spare = outBuf.list else { return kAudioUnitErr_Uninitialized }
             let frames = Int(frameCount)
@@ -215,18 +246,26 @@ final class OutputPackerAudioUnit: AUAudioUnit {
                 samples(out[c])?.update(repeating: 0, count: frames)
             }
 
-            // Bus k → hardware channels 2k, 2k+1 (0-based). Unconnected busses just fail
-            // to pull and stay silent.
-            for k in 0..<pairs.count where 2 * k < out.count {
-                let scratch = pairs[k]
-                guard let list = scratch.list else { continue }
-                scratch.prepare(frames: frames)
+            for bus in 0..<routes.count {
+                let code = Int(routes.code(bus))
+                guard code >= 0 else { continue }          // no channel on this bus
+                let start = code >> 1, stereo = code & 1 == 1
+                guard start < out.count, let list = scratch[bus].list else { continue }
+                scratch[bus].prepare(frames: frames)
                 var flags: AudioUnitRenderActionFlags = []
-                guard pullInput?(&flags, timestamp, frameCount, k, list.unsafeMutablePointer) == noErr
+                guard pullInput?(&flags, timestamp, frameCount, bus, list.unsafeMutablePointer) == noErr,
+                      let left = samples(list[0])
                 else { continue }
-                for side in 0..<2 where 2 * k + side < out.count && side < list.count {
-                    guard let src = samples(list[side]), let dst = samples(out[2 * k + side]) else { continue }
-                    for i in 0..<frames { dst[i] += src[i] }
+                let right = (list.count > 1 ? samples(list[1]) : nil) ?? left
+
+                if stereo {
+                    if let dst = samples(out[start]) { for i in 0..<frames { dst[i] += left[i] } }
+                    if start + 1 < out.count, let dst = samples(out[start + 1]) {
+                        for i in 0..<frames { dst[i] += right[i] }
+                    }
+                } else if let dst = samples(out[start]) {
+                    // Mono output: sum to mono (a centred mono source keeps its level)
+                    for i in 0..<frames { dst[i] += 0.5 * (left[i] + right[i]) }
                 }
             }
             return noErr

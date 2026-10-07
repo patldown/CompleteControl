@@ -13,6 +13,8 @@
 //  Address forms (values are the OSC float argument):
 //    /app/<channel>/volume                0…1
 //    /app/<channel>/mute                  0 = on, 1 = muted
+//    /app/<channel>/output                first hardware output, 1-based (3 = Out 3 / Out 3–4)
+//    /app/<channel>/stereoOut             1 = stereo pair from that output, 0 = mono
 //    /app/<channel>/<fx>/bypass           0 = active, 1 = bypassed
 //    /app/<channel>/<fx>/<param>          see the parameter table
 //    /app/engine/run                      1 = start, 0 = stop
@@ -306,6 +308,8 @@ extension AppOSC {
         ## Address forms
         - `/app/<channel>/volume` 0 to 1
         - `/app/<channel>/mute` 1 = muted, 0 = unmuted
+        - `/app/<channel>/output` first hardware output, 1-based (3 = Out 3, or Out 3–4 in stereo)
+        - `/app/<channel>/stereoOut` 1 = stereo pair starting at that output, 0 = mono to that one output
         - `/app/<channel>/<fx>/bypass` 1 = bypassed, 0 = active
         - `/app/<channel>/<fx>/<param>` see tables below
         - `/app/engine/run` 1 = start the routing engine, 0 = stop

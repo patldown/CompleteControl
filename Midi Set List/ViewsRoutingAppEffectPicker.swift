@@ -57,6 +57,11 @@ private struct AppEffectPickerSheet: View {
                            detail: "", get: { _ in 0 }, set: { _, _ in }),
                 AppFXParam(key: "mute", name: "Channel Mute", range: 0...1, unit: "", kind: .toggle,
                            detail: "", get: { _ in 0 }, set: { _, _ in }),
+                AppFXParam(key: "output", name: "Output (first channel)", range: 1...32, unit: "",
+                           kind: .number, detail: "1-based hardware output", get: { _ in 0 }, set: { _, _ in },
+                           isWholeNumber: true),
+                AppFXParam(key: "stereoOut", name: "Stereo Output", range: 0...1, unit: "", kind: .toggle,
+                           detail: "On = pair from that output, off = mono", get: { _ in 0 }, set: { _, _ in }),
             ]
         }
         let bypass = AppFXParam(key: "bypass", name: "Bypass", range: 0...1, unit: "", kind: .toggle,
@@ -140,7 +145,12 @@ private struct AppEffectPickerSheet: View {
                 if let effect, let channel {
                     value = param.get(channel.slots[effect.slotIndex])
                 } else if let channel {
-                    value = param.key == "mute" ? (channel.isMuted ? 1 : 0) : Double(channel.volume)
+                    switch param.key {
+                    case "mute":      value = channel.isMuted ? 1 : 0
+                    case "output":    value = Double(channel.output.channel + 1)
+                    case "stereoOut": value = channel.output.stereo ? 1 : 0
+                    default:          value = Double(channel.volume)
+                    }
                 }
             }
         }

@@ -336,13 +336,24 @@ struct ChannelFXSlot: Codable, Equatable {
     }
 }
 
+// MARK: - Output route
+
+/// Where a channel's signal leaves the interface: one hardware output (mono — the channel is
+/// summed to mono) or a pair starting at `channel` (stereo — left on `channel`, right on the next).
+struct OutputRoute: Codable, Hashable {
+    var channel: Int = 0        // 0-based hardware output
+    var stereo: Bool = true
+
+    var label: String { stereo ? "Out \(channel + 1)–\(channel + 2)" : "Out \(channel + 1)" }
+}
+
 // MARK: - Channel macro (named preset for one channel)
 
 struct ChannelMacro: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var name: String = "Preset"
     var slots: [ChannelFXSlot] = Array(repeating: ChannelFXSlot(), count: 4)
-    var outputBus: Int = 0
+    var output: OutputRoute = .init()
     var volume: Float = 1.0
     var isMuted: Bool = false
 }
@@ -352,17 +363,56 @@ struct ChannelMacro: Codable, Identifiable, Equatable {
 struct AudioChannel: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var name: String = ""
-    /// 0-based mono hardware input bus index on AVAudioEngine.inputNode
+    /// 0-based hardware input channel on the interface
     var inputIndex: Int = 0
-    /// When true, bus inputIndex+1 is also routed through this channel's FX chain (stereo pair)
+    /// When true, input inputIndex+1 is also routed through this channel's FX chain (stereo pair)
     var isStereoLinked: Bool = false
-    var outputBus: Int = 0
+    var output: OutputRoute = .init()
     var volume: Float = 1.0
     var isMuted: Bool = false
     var slots: [ChannelFXSlot] = Array(repeating: ChannelFXSlot(), count: 4)
     var macros: [ChannelMacro] = []
 
     var displayName: String { name.isEmpty ? "Input \(inputIndex + 1)" : name }
+}
+
+// Saves from before mono outputs stored `outputBus` (a stereo pair index); read it as that
+// pair. Kept in extensions so the memberwise initialisers stay available.
+private enum LegacyOutputKeys: String, CodingKey { case outputBus }
+
+private func decodeOutput<K: CodingKey>(_ c: KeyedDecodingContainer<K>, key: K,
+                                         decoder: Decoder) throws -> OutputRoute {
+    if let route = try c.decodeIfPresent(OutputRoute.self, forKey: key) { return route }
+    let legacy = try decoder.container(keyedBy: LegacyOutputKeys.self)
+    let pair = try legacy.decodeIfPresent(Int.self, forKey: .outputBus) ?? 0
+    return OutputRoute(channel: pair * 2, stereo: true)
+}
+
+extension ChannelMacro {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Preset"
+        slots = try c.decodeIfPresent([ChannelFXSlot].self, forKey: .slots) ?? Array(repeating: ChannelFXSlot(), count: 4)
+        output = try decodeOutput(c, key: .output, decoder: decoder)
+        volume = try c.decodeIfPresent(Float.self, forKey: .volume) ?? 1
+        isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
+    }
+}
+
+extension AudioChannel {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        inputIndex = try c.decodeIfPresent(Int.self, forKey: .inputIndex) ?? 0
+        isStereoLinked = try c.decodeIfPresent(Bool.self, forKey: .isStereoLinked) ?? false
+        output = try decodeOutput(c, key: .output, decoder: decoder)
+        volume = try c.decodeIfPresent(Float.self, forKey: .volume) ?? 1
+        isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
+        slots = try c.decodeIfPresent([ChannelFXSlot].self, forKey: .slots) ?? Array(repeating: ChannelFXSlot(), count: 4)
+        macros = try c.decodeIfPresent([ChannelMacro].self, forKey: .macros) ?? []
+    }
 }
 
 // MARK: - Reverb preset names (matches AVAudioUnitReverbPreset rawValues 0-12)

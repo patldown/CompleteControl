@@ -12,8 +12,9 @@
 //  AUAudioUnit.registerSubclass — no async instantiation or App Extension required.
 //
 //  Nothing a performer changes restarts the engine. Parameter, bypass, volume and mute
-//  changes apply to the running nodes. Structural changes (an FX type, adding/removing a
-//  channel, stereo link, output pair) rebuild only that channel's nodes via syncChannel
+//  changes apply to the running nodes, and so do input, stereo link and output choices
+//  (the picker and packer switch instantly). Structural changes (an FX type, adding or
+//  removing a channel) rebuild only that channel's nodes via syncChannel
 //  while every other channel keeps playing. Only the I/O buffer size, chosen at setup,
 //  restarts, and the engine restarts itself if iOS stops it (interface reconnect,
 //  sample-rate change, interruption).
@@ -65,8 +66,9 @@ final class AudioRoutingEngine {
 
     private var engine: AVAudioEngine?
     private var graphs: [UUID: ChannelGraph] = [:]
-    /// One stereo mixer per hardware output pair, feeding the output packer
-    private var pairMixers: [AVAudioMixerNode] = []
+    /// Places every channel on its outputs; each channel owns one of its input busses
+    private var packer: AVAudioUnitEffect?
+    private var packerBus: [UUID: Int] = [:]
     /// Format inside the channel strips (stereo) and of the whole interface input
     private var graphFormat: AVAudioFormat?
     private var inputFormat: AVAudioFormat?
@@ -188,7 +190,8 @@ final class AudioRoutingEngine {
         engine?.stop()
         engine = nil
         graphs = [:]
-        pairMixers = []
+        packer = nil
+        packerBus = [:]
         graphFormat = nil
         inputFormat = nil
         syncing = []
@@ -202,28 +205,22 @@ final class AudioRoutingEngine {
     // MARK: - Graph construction
     //
     //  inputNode (all N interface channels)
-    //     ├─▶ picker ─▶ inputMixer ─▶ FX1…FX4 ─▶ pair mixer k ─┐   (one row per channel;
-    //     ├─▶ picker ─▶ inputMixer ─▶ …                        │    the picker selects its
-    //     ⋮                                                     ▼    channel or stereo pair)
-    //                                         output packer (pair k → hw ch 2k+1, 2k+2) ─▶ outputNode
+    //     ├─▶ picker ─▶ inputMixer ─▶ FX1…FX4 ─▶ packer bus 0 ─┐  (one row per channel; the
+    //     ├─▶ picker ─▶ inputMixer ─▶ …       ─▶ packer bus 1 ─┤   picker selects its input
+    //     ⋮                                                     ▼   channel or stereo pair)
+    //                  output packer (each bus → one output, mono, or a pair) ─▶ outputNode
 
     private func buildGraph(in eng: AVAudioEngine, stereo: AVAudioFormat,
                             hardwareIn: AVAudioFormat, hardwareOut: AVAudioFormat) {
         graphs = [:]
-        pairMixers = []
+        packerBus = [:]
         graphFormat = stereo
         inputFormat = hardwareIn
 
         let packer = AVAudioUnitEffect(audioComponentDescription: OutputPackerAudioUnit.componentDescription)
         eng.attach(packer)
         eng.connect(packer, to: eng.outputNode, format: hardwareOut)
-        let pairs = min(OutputPackerAudioUnit.maxPairs, max(1, Int(hardwareOut.channelCount) / 2))
-        for k in 0..<pairs {
-            let mixer = AVAudioMixerNode()
-            eng.attach(mixer)
-            eng.connect(mixer, to: packer, fromBus: 0, toBus: AVAudioNodeBus(k), format: stereo)
-            pairMixers.append(mixer)
-        }
+        self.packer = packer
 
         for channel in store.channels {
             buildChannel(channel, in: eng)
@@ -244,9 +241,15 @@ final class AudioRoutingEngine {
         inputMixer.volume = startSilent || channel.isMuted ? 0 : channel.volume
         eng.connect(picker, to: inputMixer, format: stereo)
 
-        var graph = ChannelGraph(picker: picker, inputMixer: inputMixer, fxNodes: [], outputBus: channel.outputBus)
+        // A packer bus of its own; the channel's output choice is just that bus's route
+        if packerBus[channel.id] == nil,
+           let free = (0..<OutputPackerAudioUnit.maxChannels).first(where: { !packerBus.values.contains($0) }) {
+            packerBus[channel.id] = free
+        }
+        var graph = ChannelGraph(picker: picker, inputMixer: inputMixer, fxNodes: [])
         buildChain(for: channel, into: &graph, in: eng)
         graphs[channel.id] = graph
+        updateOutput(of: channel)
     }
 
     /// FX nodes from the channel's fader to its output pair
@@ -265,12 +268,10 @@ final class AudioRoutingEngine {
                 nodes.append(nil)
             }
         }
-        if !pairMixers.isEmpty {
-            let pair = pairMixers[min(max(0, channel.outputBus), pairMixers.count - 1)]
-            eng.connect(tail, to: pair, fromBus: 0, toBus: pair.nextAvailableInputBus, format: stereo)
+        if let packer, let bus = packerBus[channel.id] {
+            eng.connect(tail, to: packer, fromBus: 0, toBus: AVAudioNodeBus(bus), format: stereo)
         }
         graph.fxNodes = nodes
-        graph.outputBus = channel.outputBus
     }
 
     private func teardownChain(_ graph: ChannelGraph, in eng: AVAudioEngine) {
@@ -294,6 +295,15 @@ final class AudioRoutingEngine {
 
     // MARK: - Live structural changes (no engine restart)
 
+    /// Output changed (pair, single output, mono/stereo): the packer re-routes instantly
+    func updateOutput(of channel: AudioChannel) {
+        guard let bus = packerBus[channel.id],
+              let routes = (packer?.auAudioUnit as? OutputPackerAudioUnit)?.routes else { return }
+        let last = max(0, store.outputChannelCount - 1)
+        let start = min(max(0, channel.output.channel), channel.output.stereo ? max(0, last - 1) : last)
+        routes.set(bus: bus, channel: start, stereo: channel.output.stereo)
+    }
+
     /// Input or stereo link changed: the picker switches channels instantly
     func updateInput(of channel: AudioChannel) {
         (graphs[channel.id]?.picker.auAudioUnit as? InputPickerAudioUnit)?
@@ -301,7 +311,7 @@ final class AudioRoutingEngine {
     }
 
     /// Brings one channel's nodes in line with its saved settings on the running engine:
-    /// FX type changes and output pair (rebuilds its chain), channel added, channel removed.
+    /// FX type changes (rebuilds its chain), channel added, channel removed.
     /// The channel fades out ~10 ms, is rebuilt, and fades back in; others keep playing.
     func syncChannel(_ id: UUID) {
         guard isRunning, let eng = engine else { return }
@@ -349,6 +359,9 @@ final class AudioRoutingEngine {
                     eng.detach(node)
                 }
                 self.graphs[id] = nil
+                if let bus = self.packerBus.removeValue(forKey: id) {
+                    (self.packer?.auAudioUnit as? OutputPackerAudioUnit)?.routes.clear(bus: bus)
+                }
                 self.connectInputs(in: eng)
                 self.finishSync(id)
             }
@@ -441,14 +454,14 @@ final class AudioRoutingEngine {
     func applyMacro(_ macro: ChannelMacro, to channelID: UUID) {
         guard var channel = store.channels.first(where: { $0.id == channelID }) else { return }
         let previousTypes = channel.slots.map(\.type)
-        let previousOutput = channel.outputBus
         channel.slots = macro.slots
-        channel.outputBus = macro.outputBus
+        channel.output = macro.output
         channel.volume = macro.volume
         channel.isMuted = macro.isMuted
         store.update(channel)
 
-        if macro.slots.map(\.type) != previousTypes || macro.outputBus != previousOutput {
+        updateOutput(of: channel)
+        if macro.slots.map(\.type) != previousTypes {
             syncChannel(channelID)
             return
         }
@@ -565,7 +578,6 @@ private struct ChannelGraph {
     let picker: AVAudioUnitEffect
     let inputMixer: AVAudioMixerNode
     var fxNodes: [AVAudioNode?]
-    var outputBus: Int
 }
 
 enum RoutingError: LocalizedError {

@@ -200,7 +200,7 @@ struct ChannelStripView: View {
                     engine.syncChannel(channelID)   // rebuilds this channel only
                 } else {
                     engine.applyMacro(
-                        ChannelMacro(slots: c.slots, outputBus: c.outputBus,
+                        ChannelMacro(slots: c.slots, output: c.output,
                                      volume: c.volume, isMuted: c.isMuted),
                         to: channelID
                     )
@@ -291,7 +291,7 @@ struct ChannelStripView: View {
                     store.update(c)
                     if engine.isRunning {
                         engine.applyMacro(
-                            ChannelMacro(slots: c.slots, outputBus: c.outputBus,
+                            ChannelMacro(slots: c.slots, output: c.output,
                                          volume: c.volume, isMuted: c.isMuted),
                             to: channelID
                         )
@@ -310,14 +310,17 @@ struct ChannelStripView: View {
                 Text("Out").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Picker("Output", selection: Binding(
-                    get: { channel.outputBus },
+                    get: { channel.output },
                     set: { val in
-                        var c = channel; c.outputBus = val; store.update(c)
-                        engine.syncChannel(channelID)
+                        var c = channel; c.output = val; store.update(c)
+                        engine.updateOutput(of: c)   // instant; no rebuild
                     }
                 )) {
-                    ForEach(0..<store.availableOutputBusPairCount, id: \.self) { bus in
-                        Text(store.outputBusLabel(bus)).tag(bus)
+                    Section("Stereo") {
+                        ForEach(store.outputRoutes.filter(\.stereo), id: \.self) { Text($0.label).tag($0) }
+                    }
+                    Section("Mono") {
+                        ForEach(store.outputRoutes.filter { !$0.stereo }, id: \.self) { Text($0.label).tag($0) }
                     }
                 }
                 .pickerStyle(.menu).font(.caption)
@@ -405,7 +408,7 @@ struct ChannelStripView: View {
         let c = channel
         let macro = ChannelMacro(
             name: newMacroName,
-            slots: c.slots, outputBus: c.outputBus,
+            slots: c.slots, output: c.output,
             volume: c.volume, isMuted: c.isMuted
         )
         var updated = c

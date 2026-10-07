@@ -24,6 +24,8 @@ messages, so any macro, song command or AI assistant can change any effect setti
 |---|---|---|
 | `/app/<channel>/volume` | 0 to 1 | Channel fader |
 | `/app/<channel>/mute` | 1 = muted, 0 = unmuted | Channel mute |
+| `/app/<channel>/output` | 1 to 32 | First hardware output (1-based): 3 = Out 3 (mono) or Out 3–4 (stereo) |
+| `/app/<channel>/stereoOut` | 1 = stereo, 0 = mono | Stereo pair from that output, or mono to that one output |
 | `/app/<channel>/<fx>/bypass` | 1 = bypassed, 0 = active | Bypass one effect |
 | `/app/<channel>/<fx>/<param>` | see §3 | Set one effect parameter |
 | `/app/engine/run` | 1 = start, 0 = stop | Start/stop the routing engine |
@@ -189,6 +191,7 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | Bypass the FET comp on channel 1 | `/app/ch1/fet/bypass` | 1 |
 | Delay of one beat at the song's tempo | `/app/Lead Vox/delay/time` | formula `60 / bpm` |
 | Mute a channel | `/app/Keys/mute` | 1 |
+| Send the lead vocal to Out 5 only (mono) | `/app/Lead Vox/output` + `/app/Lead Vox/stereoOut` | 5, then 0 |
 | Clear ring-out notches | `/app/Lead Vox/notch/clear` | 0 |
 
 A macro that changes several settings at once is a **group macro** of single-message
