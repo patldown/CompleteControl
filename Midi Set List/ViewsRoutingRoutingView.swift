@@ -478,7 +478,8 @@ struct FXSlotEditorSheet: View {
                     Button("Cancel", role: .cancel) {
                         // Ring-out and pitch tweaks change the running effect live; put them back
                         (liveUnit as? FeedbackNotchAudioUnit)?.kernel.applyParams(original.feedbackNotch)
-                        (liveUnit as? PitchGuideAudioUnit)?.kernel.applyParams(original.pitchGuide)
+                        (liveUnit as? PitchGuideAudioUnit)?.kernel
+                            .applyParams(original.pitchGuide.resolved(songKey: AudioRoutingEngine.shared.songKey))
                         dismiss()
                     }
                 }
@@ -755,16 +756,38 @@ private struct PitchGuideEditor: View {
             Text("Mono: corrects the first input of the channel. Put it before reverb and delay.")
         }
 
-        Section("Key") {
-            Picker("Key", selection: $params.key) {
+        Section {
+            Toggle("Follow Song Key", isOn: $params.songKeyDrive)
+            if params.songKeyDrive {
+                LabeledContent("Now") {
+                    Text(songKeyLabel).foregroundStyle(.secondary)
+                }
+            }
+            Picker(params.songKeyDrive ? "Fallback Key" : "Key", selection: $params.key) {
                 ForEach(0..<12, id: \.self) { Text(PitchGuideParams.noteNames[$0]).tag($0) }
             }
-            Picker("Scale", selection: $params.scale) {
+            Picker(params.songKeyDrive ? "Fallback Scale" : "Scale", selection: $params.scale) {
                 ForEach(PitchScale.allCases) { Text($0.displayName).tag($0) }
             }
             Picker("Voice Range", selection: $params.voiceRange) {
                 ForEach(VoiceRange.allCases) { Text($0.displayName).tag($0) }
             }
+        } header: {
+            Text("Key")
+        } footer: {
+            Text(params.songKeyDrive
+                 ? "Uses the key of the song loaded in Perform, including transpose. The fallback is used when the song has no key set."
+                 : "Only notes in this key and scale are targets.")
+        }
+
+        Section {
+            Toggle("Preserve Formants", isOn: $params.preserveFormants)
+        } header: {
+            Text("Voice Character")
+        } footer: {
+            Text(params.preserveFormants
+                 ? "Keeps the singer's natural tone when shifting. Adds about one more pitch cycle of latency (~4–8 ms)."
+                 : "Lowest latency. Tone shifts slightly along with pitch; fine for small corrections.")
         }
 
         Section {
@@ -798,7 +821,16 @@ private struct PitchGuideEditor: View {
         } footer: {
             Text("Higher Pickiness only corrects clear, steady sung notes. Raise the Gate until bleed from other instruments stops showing up in the Live meter.")
         }
-        .onChange(of: params) { kernel?.applyParams(params) }
+        .onChange(of: params) {
+            kernel?.applyParams(params.resolved(songKey: AudioRoutingEngine.shared.songKey))
+        }
+    }
+
+    private var songKeyLabel: String {
+        guard let key = AudioRoutingEngine.shared.songKey, key.pitchClass != nil else {
+            return "No song key — using fallback"
+        }
+        return "\(key.root) \(key.scale.rawValue)"
     }
 }
 
@@ -815,6 +847,10 @@ private struct PitchMeter: View {
                 Text(detected < 0 ? "—" : Self.describe(detected))
                     .monospacedDigit()
                     .foregroundStyle(detected < 0 ? .secondary : .primary)
+            }
+            LabeledContent("Latency") {
+                Text(String(format: "%.1f ms", Float(bitPattern: kernel.latencyMsBits.load(ordering: .relaxed))))
+                    .monospacedDigit().foregroundStyle(.secondary)
             }
             LabeledContent("Correcting") {
                 Text(target < 0 ? "No" : "→ \(Self.noteName(Int(target)))  \(String(format: "%+.0f", cents))¢")

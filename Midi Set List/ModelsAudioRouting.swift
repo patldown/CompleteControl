@@ -149,6 +149,7 @@ struct FeedbackNotchParams: Codable, Equatable {
 enum PitchScale: String, Codable, CaseIterable, Identifiable {
     case chromatic, major, naturalMinor, harmonicMinor, melodicMinor
     case dorian, mixolydian, majorPentatonic, minorPentatonic, blues
+    case phrygian, lydian, locrian
 
     var id: String { rawValue }
 
@@ -164,6 +165,27 @@ enum PitchScale: String, Codable, CaseIterable, Identifiable {
         case .majorPentatonic: "Major Pentatonic"
         case .minorPentatonic: "Minor Pentatonic"
         case .blues:           "Blues"
+        case .phrygian:        "Phrygian"
+        case .lydian:          "Lydian"
+        case .locrian:         "Locrian"
+        }
+    }
+
+    /// The pitch scale matching a song's key scale
+    init(_ scale: MusicalScale) {
+        switch scale {
+        case .major:           self = .major
+        case .minor:           self = .naturalMinor
+        case .harmonicMinor:   self = .harmonicMinor
+        case .melodicMinor:    self = .melodicMinor
+        case .majorPentatonic: self = .majorPentatonic
+        case .minorPentatonic: self = .minorPentatonic
+        case .blues:           self = .blues
+        case .dorian:          self = .dorian
+        case .phrygian:        self = .phrygian
+        case .lydian:          self = .lydian
+        case .mixolydian:      self = .mixolydian
+        case .locrian:         self = .locrian
         }
     }
 }
@@ -204,6 +226,9 @@ extension PitchScale {
         case .majorPentatonic: [0, 2, 4, 7, 9]
         case .minorPentatonic: [0, 3, 5, 7, 10]
         case .blues:           [0, 3, 5, 6, 7, 10]
+        case .phrygian:        [0, 1, 3, 5, 7, 8, 10]
+        case .lydian:          [0, 2, 4, 6, 7, 9, 11]
+        case .locrian:         [0, 1, 3, 5, 6, 8, 10]
         }
     }
 }
@@ -218,9 +243,10 @@ struct PitchGuideParams: Codable, Equatable {
     var pickiness: Float = 50           // %, 0...100; higher = only clear, steady notes
     var gateThreshold: Float = -45      // dBFS, -70...-20; quieter input (bleed) is ignored
     var voiceRange: VoiceRange = .mid
-    var songKeyDrive: Bool = false
-    var songKey: Int = 0
-    var songScale: PitchScale = .major
+    /// Use the loaded song's key and scale; `key`/`scale` are the fallback when it has none
+    var songKeyDrive: Bool = true
+    /// PSOLA shifting keeps the voice's character; costs one extra pitch period of latency
+    var preserveFormants: Bool = true
 
     init() {}
 
@@ -238,8 +264,16 @@ struct PitchGuideParams: Codable, Equatable {
         gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
         voiceRange = (try? c.decodeIfPresent(VoiceRange.self, forKey: .voiceRange)) ?? d.voiceRange
         songKeyDrive = try c.decodeIfPresent(Bool.self, forKey: .songKeyDrive) ?? d.songKeyDrive
-        songKey = try c.decodeIfPresent(Int.self, forKey: .songKey) ?? d.songKey
-        songScale = (try? c.decodeIfPresent(PitchScale.self, forKey: .songScale)) ?? d.songScale
+        preserveFormants = try c.decodeIfPresent(Bool.self, forKey: .preserveFormants) ?? d.preserveFormants
+    }
+
+    /// These params with key and scale taken from the song, when following it and it has a key
+    func resolved(songKey: MusicalKey?) -> PitchGuideParams {
+        guard songKeyDrive, let songKey, let pc = songKey.pitchClass else { return self }
+        var p = self
+        p.key = ((pc % 12) + 12) % 12
+        p.scale = PitchScale(songKey.scale)
+        return p
     }
 
     /// 12-bit mask of the pitch classes in key + scale (bit 0 = C)
@@ -251,7 +285,6 @@ struct PitchGuideParams: Codable, Equatable {
 extension PitchGuideParams {
     static let noteNames = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
     var keyName: String { PitchGuideParams.noteNames[key % 12] }
-    var songKeyName: String { PitchGuideParams.noteNames[songKey % 12] }
 }
 
 // MARK: - FX slot

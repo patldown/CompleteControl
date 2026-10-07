@@ -15,9 +15,14 @@
 //  gliding at Retune Speed. It lets go when the singer comes back within half the
 //  tolerance, changes note, or stops singing. Humanize slows the retune on held notes.
 //
-//  Shifting — two crossfading delay-line taps kept exactly one detected period apart
-//  (pitch-synchronous), so they stay in phase and don't comb. When idle the output
-//  settles on one tap: latency is one pitch period (~4–8 ms for most voices).
+//  Shifting, two modes:
+//    • Preserve Formants (PSOLA) — one-period-wide grains cut from the input every
+//      period and laid back down every period ÷ ratio. Each grain keeps its own waveform,
+//      so the voice's resonances (formants) stay put and only the pitch moves. Latency is
+//      two pitch periods (~8–17 ms for most voices).
+//    • Off — two crossfading delay-line taps kept one detected period apart. This
+//      resamples, so formants move with the pitch (fine for small fixes). Latency is one
+//      pitch period.
 //
 //  Strict real-time contract: no allocations, locks, or Swift runtime calls in process().
 //
@@ -38,6 +43,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     private let gateDBBits     = Atomic<UInt32>(Float(-45).bitPattern)
     private let minHzBits      = Atomic<UInt32>(Float(120).bitPattern)
     private let maxHzBits      = Atomic<UInt32>(Float(800).bitPattern)
+    private let formantsBits   = Atomic<Bool>(true)
 
     // MARK: - Meters (audio thread → main thread)
     /// Detected input note as fractional MIDI number; < 0 when nothing is being tracked
@@ -46,6 +52,8 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     let targetMidiBits     = Atomic<UInt32>(Float(-1).bitPattern)
     /// Correction being applied right now, in cents
     let correctionBits     = Atomic<UInt32>(Float(0).bitPattern)
+    /// Effect latency right now, in ms (depends on the singer's pitch and the mode)
+    let latencyMsBits      = Atomic<UInt32>(Float(0).bitPattern)
 
     // MARK: - Buffers (allocated once)
     private static let ringSize = 8_192                 // power of two; > 2 × max period at 96 kHz
@@ -56,6 +64,8 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     private let squares = UnsafeMutablePointer<Float>.allocate(capacity: maxLag * 2 + 4)
     private let corr = UnsafeMutablePointer<Float>.allocate(capacity: maxLag + 4)
     private let cmnd = UnsafeMutablePointer<Float>.allocate(capacity: maxLag + 4)
+    private let ola = UnsafeMutablePointer<Float>.allocate(capacity: ringSize)      // PSOLA output sum
+    private let olaWin = UnsafeMutablePointer<Float>.allocate(capacity: ringSize)   // PSOLA window sum
 
     // MARK: - Audio thread state
     private(set) var sampleRate: Double = 48_000
@@ -78,17 +88,25 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     private var dA: Double = 300, wA: Double = 600
     private var dB: Double = 0,   wB: Double = 600
 
+    // PSOLA
+    private var formantMode = true
+    private var psolaPrimed = false
+    private var nextMark: Double = 0        // output time of the next grain's centre
+    private var lastCenter: Double = 0      // input time the previous grain was cut around
+
     init() {
         ring.initialize(repeating: 0, count: Self.ringSize)
         frame.initialize(repeating: 0, count: Self.maxLag * 2 + 4)
         squares.initialize(repeating: 0, count: Self.maxLag * 2 + 4)
         corr.initialize(repeating: 0, count: Self.maxLag + 4)
         cmnd.initialize(repeating: 0, count: Self.maxLag + 4)
+        ola.initialize(repeating: 0, count: Self.ringSize)
+        olaWin.initialize(repeating: 0, count: Self.ringSize)
     }
 
     deinit {
         ring.deallocate(); frame.deallocate(); squares.deallocate()
-        corr.deallocate(); cmnd.deallocate()
+        corr.deallocate(); cmnd.deallocate(); ola.deallocate(); olaWin.deallocate()
     }
 
     // MARK: - Main thread API
@@ -99,6 +117,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         period = sr / 250
         wA = 2 * period; wB = wA
         dA = period; dB = 0
+        psolaPrimed = false
     }
 
     @MainActor func applyParams(_ p: PitchGuideParams) {
@@ -111,6 +130,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         gateDBBits.store(p.gateThreshold.bitPattern, ordering: .relaxed)
         minHzBits.store(p.voiceRange.minHz.bitPattern, ordering: .relaxed)
         maxHzBits.store(p.voiceRange.maxHz.bitPattern, ordering: .relaxed)
+        formantsBits.store(p.preserveFormants, ordering: .relaxed)
     }
 
     // MARK: - Render (audio thread only — no allocations, no runtime)
@@ -120,6 +140,14 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         guard !ptr.isEmpty, let d0 = ptr[0].mData else { return }
         let io = d0.assumingMemoryBound(to: Float.self)
         let mask = Self.ringSize - 1
+
+        let formants = formantsBits.load(ordering: .relaxed)
+        if formants != formantMode {
+            // Switching modes: start the new shifter clean (a brief glitch is expected)
+            formantMode = formants
+            psolaPrimed = false
+            wA = 2 * period; wB = wA; dA = period; dB = 0
+        }
 
         for i in 0..<frameCount {
             ring[writeIndex & mask] = io[i]
@@ -134,6 +162,18 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
             // Glide toward the desired correction (Retune Speed)
             correction += smoothCoeff * (desiredCents - correction)
             if (i & 15) == 0 { ratio = exp2(Double(correction) / 1200) }
+
+            if formantMode {
+                let t = writeIndex - 1
+                if !psolaPrimed { primePSOLA(at: t) }
+                emitGrains(upTo: t)
+                let idx = t & mask
+                var y = ola[idx] / max(olaWin[idx], 0.25)
+                ola[idx] = 0; olaWin[idx] = 0
+                if y.isNaN || y.isInfinite { y = 0 }
+                io[i] = y
+                continue
+            }
 
             var r = ratio
             if desiredCents == 0 && abs(correction) < 0.1 {
@@ -164,6 +204,54 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         }
 
         correctionBits.store(correction.bitPattern, ordering: .relaxed)
+        let latencySamples = (formantMode ? 2 : 1) * period
+        latencyMsBits.store(Float(latencySamples / sampleRate * 1000).bitPattern, ordering: .relaxed)
+    }
+
+    // MARK: - PSOLA (formant-preserving) helpers
+
+    private func primePSOLA(at t: Int) {
+        ola.update(repeating: 0, count: Self.ringSize)
+        olaWin.update(repeating: 0, count: Self.ringSize)
+        let h = Double(grainHalf())
+        nextMark = Double(t) + h
+        lastCenter = Double(t) - 2 * h - 2
+        psolaPrimed = true
+    }
+
+    /// Grain half-length: one detected period, so each grain spans two periods
+    @inline(__always) private func grainHalf() -> Int {
+        max(16, min(Self.maxLag, Int(period.rounded())))
+    }
+
+    /// Lays down every grain whose span starts at or before output time `t`.
+    private func emitGrains(upTo t: Int) {
+        let mask = Self.ringSize - 1
+        while true {
+            let h = grainHalf()
+            let mark = Int(nextMark.rounded())
+            guard mark - h <= t else { break }
+
+            // Cut the grain around an input point ~2 periods back, stepping from the last
+            // cut by whole periods so consecutive grains line up in phase. Repeating a period
+            // (shifting up) or skipping one (shifting down) is how PSOLA keeps time.
+            let target = Double(mark - 2 * h - 2)
+            var center = lastCenter + ((target - lastCenter) / period).rounded() * period
+            while center + Double(h) + 2 > Double(t) { center -= period }
+            if center < target - 4 * period { center = target }   // lost sync (silence, new note)
+            lastCenter = center
+
+            let hD = Double(h)
+            for j in -h...h {
+                let w = 0.5 + 0.5 * cos(Double.pi * Double(j) / hD)
+                let x = readAbsolute(center + Double(j))
+                let o = (mark + j) & mask
+                ola[o] += Float(w * x)
+                olaWin[o] += Float(w)
+            }
+            // Grains closer together = higher pitch; the waveform inside each is untouched
+            nextMark += period / max(0.5, min(2, ratio))
+        }
     }
 
     // MARK: - Shifter helpers
@@ -180,8 +268,12 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
 
     /// 4-point Hermite read `d` samples behind the newest sample (+2 so all 4 points exist)
     @inline(__always) private func read(_ d: Double) -> Double {
+        readAbsolute(Double(writeIndex - 1) - (d + 2))
+    }
+
+    /// 4-point Hermite read at absolute input time `pos` (needs pos + 2 already written)
+    @inline(__always) private func readAbsolute(_ pos: Double) -> Double {
         let mask = Self.ringSize - 1
-        let pos = Double(writeIndex - 1) - (d + 2)
         let i = Int(pos.rounded(.down))
         let t = pos - Double(i)
         let xm1 = Double(ring[(i - 1) & mask]), x0 = Double(ring[i & mask])

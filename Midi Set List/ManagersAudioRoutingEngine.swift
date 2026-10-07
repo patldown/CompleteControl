@@ -53,6 +53,9 @@ final class AudioRoutingEngine {
     private(set) var roundTripLatency: TimeInterval?
     private(set) var sampleRate: Double?
 
+    /// Key of the song loaded in Perform; Pitch Guide slots set to follow it use it
+    private(set) var songKey: MusicalKey?
+
     private var engine: AVAudioEngine?
     private var graphs: [UUID: ChannelGraph] = [:]
     private let store = AudioRoutingStore.shared
@@ -239,7 +242,8 @@ final class AudioRoutingEngine {
         case .pitchGuide:
             let effect = AVAudioUnitEffect(
                 audioComponentDescription: PitchGuideAudioUnit.componentDescription)
-            (effect.auAudioUnit as? PitchGuideAudioUnit)?.kernel.applyParams(slot.pitchGuide)
+            (effect.auAudioUnit as? PitchGuideAudioUnit)?.kernel
+                .applyParams(slot.pitchGuide.resolved(songKey: songKey))
             return effect
         }
     }
@@ -275,6 +279,19 @@ final class AudioRoutingEngine {
         return effect.auAudioUnit
     }
 
+    /// A song loaded (or its transpose changed): retarget every Pitch Guide following the song key
+    func followSongKey(_ key: MusicalKey?) {
+        guard key != songKey else { return }
+        songKey = key
+        for channel in store.channels {
+            guard let graph = graphs[channel.id] else { continue }
+            for (i, slot) in channel.slots.enumerated()
+            where slot.type == .pitchGuide && slot.pitchGuide.songKeyDrive && i < graph.fxNodes.count {
+                applySlotParams(slot, to: graph.fxNodes[i])
+            }
+        }
+    }
+
     func applyVolume(of channel: AudioChannel) {
         graphs[channel.id]?.inputMixer.volume = channel.isMuted ? 0 : channel.volume
     }
@@ -306,7 +323,7 @@ final class AudioRoutingEngine {
                 .kernel.applyParams(slot.feedbackNotch)
         case .pitchGuide:
             ((node as? AVAudioUnitEffect)?.auAudioUnit as? PitchGuideAudioUnit)?
-                .kernel.applyParams(slot.pitchGuide)
+                .kernel.applyParams(slot.pitchGuide.resolved(songKey: songKey))
         case nil:
             break
         }
