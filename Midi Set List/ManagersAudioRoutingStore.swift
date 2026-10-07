@@ -88,9 +88,11 @@ final class AudioRoutingStore {
 
     func refreshHardwareInfo() {
         let session = AVAudioSession.sharedInstance()
-        let externalTypes: Set<AVAudioSession.Port> = [.usbAudio, .lineIn, .thunderbolt, .headsetMic]
-        isExternalInterfaceConnected = session.currentRoute.inputs
-            .contains { externalTypes.contains($0.portType) }
+        // Use availableInputs (not currentRoute.inputs) so detection works regardless of
+        // the active session category — currentRoute.inputs is empty in .playback mode.
+        let externalTypes: Set<AVAudioSession.Port> = [.usbAudio, .lineIn, .thunderbolt]
+        isExternalInterfaceConnected = session.availableInputs?
+            .contains { externalTypes.contains($0.portType) } ?? false
 
         let outChannels = session.maximumOutputNumberOfChannels
         availableOutputBusPairCount = outChannels > 0 ? max(1, outChannels / 2) : 1
