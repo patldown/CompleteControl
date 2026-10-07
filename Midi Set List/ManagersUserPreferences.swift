@@ -63,6 +63,7 @@ final class UserPreferences: ObservableObject {
         static let metronomeVolume = "metronomeVolume"
         static let metronomeAutoStart = "metronomeAutoStart"
         static let metronomeCountInOnly = "metronomeCountInOnly"
+        static let metronomeOutputBus = "metronomeOutputBus"
     }
 
     static let scrollSpeedRange: ClosedRange<Double> = 5...100
@@ -122,6 +123,12 @@ final class UserPreferences: ObservableObject {
     @Published var metronomeCountInOnly: Bool {
         didSet { store(metronomeCountInOnly, Key.metronomeCountInOnly) }
     }
+    /// Output channel pair for the click: 0 = default (Ch 1-2 via main mixer),
+    /// 1 = Ch 3-4, 2 = Ch 5-6, etc. Falls back to default when the interface
+    /// doesn't have enough channels.
+    @Published var metronomeOutputBus: Int {
+        didSet { store(metronomeOutputBus, Key.metronomeOutputBus) }
+    }
 
     /// Views picked on Perform while the override is on: kept for this visit only, so the
     /// per-song memory stays exactly as it was
@@ -144,6 +151,7 @@ final class UserPreferences: ObservableObject {
         metronomeVolume = 0.8
         metronomeAutoStart = true
         metronomeCountInOnly = false
+        metronomeOutputBus = 0
         load()
 
         cancellable = NotificationCenter.default
@@ -261,6 +269,9 @@ final class UserPreferences: ObservableObject {
         }
         if let countIn = (value(Key.metronomeCountInOnly) as? NSNumber)?.boolValue {
             metronomeCountInOnly = countIn
+        }
+        if let bus = (value(Key.metronomeOutputBus) as? NSNumber)?.intValue {
+            metronomeOutputBus = max(0, bus)
         }
     }
 

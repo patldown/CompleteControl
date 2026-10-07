@@ -19,6 +19,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Audio from your connected interface is routed through the AUv3 effects chain for live processing.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_apple-midi._udp</string>

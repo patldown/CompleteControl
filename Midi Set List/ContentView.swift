@@ -12,6 +12,8 @@ struct ContentView: View {
     @State private var navigation = AppNavigation()
     @State private var pendingImport: PendingImport?
     @State private var importError: String?
+    // Observed so the Routing tab appears/disappears as the interface connects/disconnects
+    private let routingStore = AudioRoutingStore.shared
 
     private struct PendingImport: Identifiable {
         let id = UUID()
@@ -24,6 +26,13 @@ struct ContentView: View {
                 PerformView()
             }
             .accessibilityIdentifier("tab-perform")
+
+            if routingStore.isExternalInterfaceConnected {
+                Tab("Routing", systemImage: "slider.horizontal.3", value: "routing") {
+                    RoutingView()
+                }
+                .accessibilityIdentifier("tab-routing")
+            }
 
             Tab("Set Lists", systemImage: "list.bullet", value: "setlists") {
                 SetListsView()

@@ -64,7 +64,7 @@ final class Metronome {
         if countIn {
             let bar = HostTime.seconds(ticks: Double(beatTicks) * Double(self.beatsPerBar))
             let untilStart = HostTime.seconds(ticks: Double(startHostTime) - Double(mach_absolute_time()))
-            countInTask = Task { [weak self] in
+            countInTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(max(0, untilStart) + bar))
                 guard !Task.isCancelled else { return }
                 self?.stop()
@@ -90,27 +90,52 @@ final class Metronome {
     /// Time from pressing start to the first click: long enough for the audio to get going
     static let leadIn: Double = 0.12
 
+    /// Number of stereo output channel pairs available on the current audio route.
+    /// 1 = standard stereo; 2+ = multi-channel interface (Ch 1-2, Ch 3-4, …).
+    static var currentOutputBusPairCount: Int {
+        let n = AVAudioSession.sharedInstance().maximumOutputNumberOfChannels
+        return n > 0 ? max(1, n / 2) : 1
+    }
+
     // MARK: Audio
 
     private func startAudio() throws {
         let session = AVAudioSession.sharedInstance()
-        // Mix with others: don't silence a backing track or reference playing elsewhere
-        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        // Use playAndRecord when the routing engine is active (it needs input access).
+        // Otherwise playback is sufficient for the click output.
+        let category: AVAudioSession.Category = AudioRoutingEngine.shared.isRunning
+            ? .playAndRecord : .playback
+        try session.setCategory(category, mode: .default, options: [.mixWithOthers, .defaultToSpeaker])
         try session.setActive(true)
         routeWarning = Self.wirelessWarning(for: session.currentRoute)
 
         let engine = AVAudioEngine()
         let sampleRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
-        guard sampleRate > 0, let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
+        guard sampleRate > 0, let monoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
         else { throw MetronomeError.noOutput }
 
         render.configure(startHostTime: startHostTime, beatTicks: beatTicks, beatsPerBar: beatsPerBar,
                          maxBeats: isCountIn ? beatsPerBar : nil,
                          volume: Float(prefs.metronomeVolume),
                          outputLatency: session.outputLatency, sampleRate: sampleRate)
-        let source = Self.makeSourceNode(render: render, format: format)
+        let source = Self.makeSourceNode(render: render, format: monoFormat)
         engine.attach(source)
-        engine.connect(source, to: engine.mainMixerNode, format: format)
+
+        let targetBus = prefs.metronomeOutputBus
+        let busPairCount = Self.currentOutputBusPairCount
+        if targetBus > 0, targetBus < busPairCount,
+           let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) {
+            // Bypass the main mixer and send the click directly to the chosen channel pair.
+            // An upmix mixer expands mono to stereo before the output node.
+            let upmix = AVAudioMixerNode()
+            engine.attach(upmix)
+            engine.connect(source, to: upmix, format: monoFormat)
+            engine.connect(upmix, to: engine.outputNode, fromBus: 0,
+                           toBus: AVAudioNodeBus(targetBus), format: stereoFormat)
+        } else {
+            engine.connect(source, to: engine.mainMixerNode, format: monoFormat)
+        }
+
         engine.prepare()
         try engine.start()
         self.engine = engine

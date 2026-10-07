@@ -117,11 +117,21 @@ struct SettingsView: View {
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Click Volume")
+
+                let busPairCount = Metronome.currentOutputBusPairCount
+                if busPairCount > 1 {
+                    Picker("Click Output", selection: $prefs.metronomeOutputBus) {
+                        Text("Channels 1-2 (Default)").tag(0)
+                        ForEach(1..<busPairCount, id: \.self) { bus in
+                            Text("Channels \(bus * 2 + 1)-\(bus * 2 + 2)").tag(bus)
+                        }
+                    }
+                }
             }
         } header: {
             Text("Metronome")
         } footer: {
-            Text("Songs marked Click Track start the click when they load in Perform; Just Count In plays one bar and stops. The Click button on Perform starts it on any song with a BPM, joining MIDI clock's bars when that's running. Turn Click Sound off to see just the beat. For an in-ear click use a wired connection — headphone jack or a USB / Lightning audio interface. Bluetooth and AirPlay add a delay the click can't make up for.")
+            Text("Songs marked Click Track start the click when they load in Perform; Just Count In plays one bar and stops. The Click button on Perform starts it on any song with a BPM, joining MIDI clock's bars when that's running. Turn Click Sound off to see just the beat. For an in-ear click use a wired connection — headphone jack or a USB / Lightning audio interface. Bluetooth and AirPlay add a delay the click can't make up for.\n\nWith a multi-channel interface, Click Output lets you send the click to a specific channel pair — for example, Channels 3-4 for an IEM feed — while Apple Music and other audio stay on Channels 1-2.")
         }
     }
 

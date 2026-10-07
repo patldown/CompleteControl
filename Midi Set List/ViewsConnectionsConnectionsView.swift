@@ -188,6 +188,26 @@ struct ConnectionsView: View {
                         Text("Mixers and other network gear, such as a Behringer XR18 or X32. Swipe a device to edit or delete it.")
                     }
                 }
+
+                Section {
+                    NavigationLink {
+                        AUv3HostView()
+                    } label: {
+                        HStack {
+                            Label("Audio FX Rack", systemImage: "puzzlepiece.extension")
+                            Spacer()
+                            if AUv3Host.shared.isRunning {
+                                Text("Running")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Audio")
+                } footer: {
+                    Text("Route audio from a connected interface through up to 4 AUv3 effects and send to the same or a different output channel pair.")
+                }
             }
             .navigationTitle("Connections")
             .offlineStatusBadge()

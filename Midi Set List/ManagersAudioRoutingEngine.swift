@@ -1,0 +1,276 @@
+//
+//  AudioRoutingEngine.swift
+//  Midi Set List
+//
+//  Manages a single AVAudioEngine graph built from the user's AudioChannel list.
+//  Graph topology per channel:
+//    inputNode[bus N] → inputMixer → [FX1] → [FX2] → [FX3] → [FX4] → outputBusMixer → outputNode[bus M]
+//
+//  All built-in FX nodes are in-process: parameter updates are live without engine restart.
+//  LevelRider is also in-process via a registered AUAudioUnit subclass loaded with .loadInProcess.
+//  Only changing an FX *type* in a slot requires a restart (different node class needed).
+//
+//  Note: starting this engine sets AVAudioSession to .playAndRecord. The Metronome uses
+//  the same category when this engine is running — see ManagersMetronome.swift.
+//
+
+import AVFoundation
+import Observation
+
+@Observable
+@MainActor
+final class AudioRoutingEngine {
+    static let shared = AudioRoutingEngine()
+
+    private(set) var isRunning = false
+    private(set) var lastError: String?
+    /// Set true when a slot's FX type changed — a restart applies the new graph.
+    var needsRestart = false
+
+    private var engine: AVAudioEngine?
+    private var graphs: [UUID: ChannelGraph] = [:]
+    private let store = AudioRoutingStore.shared
+
+    private init() {
+        AUAudioUnit.registerSubclass(
+            LevelRiderAudioUnit.self,
+            as: LevelRiderAudioUnit.componentDescription,
+            name: "LevelRider",
+            version: 1
+        )
+    }
+
+    // MARK: - Lifecycle
+
+    func start() async {
+        stop()
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
+            try session.setActive(true)
+
+            let eng = AVAudioEngine()
+            guard let stereo = AVAudioFormat(
+                standardFormatWithSampleRate: eng.outputNode.outputFormat(forBus: 0).sampleRate,
+                channels: 2
+            ), stereo.sampleRate > 0 else { throw RoutingError.noOutput }
+
+            try await buildGraph(in: eng, format: stereo)
+            eng.prepare()
+            try eng.start()
+            engine = eng
+            isRunning = true
+            needsRestart = false
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func stop() {
+        engine?.stop()
+        engine = nil
+        graphs = [:]
+        isRunning = false
+    }
+
+    // MARK: - Graph construction
+
+    private func buildGraph(in eng: AVAudioEngine, format: AVAudioFormat) async throws {
+        // One output-bus mixer per hardware output pair — multiple channels targeting
+        // the same output pair share a mixer rather than fighting over the connection.
+        var outputMixers: [Int: AVAudioMixerNode] = [:]
+
+        for channel in store.channels {
+            let inputMixer = AVAudioMixerNode()
+            eng.attach(inputMixer)
+            inputMixer.volume = channel.isMuted ? 0 : channel.volume
+
+            let inputBus = AVAudioNodeBus(channel.inputIndex)
+            let inputFormat = eng.inputNode.outputFormat(forBus: inputBus)
+            let connFormat = inputFormat.sampleRate > 0 ? inputFormat : format
+            eng.connect(eng.inputNode, to: inputMixer,
+                        fromBus: inputBus, toBus: 0, format: connFormat)
+
+            if channel.isStereoLinked {
+                let nextBus = AVAudioNodeBus(channel.inputIndex + 1)
+                let nextFmt = eng.inputNode.outputFormat(forBus: nextBus)
+                if nextFmt.sampleRate > 0 {
+                    eng.connect(eng.inputNode, to: inputMixer,
+                                fromBus: nextBus, toBus: 1, format: nextFmt)
+                }
+            }
+
+            var fxNodes: [AVAudioNode?] = []
+            var tail: AVAudioNode = inputMixer
+            for slot in channel.slots {
+                if let node = await makeNode(for: slot) {
+                    eng.attach(node)
+                    eng.connect(tail, to: node, format: format)
+                    tail = node
+                    fxNodes.append(node)
+                } else {
+                    fxNodes.append(nil)
+                }
+            }
+
+            let busMixer: AVAudioMixerNode
+            if let existing = outputMixers[channel.outputBus] {
+                busMixer = existing
+            } else {
+                busMixer = AVAudioMixerNode()
+                eng.attach(busMixer)
+                let safeBus = min(channel.outputBus, store.availableOutputBusPairCount - 1)
+                eng.connect(busMixer, to: eng.outputNode,
+                            fromBus: 0, toBus: AVAudioNodeBus(safeBus), format: format)
+                outputMixers[channel.outputBus] = busMixer
+            }
+            eng.connect(tail, to: busMixer, format: format)
+
+            graphs[channel.id] = ChannelGraph(inputMixer: inputMixer, fxNodes: fxNodes,
+                                               outputBus: channel.outputBus)
+        }
+    }
+
+    // MARK: - Node factory
+
+    private func makeNode(for slot: ChannelFXSlot) async -> AVAudioNode? {
+        guard let type = slot.type, !slot.isBypassed else { return nil }
+        switch type {
+        case .gain:
+            let mixer = AVAudioMixerNode()
+            mixer.volume = slot.gain.volume
+            mixer.pan = slot.gain.pan
+            return mixer
+        case .eq3Band:
+            let eq = AVAudioUnitEQ(numberOfBands: 3)
+            applyEQ(slot.eq, to: eq)
+            return eq
+        case .reverb:
+            let rv = AVAudioUnitReverb()
+            applyReverb(slot.reverb, to: rv)
+            return rv
+        case .delay:
+            let dl = AVAudioUnitDelay()
+            applyDelay(slot.delay, to: dl)
+            return dl
+        case .levelRider:
+            let params = slot.levelRider
+            return try? await instantiateInProcess(LevelRiderAudioUnit.componentDescription) { unit in
+                (unit.auAudioUnit as? LevelRiderAudioUnit)?.kernel.applyParams(params)
+            }
+        case .pitchGuide:
+            return nil  // DSP not yet implemented; slot passes signal through unaffected
+        }
+    }
+
+    private func instantiateInProcess(
+        _ desc: AudioComponentDescription,
+        configure: @escaping (AVAudioUnit) -> Void
+    ) async throws -> AVAudioUnit {
+        try await withCheckedThrowingContinuation { continuation in
+            AVAudioUnit.instantiate(with: desc, options: []) { unit, error in
+                if let unit {
+                    configure(unit)
+                    continuation.resume(returning: unit)
+                } else {
+                    continuation.resume(throwing: error ?? RoutingError.instantiationFailed)
+                }
+            }
+        }
+    }
+
+    // MARK: - Live parameter application
+
+    /// Applies a macro to a running channel without stopping the engine.
+    /// Only volume, mute, and same-type FX params update live.
+    /// If any slot's FX type changes, `needsRestart` is set instead.
+    func applyMacro(_ macro: ChannelMacro, to channelID: UUID) {
+        guard var channel = store.channels.first(where: { $0.id == channelID }) else { return }
+        let previousTypes = channel.slots.map(\.type)
+        channel.slots = macro.slots
+        channel.outputBus = macro.outputBus
+        channel.volume = macro.volume
+        channel.isMuted = macro.isMuted
+        store.update(channel)
+
+        if macro.slots.map(\.type) != previousTypes { needsRestart = true }
+
+        guard let graph = graphs[channelID] else { return }
+        graph.inputMixer.volume = macro.isMuted ? 0 : macro.volume
+        for (i, slot) in macro.slots.enumerated() where i < graph.fxNodes.count {
+            applySlotParams(slot, to: graph.fxNodes[i])
+        }
+    }
+
+    func applyVolume(of channel: AudioChannel) {
+        graphs[channel.id]?.inputMixer.volume = channel.isMuted ? 0 : channel.volume
+    }
+
+    private func applySlotParams(_ slot: ChannelFXSlot, to node: AVAudioNode?) {
+        guard let node else { return }
+        switch slot.type {
+        case .gain:
+            if let m = node as? AVAudioMixerNode { m.volume = slot.gain.volume; m.pan = slot.gain.pan }
+        case .eq3Band:
+            if let eq = node as? AVAudioUnitEQ { applyEQ(slot.eq, to: eq) }
+        case .reverb:
+            if let rv = node as? AVAudioUnitReverb { rv.wetDryMix = slot.reverb.wetDryMix }
+        case .delay:
+            if let dl = node as? AVAudioUnitDelay { applyDelay(slot.delay, to: dl) }
+        case .levelRider:
+            if let unit = node as? AVAudioUnit,
+               let au = unit.auAudioUnit as? LevelRiderAudioUnit {
+                au.kernel.applyParams(slot.levelRider)
+            }
+        case .pitchGuide:
+            break
+        case nil:
+            break
+        }
+    }
+
+    // MARK: - FX parameter helpers
+
+    private func applyEQ(_ p: EQ3BandParams, to eq: AVAudioUnitEQ) {
+        let b = eq.bands
+        b[0].filterType = .lowShelf;   b[0].frequency = p.lowShelfFrequency
+        b[0].gain = p.lowShelfGain;    b[0].bypass = false
+        b[1].filterType = .parametric; b[1].frequency = p.midFrequency
+        b[1].gain = p.midGain;         b[1].bandwidth = p.midBandwidth; b[1].bypass = false
+        b[2].filterType = .highShelf;  b[2].frequency = p.highShelfFrequency
+        b[2].gain = p.highShelfGain;   b[2].bypass = false
+    }
+
+    private func applyReverb(_ p: ReverbParams, to rv: AVAudioUnitReverb) {
+        if let preset = AVAudioUnitReverbPreset(rawValue: p.roomPreset) { rv.loadFactoryPreset(preset) }
+        rv.wetDryMix = p.wetDryMix
+    }
+
+    private func applyDelay(_ p: DelayParams, to dl: AVAudioUnitDelay) {
+        dl.delayTime = p.delayTime
+        dl.feedback = p.feedback
+        dl.lowPassCutoff = p.lowPassCutoff
+        dl.wetDryMix = p.wetDryMix
+    }
+}
+
+// MARK: - Supporting types
+
+private struct ChannelGraph {
+    let inputMixer: AVAudioMixerNode
+    let fxNodes: [AVAudioNode?]
+    let outputBus: Int
+}
+
+enum RoutingError: LocalizedError {
+    case noOutput
+    case instantiationFailed
+    var errorDescription: String? {
+        switch self {
+        case .noOutput:            "No audio output available."
+        case .instantiationFailed: "Failed to instantiate audio effect."
+        }
+    }
+}
