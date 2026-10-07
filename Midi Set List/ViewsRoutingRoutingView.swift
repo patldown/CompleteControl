@@ -1031,7 +1031,7 @@ struct MetronomeStripView: View {
                     Spacer()
                     Picker("Output", selection: Binding(
                         get: { prefs.metronomeOutput },
-                        set: { prefs.metronomeOutput = $0 }
+                        set: { prefs.metronomeOutput = $0; metronome.applyOutput() }
                     )) {
                         Section("Stereo") {
                             ForEach(store.outputRoutes.filter(\.stereo), id: \.self) { Text($0.label).tag($0) }

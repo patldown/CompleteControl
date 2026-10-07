@@ -87,6 +87,13 @@ final class Metronome {
         render.volumeBits.store(Float(prefs.metronomeVolume).bitPattern, ordering: .relaxed)
     }
 
+    /// Moves the click to the output chosen in preferences — instantly, even mid-song
+    func applyOutput() {
+        let route = prefs.metronomeOutput
+        render.outputChannel.store(route.channel, ordering: .relaxed)
+        render.outputStereo.store(route.stereo, ordering: .relaxed)
+    }
+
     /// Time from pressing start to the first click: long enough for the audio to get going
     static let leadIn: Double = 0.12
 
@@ -115,37 +122,28 @@ final class Metronome {
         try session.setActive(true)
         routeWarning = Self.wirelessWarning(for: session.currentRoute)
 
+        // Every output channel the interface has, so the click can move to any of them live
+        try? session.setPreferredOutputNumberOfChannels(session.maximumOutputNumberOfChannels)
         let engine = AVAudioEngine()
         let sampleRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
-        guard sampleRate > 0, let monoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
-        else { throw MetronomeError.noOutput }
+        let channels = engine.outputNode.outputFormat(forBus: 0).channelCount
+        // More than two channels needs an explicit layout: discrete, in hardware order
+        let outputFormat: AVAudioFormat? = channels <= 2
+            ? AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: max(1, channels))
+            : AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | channels)
+                .map { AVAudioFormat(standardFormatWithSampleRate: sampleRate, channelLayout: $0) }
+        guard sampleRate > 0, let outputFormat else { throw MetronomeError.noOutput }
 
         render.configure(startHostTime: startHostTime, beatTicks: beatTicks, beatsPerBar: beatsPerBar,
                          maxBeats: isCountIn ? beatsPerBar : nil,
                          volume: Float(prefs.metronomeVolume),
                          outputLatency: session.outputLatency, sampleRate: sampleRate)
-        let source = Self.makeSourceNode(render: render, format: monoFormat)
+        applyOutput()
+        // The source renders every hardware output channel and writes the click only on the
+        // chosen one(s), so moving the click is an atomic switch — no channel map, no restart
+        let source = Self.makeSourceNode(render: render, format: outputFormat)
         engine.attach(source)
-
-        engine.connect(source, to: engine.mainMixerNode, format: monoFormat)
-
-        // An interface's outputs are one multichannel bus, so the click's output is chosen
-        // with the output unit's channel map (index = hardware channel, value = engine
-        // channel), not by connecting to "bus N". Stereo on Ch 1–2 needs no map.
-        let route = prefs.metronomeOutput
-        if route.channel > 0 || !route.stereo {
-            try? session.setPreferredOutputNumberOfChannels(session.maximumOutputNumberOfChannels)
-            let hardwareChannels = Int(engine.outputNode.outputFormat(forBus: 0).channelCount)
-            let lastNeeded = route.channel + (route.stereo ? 1 : 0)
-            if lastNeeded < hardwareChannels,
-               let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) {
-                var map = [NSNumber](repeating: -1, count: hardwareChannels)
-                map[route.channel] = 0                              // the click is mono: left carries it
-                if route.stereo { map[route.channel + 1] = 1 }
-                engine.outputNode.auAudioUnit.channelMap = map
-                engine.connect(engine.mainMixerNode, to: engine.outputNode, format: stereoFormat)
-            }
-        }
+        engine.connect(source, to: engine.outputNode, format: outputFormat)
 
         engine.prepare()
         try engine.start()
@@ -180,6 +178,9 @@ final class Metronome {
 nonisolated final class MetronomeRender: @unchecked Sendable {
     let active = Atomic<Bool>(false)
     let volumeBits = Atomic<UInt32>(Float(0.8).bitPattern)
+    /// First output channel (0-based) and whether the click also goes on the next one
+    let outputChannel = Atomic<Int>(0)
+    let outputStereo = Atomic<Bool>(true)
 
     // Written before the engine starts, then read only on the audio thread
     private var startHostTime: Double = 0
@@ -225,6 +226,11 @@ nonisolated final class MetronomeRender: @unchecked Sendable {
         }
         let volume = Float(bitPattern: volumeBits.load(ordering: .relaxed))
         let clickLength = Int(clickSeconds * sampleRate)
+        // Which output channels carry the click; past the interface's last channel → Ch 1–2
+        var first = outputChannel.load(ordering: .relaxed)
+        var stereo = outputStereo.load(ordering: .relaxed)
+        if first + (stereo ? 1 : 0) >= buffers.count { first = 0; stereo = true }
+        let last = min(buffers.count - 1, stereo ? first + 1 : first)
 
         // When this buffer's first sample is heard: its output time plus the output's delay
         let hostTimeValid = timeStamp.mFlags.contains(.hostTimeValid)
@@ -259,8 +265,8 @@ nonisolated final class MetronomeRender: @unchecked Sendable {
                 phase += 2 * .pi * frequency / sampleRate
                 clickSample += 1
             }
-            for buffer in buffers {
-                buffer.mData?.assumingMemoryBound(to: Float.self)[frame] = value
+            for b in 0..<buffers.count {
+                buffers[b].mData?.assumingMemoryBound(to: Float.self)[frame] = b >= first && b <= last ? value : 0
             }
         }
         isSilence.pointee = false

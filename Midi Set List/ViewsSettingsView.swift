@@ -122,7 +122,7 @@ struct SettingsView: View {
                 if outputCount > 2 {
                     Picker("Click Output", selection: Binding(
                         get: { prefs.metronomeOutput },
-                        set: { prefs.metronomeOutput = $0 }
+                        set: { prefs.metronomeOutput = $0; Metronome.shared.applyOutput() }
                     )) {
                         Section("Stereo") {
                             ForEach(Array(stride(from: 0, to: outputCount - 1, by: 2)), id: \.self) { ch in
