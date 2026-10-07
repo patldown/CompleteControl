@@ -15,6 +15,10 @@
 //  gliding at Retune Speed. It lets go when the singer comes back within half the
 //  tolerance, changes note, or stops singing. Humanize slows the retune on held notes.
 //
+//  Transpose adds a fixed shift on top of the correction, through the same shifter, so
+//  tuning + transposing costs no extra latency. The Formant knob moves the voice's
+//  resonances up (smaller/brighter) or down (bigger/darker) on top of that.
+//
 //  Shifting, two modes:
 //    • Preserve Formants (PSOLA) — one-period-wide grains cut from the input every
 //      period and laid back down every period ÷ ratio. Each grain keeps its own waveform,
@@ -43,7 +47,9 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     private let gateDBBits     = Atomic<UInt32>(Float(-45).bitPattern)
     private let minHzBits      = Atomic<UInt32>(Float(120).bitPattern)
     private let maxHzBits      = Atomic<UInt32>(Float(800).bitPattern)
-    private let formantsBits   = Atomic<Bool>(true)
+    private let formantsBits   = Atomic<Bool>(true)                  // automatic formant preservation
+    private let transposeBits  = Atomic<UInt32>(Float(0).bitPattern)  // semitones
+    private let formantBits    = Atomic<UInt32>(Float(0).bitPattern)  // semitones, manual offset
 
     // MARK: - Meters (audio thread → main thread)
     /// Detected input note as fractional MIDI number; < 0 when nothing is being tracked
@@ -93,6 +99,8 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     private var psolaPrimed = false
     private var nextMark: Double = 0        // output time of the next grain's centre
     private var lastCenter: Double = 0      // input time the previous grain was cut around
+    private var grainLatency: Double = 0    // samples, of the last grain laid down
+    private var formantFactor: Double = 1   // input samples read per output sample within a grain
 
     init() {
         ring.initialize(repeating: 0, count: Self.ringSize)
@@ -131,6 +139,8 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         minHzBits.store(p.voiceRange.minHz.bitPattern, ordering: .relaxed)
         maxHzBits.store(p.voiceRange.maxHz.bitPattern, ordering: .relaxed)
         formantsBits.store(p.preserveFormants, ordering: .relaxed)
+        transposeBits.store(Float(p.transpose).bitPattern, ordering: .relaxed)
+        formantBits.store(p.formantShift.bitPattern, ordering: .relaxed)
     }
 
     // MARK: - Render (audio thread only — no allocations, no runtime)
@@ -141,7 +151,13 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         let io = d0.assumingMemoryBound(to: Float.self)
         let mask = Self.ringSize - 1
 
-        let formants = formantsBits.load(ordering: .relaxed)
+        let autoFormants = formantsBits.load(ordering: .relaxed)
+        let formantSemis = Double(Float(bitPattern: formantBits.load(ordering: .relaxed)))
+        let transposeCents = Double(Float(bitPattern: transposeBits.load(ordering: .relaxed))) * 100
+        let manualFormant = exp2(max(-12, min(12, formantSemis)) / 12)
+        // Grains are needed whenever formants are controlled; plain auto-off with no offset
+        // uses the lower-latency taps (formants then follow the pitch, like tape)
+        let formants = autoFormants || abs(formantSemis) > 0.01
         if formants != formantMode {
             // Switching modes: start the new shifter clean (a brief glitch is expected)
             formantMode = formants
@@ -161,7 +177,12 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
 
             // Glide toward the desired correction (Retune Speed)
             correction += smoothCoeff * (desiredCents - correction)
-            if (i & 15) == 0 { ratio = exp2(Double(correction) / 1200) }
+            if (i & 15) == 0 {
+                ratio = exp2((Double(correction) + transposeCents) / 1200)
+                // Auto on: formants stay put, then the knob moves them. Auto off: they follow
+                // the pitch shift, then the knob moves them from there.
+                formantFactor = (autoFormants ? 1 : ratio) * manualFormant
+            }
 
             if formantMode {
                 let t = writeIndex - 1
@@ -176,7 +197,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
             }
 
             var r = ratio
-            if desiredCents == 0 && abs(correction) < 0.1 {
+            if desiredCents == 0 && abs(correction) < 0.1 && transposeCents == 0 {
                 // Idle: drift (≤ ~2 cents, inaudible) until one tap sits mid-span at full gain
                 let leadIsA = gain(dA, wA) >= gain(dB, wB)
                 let d = leadIsA ? dA : dB, w = leadIsA ? wA : wB
@@ -204,7 +225,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         }
 
         correctionBits.store(correction.bitPattern, ordering: .relaxed)
-        let latencySamples = (formantMode ? 2 : 1) * period
+        let latencySamples = formantMode ? grainLatency : period
         latencyMsBits.store(Float(latencySamples / sampleRate * 1000).bitPattern, ordering: .relaxed)
     }
 
@@ -216,6 +237,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         let h = Double(grainHalf())
         nextMark = Double(t) + h
         lastCenter = Double(t) - 2 * h - 2
+        grainLatency = 2 * h + 2
         psolaPrimed = true
     }
 
@@ -228,29 +250,36 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     private func emitGrains(upTo t: Int) {
         let mask = Self.ringSize - 1
         while true {
-            let h = grainHalf()
+            let r = max(0.5, min(2, ratio))
+            let phi = max(0.25, min(4, formantFactor))
+            let hop = period / r
+            // Output half-length: one period re-scaled by the formant factor (reading a grain
+            // faster squeezes its resonances up), but always long enough to reach the next grain
+            let h = max(16, min(Self.maxLag, Int(max(period / phi, 0.75 * hop).rounded())))
+            let span = Double(h) * phi               // input half-span the grain reads
             let mark = Int(nextMark.rounded())
             guard mark - h <= t else { break }
 
-            // Cut the grain around an input point ~2 periods back, stepping from the last
-            // cut by whole periods so consecutive grains line up in phase. Repeating a period
+            // Cut the grain as recently as its input allows, stepping from the last cut by
+            // whole periods so consecutive grains line up in phase. Repeating a period
             // (shifting up) or skipping one (shifting down) is how PSOLA keeps time.
-            let target = Double(mark - 2 * h - 2)
+            let target = Double(mark - h) - span - 2
             var center = lastCenter + ((target - lastCenter) / period).rounded() * period
-            while center + Double(h) + 2 > Double(t) { center -= period }
+            while center + span + 2 > Double(t) { center -= period }
             if center < target - 4 * period { center = target }   // lost sync (silence, new note)
             lastCenter = center
 
             let hD = Double(h)
             for j in -h...h {
                 let w = 0.5 + 0.5 * cos(Double.pi * Double(j) / hD)
-                let x = readAbsolute(center + Double(j))
+                let x = readAbsolute(center + Double(j) * phi)
                 let o = (mark + j) & mask
                 ola[o] += Float(w * x)
                 olaWin[o] += Float(w)
             }
-            // Grains closer together = higher pitch; the waveform inside each is untouched
-            nextMark += period / max(0.5, min(2, ratio))
+            grainLatency = hD + span + 2
+            // Grain spacing sets the pitch; the read rate inside each grain sets the formants
+            nextMark += hop
         }
     }
 

@@ -781,13 +781,27 @@ private struct PitchGuideEditor: View {
         }
 
         Section {
-            Toggle("Preserve Formants", isOn: $params.preserveFormants)
+            Stepper(value: $params.transpose, in: -12...12) {
+                LabeledContent("Transpose") {
+                    Text(params.transpose == 0 ? "Off" : String(format: "%+d st", params.transpose))
+                        .monospacedDigit()
+                }
+            }
+        } header: {
+            Text("Transpose")
+        } footer: {
+            Text("Shifts the voice by whole semitones in the same pass as the tuning, so it adds no extra latency. Tuning still lands on the key above after the shift. Set Amount to 0% for transpose only.")
+        }
+
+        Section {
+            Toggle("Auto Formant Correction", isOn: $params.preserveFormants)
+            LabeledContent("Formant: \(Self.formantLabel(params.formantShift))") {
+                Slider(value: $params.formantShift, in: -6.0...6.0, step: 0.5)
+            }
         } header: {
             Text("Voice Character")
         } footer: {
-            Text(params.preserveFormants
-                 ? "Keeps the singer's natural tone when shifting. Adds about one more pitch cycle of latency (~4–8 ms)."
-                 : "Lowest latency. Tone shifts slightly along with pitch; fine for small corrections.")
+            Text(Self.formantFooter(params))
         }
 
         Section {
@@ -824,6 +838,21 @@ private struct PitchGuideEditor: View {
         .onChange(of: params) {
             kernel?.applyParams(params.resolved(songKey: AudioRoutingEngine.shared.songKey))
         }
+    }
+
+    private static func formantLabel(_ semis: Float) -> String {
+        semis == 0 ? "0" : String(format: "%+.1f st", semis)
+    }
+
+    private static func formantFooter(_ p: PitchGuideParams) -> String {
+        let knob = "Formant + makes the voice smaller and brighter, − bigger and darker."
+        if p.preserveFormants {
+            return "The singer keeps their natural tone however far the pitch moves; the Formant knob adds or subtracts from there. \(knob) Latency ≈ two pitch cycles."
+        }
+        if p.formantShift == 0 {
+            return "Lowest latency (one pitch cycle). Tone moves along with the pitch, like speeding up a tape. \(knob)"
+        }
+        return "Tone moves along with the pitch, then the Formant knob shifts it by a set amount. \(knob) Latency ≈ two pitch cycles while the knob is off zero."
     }
 
     private var songKeyLabel: String {

@@ -247,6 +247,11 @@ struct PitchGuideParams: Codable, Equatable {
     var songKeyDrive: Bool = true
     /// PSOLA shifting keeps the voice's character; costs one extra pitch period of latency
     var preserveFormants: Bool = true
+    /// Fixed shift on top of the correction, through the same shifter (no extra latency)
+    var transpose: Int = 0              // semitones, -12...12
+    /// Moves the voice's resonances: + smaller/brighter, − bigger/darker. On top of the
+    /// automatic preservation, or on top of the pitch shift when that's off.
+    var formantShift: Float = 0         // semitones, -6...6
 
     init() {}
 
@@ -265,6 +270,8 @@ struct PitchGuideParams: Codable, Equatable {
         voiceRange = (try? c.decodeIfPresent(VoiceRange.self, forKey: .voiceRange)) ?? d.voiceRange
         songKeyDrive = try c.decodeIfPresent(Bool.self, forKey: .songKeyDrive) ?? d.songKeyDrive
         preserveFormants = try c.decodeIfPresent(Bool.self, forKey: .preserveFormants) ?? d.preserveFormants
+        transpose = try c.decodeIfPresent(Int.self, forKey: .transpose) ?? d.transpose
+        formantShift = try c.decodeIfPresent(Float.self, forKey: .formantShift) ?? d.formantShift
     }
 
     /// These params with key and scale taken from the song, when following it and it has a key
@@ -276,9 +283,11 @@ struct PitchGuideParams: Codable, Equatable {
         return p
     }
 
-    /// 12-bit mask of the pitch classes in key + scale (bit 0 = C)
+    /// 12-bit mask of the pitch classes the *input* is snapped to (bit 0 = C). Offset by
+    /// the transpose so that after transposing, the output lands in key + scale.
     var allowedPitchClassMask: UInt32 {
-        scale.intervals.reduce(0) { $0 | (1 << UInt32((key + $1) % 12)) }
+        let root = ((key - transpose) % 12 + 12) % 12
+        return scale.intervals.reduce(0) { $0 | (1 << UInt32((root + $1) % 12)) }
     }
 }
 
