@@ -274,20 +274,20 @@ struct PitchGuideParams: Codable, Equatable {
         formantShift = try c.decodeIfPresent(Float.self, forKey: .formantShift) ?? d.formantShift
     }
 
-    /// These params with key and scale taken from the song, when following it and it has a key
+    /// These params with key and scale taken from the song, when following it and it has a key.
+    /// The song key is what the audience hears, so the singer's key is that minus the transpose.
     func resolved(songKey: MusicalKey?) -> PitchGuideParams {
         guard songKeyDrive, let songKey, let pc = songKey.pitchClass else { return self }
         var p = self
-        p.key = ((pc % 12) + 12) % 12
+        p.key = ((pc - transpose) % 12 + 12) % 12
         p.scale = PitchScale(songKey.scale)
         return p
     }
 
-    /// 12-bit mask of the pitch classes the *input* is snapped to (bit 0 = C). Offset by
-    /// the transpose so that after transposing, the output lands in key + scale.
+    /// 12-bit mask of the pitch classes the singer is snapped to (bit 0 = C). `key` is the
+    /// key they sing in; Transpose then moves the corrected voice (sung in D, +2 → heard in E).
     var allowedPitchClassMask: UInt32 {
-        let root = ((key - transpose) % 12 + 12) % 12
-        return scale.intervals.reduce(0) { $0 | (1 << UInt32((root + $1) % 12)) }
+        scale.intervals.reduce(0) { $0 | (1 << UInt32((key + $1) % 12)) }
     }
 }
 

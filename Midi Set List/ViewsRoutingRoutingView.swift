@@ -776,8 +776,8 @@ private struct PitchGuideEditor: View {
             Text("Key")
         } footer: {
             Text(params.songKeyDrive
-                 ? "Uses the key of the song loaded in Perform, including transpose. The fallback is used when the song has no key set."
-                 : "Only notes in this key and scale are targets.")
+                 ? "The song's key is what the audience hears; with Transpose on, the voice is tuned in the song key minus the transpose. The fallback is used when the song has no key set."
+                 : "The key the singer sings in. Only notes in this key and scale are targets.")
         }
 
         Section {
@@ -790,7 +790,7 @@ private struct PitchGuideEditor: View {
         } header: {
             Text("Transpose")
         } footer: {
-            Text("Shifts the voice by whole semitones in the same pass as the tuning, so it adds no extra latency. Tuning still lands on the key above after the shift. Set Amount to 0% for transpose only.")
+            Text("Shifts the voice by whole semitones in the same pass as the tuning, so it adds no extra latency. The voice is tuned in the key it's sung in, then moved: sung in D with +2 comes out in E. Set Amount to 0% for transpose only.")
         }
 
         Section {
@@ -859,7 +859,10 @@ private struct PitchGuideEditor: View {
         guard let key = AudioRoutingEngine.shared.songKey, key.pitchClass != nil else {
             return "No song key — using fallback"
         }
-        return "\(key.root) \(key.scale.rawValue)"
+        let heard = "\(key.root) \(key.scale.rawValue)"
+        guard params.transpose != 0, let pc = key.pitchClass else { return heard }
+        let sung = PitchGuideParams.noteNames[((pc - params.transpose) % 12 + 12) % 12]
+        return "\(heard) (sung in \(sung))"
     }
 }
 
