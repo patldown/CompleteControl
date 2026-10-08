@@ -697,14 +697,14 @@ extension ChannelFXSlot {
             return [key, speed, third]
         case .harmony:
             let h = harmony
-            let voices = [h.voice1, h.voice2].filter(\.enabled).map(\.interval.shortLabel)
+            let voices = [h.voice1, h.voice2, h.voice3].filter(\.enabled).map(\.interval.shortLabel)
             let songKey = AudioRoutingEngine.shared.songKey
             let key = h.songKeyDrive && songKey?.pitchClass != nil
                 ? "♪ \(songKey!.root) \(PitchScale(songKey!.scale).shortName)"
                 : "\(PitchGuideParams.noteNames[h.key % 12]) \(h.scale.shortName)"
             return [voices.isEmpty ? "No voices" : voices.joined(separator: " "),
                     key,
-                    h.passLead ? "Humanize \(Int(h.humanize))%" : "Harmonies only"]
+                    h.leadGain == 0 ? "Lead off" : "Lead \(Int(h.leadLevel)) dB"]
         case .microDetune:
             let d = microDetune
             let bpm = AudioRoutingEngine.shared.songBPM
@@ -1458,6 +1458,7 @@ private struct HarmonyEditor: View {
                     Button(stock.name) {
                         params.voice1 = stock.voice1
                         params.voice2 = stock.voice2
+                        params.voice3 = stock.voice3
                     }
                 }
             } label: {
@@ -1471,6 +1472,7 @@ private struct HarmonyEditor: View {
 
         voiceSection("Voice 1", voice: $params.voice1)
         voiceSection("Voice 2", voice: $params.voice2)
+        voiceSection("Voice 3", voice: $params.voice3)
 
         Section {
             Toggle("Follow Song Key", isOn: $params.songKeyDrive)
@@ -1492,14 +1494,16 @@ private struct HarmonyEditor: View {
         }
 
         Section {
-            Toggle("Lead", isOn: $params.passLead)
+            LabeledContent("Lead Level: \(params.leadGain == 0 ? "Off" : String(format: "%+.0f dB", params.leadLevel))") {
+                Slider(value: $params.leadLevel, in: HarmonyParams.leadOff...6, step: 1)
+            }
             LabeledContent("Humanize: \(Int(params.humanize))%") {
                 Slider(value: $params.humanize, in: 0.0...100.0, step: 1)
             }
         } header: {
             Text("Blend")
         } footer: {
-            Text("Lead keeps the singer's own voice in this channel; turn it off to send harmonies only (e.g. to their own output or a separate effect). Humanize puts each voice a few cents off and a little late (up to 20 and 32 ms), drifting slowly, so they sound like singers rather than a copy. Harmonies arrive ~10–20 ms after the lead plus that delay.")
+            Text("Gender (in each voice) moves the voice's resonances without moving its pitch: − sounds bigger and deeper (try −2 to −4 on an octave below), + smaller and brighter. Lead Level is the singer's own voice in this channel; all the way down is off, for harmonies only (e.g. on their own output). Humanize puts each voice a few cents off and a little late (up to 20–32 ms), drifting slowly, so they sound like singers rather than a copy.")
         }
 
         Section {
@@ -1524,20 +1528,30 @@ private struct HarmonyEditor: View {
 
     @ViewBuilder
     private func voiceSection(_ title: String, voice: Binding<HarmonyVoice>) -> some View {
-        Section(title) {
-            Toggle("On", isOn: voice.enabled)
-            if voice.wrappedValue.enabled {
-                Picker("Interval", selection: voice.interval) {
-                    ForEach(HarmonyInterval.allCases) { Text($0.label).tag($0) }
-                }
-                LabeledContent("Level: \(String(format: "%+.0f", voice.wrappedValue.level)) dB") {
-                    Slider(value: voice.level, in: -24.0...6.0, step: 1)
-                }
-                LabeledContent("Pan: \(Self.panLabel(voice.wrappedValue.pan))") {
-                    Slider(value: voice.pan, in: -100.0...100.0, step: 5)
-                }
+        Section {
+            Toggle("Mute", isOn: Binding(get: { !voice.wrappedValue.enabled },
+                                         set: { voice.wrappedValue.enabled = !$0 }))
+                .tint(.orange)
+            Picker("Interval", selection: voice.interval) {
+                ForEach(HarmonyInterval.allCases) { Text($0.label).tag($0) }
             }
+            LabeledContent("Level: \(String(format: "%+.0f", voice.wrappedValue.level)) dB") {
+                Slider(value: voice.level, in: -24.0...6.0, step: 1)
+            }
+            LabeledContent("Pan: \(Self.panLabel(voice.wrappedValue.pan))") {
+                Slider(value: voice.pan, in: -100.0...100.0, step: 5)
+            }
+            LabeledContent("Gender: \(Self.genderLabel(voice.wrappedValue.gender))") {
+                Slider(value: voice.gender, in: -6.0...6.0, step: 0.5)
+            }
+        } header: {
+            Text(voice.wrappedValue.enabled ? title : "\(title) — muted")
         }
+    }
+
+    private static func genderLabel(_ semis: Float) -> String {
+        if semis == 0 { return "0" }
+        return String(format: "%+.1f", semis) + (semis < 0 ? " deeper" : " brighter")
     }
 
     private static func panLabel(_ pan: Float) -> String {
@@ -1545,7 +1559,9 @@ private struct HarmonyEditor: View {
     }
 
     private var stockName: String? {
-        HarmonyParams.stock.first { $0.voice1 == params.voice1 && $0.voice2 == params.voice2 }?.name
+        HarmonyParams.stock.first {
+            $0.voice1 == params.voice1 && $0.voice2 == params.voice2 && $0.voice3 == params.voice3
+        }?.name
     }
 
     private var songKeyLabel: String {
@@ -1564,6 +1580,7 @@ private struct HarmonyMeter: View {
         let detected = Float(bitPattern: kernel.detectedMidiBits.load(ordering: .relaxed))
         let v1 = Float(bitPattern: kernel.voiceMidi0.load(ordering: .relaxed))
         let v2 = Float(bitPattern: kernel.voiceMidi1.load(ordering: .relaxed))
+        let v3 = Float(bitPattern: kernel.voiceMidi2.load(ordering: .relaxed))
         VStack(alignment: .leading, spacing: 4) {
             LabeledContent("Hearing") {
                 Text(detected < 0 ? "—" : PitchMeter.describe(detected))
@@ -1572,6 +1589,11 @@ private struct HarmonyMeter: View {
             }
             LabeledContent("Voice 1") { voiceText(v1) }
             LabeledContent("Voice 2") { voiceText(v2) }
+            LabeledContent("Voice 3") { voiceText(v3) }
+            LabeledContent("Harmony Latency") {
+                Text(String(format: "%.1f ms", Float(bitPattern: kernel.latencyMsBits.load(ordering: .relaxed))))
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
         }
     }
 

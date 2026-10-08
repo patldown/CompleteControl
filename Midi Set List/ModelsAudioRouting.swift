@@ -228,23 +228,47 @@ nonisolated enum HarmonyInterval: Int, Codable, CaseIterable, Identifiable {
 }
 
 struct HarmonyVoice: Codable, Equatable {
+    /// False = muted (settings kept)
     var enabled = true
     var interval: HarmonyInterval = .thirdAbove
     var level: Float = -3           // dB, -24...+6
     var pan: Float = -40            // -100 (L) ... +100 (R)
+    /// Formant shift: + smaller/brighter, − bigger/deeper; the pitch doesn't move
+    var gender: Float = 0           // semitones, -6...+6
+
+    init(enabled: Bool = true, interval: HarmonyInterval = .thirdAbove, level: Float = -3,
+         pan: Float = -40, gender: Float = 0) {
+        self.enabled = enabled; self.interval = interval; self.level = level
+        self.pan = pan; self.gender = gender
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = HarmonyVoice()
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
+        interval = (try? c.decodeIfPresent(HarmonyInterval.self, forKey: .interval)) ?? d.interval
+        level = try c.decodeIfPresent(Float.self, forKey: .level) ?? d.level
+        pan = try c.decodeIfPresent(Float.self, forKey: .pan) ?? d.pan
+        gender = try c.decodeIfPresent(Float.self, forKey: .gender) ?? d.gender
+    }
+
+    var gain: Float { powf(10, level / 20) }
+    /// Rate grains are read at: 2^(gender/12)
+    var formantRate: Float { powf(2, max(-6, min(6, gender)) / 12) }
 }
 
-/// Key-aware harmonizer: up to two voices made from the singer, in the song's key
+/// Key-aware harmonizer: up to three voices made from the singer, in the song's key
 struct HarmonyParams: Codable, Equatable {
     var voice1 = HarmonyVoice()
     var voice2 = HarmonyVoice(enabled: false, interval: .fourthBelow, level: -3, pan: 40)
+    var voice3 = HarmonyVoice(enabled: false, interval: .octaveBelow, level: -6, pan: 0)
     /// Use the loaded song's key and scale; `key`/`scale` are the fallback
     var songKeyDrive = true
     var key = 0                     // 0=C … 11=B
     var scale: PitchScale = .major
     var humanize: Float = 30        // %, 0...100; small detune, drift and delay per voice
-    /// Keep the singer's own voice in the output; off = harmonies only
-    var passLead = true
+    /// The singer's own voice in the output; at the bottom (-60) it's off = harmonies only
+    var leadLevel: Float = 0        // dB, -60...+6
     var pickiness: Float = 50       // %, 0...100
     var gateThreshold: Float = -45  // dBFS, -70...-20
     var voiceRange: VoiceRange = .mid
@@ -256,15 +280,27 @@ struct HarmonyParams: Codable, Equatable {
         let d = HarmonyParams()
         voice1 = try c.decodeIfPresent(HarmonyVoice.self, forKey: .voice1) ?? d.voice1
         voice2 = try c.decodeIfPresent(HarmonyVoice.self, forKey: .voice2) ?? d.voice2
+        voice3 = try c.decodeIfPresent(HarmonyVoice.self, forKey: .voice3) ?? d.voice3
         songKeyDrive = try c.decodeIfPresent(Bool.self, forKey: .songKeyDrive) ?? d.songKeyDrive
         key = try c.decodeIfPresent(Int.self, forKey: .key) ?? d.key
         scale = (try? c.decodeIfPresent(PitchScale.self, forKey: .scale)) ?? d.scale
         humanize = try c.decodeIfPresent(Float.self, forKey: .humanize) ?? d.humanize
-        passLead = try c.decodeIfPresent(Bool.self, forKey: .passLead) ?? d.passLead
+        // The first version had an on/off Lead switch
+        let oldLead = try decoder.container(keyedBy: FirstVersionKeys.self)
+            .decodeIfPresent(Bool.self, forKey: .passLead)
+        leadLevel = try c.decodeIfPresent(Float.self, forKey: .leadLevel)
+            ?? oldLead.map { $0 ? 0 : Self.leadOff } ?? d.leadLevel
         pickiness = try c.decodeIfPresent(Float.self, forKey: .pickiness) ?? d.pickiness
         gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
         voiceRange = (try? c.decodeIfPresent(VoiceRange.self, forKey: .voiceRange)) ?? d.voiceRange
     }
+
+    private enum FirstVersionKeys: String, CodingKey { case passLead }
+
+    /// Lead Level at or below this is off
+    static let leadOff: Float = -60
+
+    var leadGain: Float { leadLevel <= Self.leadOff ? 0 : powf(10, leadLevel / 20) }
 
     /// These params in the song's key and scale, when following it and it has a key
     func resolved(songKey: MusicalKey?) -> HarmonyParams {
@@ -284,29 +320,37 @@ struct HarmonyParams: Codable, Equatable {
         let name: String
         let voice1: HarmonyVoice
         let voice2: HarmonyVoice
+        let voice3: HarmonyVoice
         var id: String { name }
+
+        init(_ name: String, _ voice1: HarmonyVoice,
+             _ voice2: HarmonyVoice = HarmonyVoice(enabled: false, interval: .fourthBelow, level: -3, pan: 40),
+             _ voice3: HarmonyVoice = HarmonyVoice(enabled: false, interval: .octaveBelow, level: -6, pan: 0)) {
+            self.name = name; self.voice1 = voice1; self.voice2 = voice2; self.voice3 = voice3
+        }
     }
 
-    /// Ready-made voicings; choosing one sets the voices and leaves key and detection alone
+    /// Ready-made voicings; choosing one sets the voices and leaves key, lead and detection alone
     static let stock: [Stock] = [
-        Stock(name: "3rd Above",
-              voice1: HarmonyVoice(enabled: true, interval: .thirdAbove, level: -3, pan: -30),
-              voice2: HarmonyVoice(enabled: false, interval: .fifthAbove, level: -3, pan: 30)),
-        Stock(name: "3rd Below",
-              voice1: HarmonyVoice(enabled: true, interval: .thirdBelow, level: -3, pan: 30),
-              voice2: HarmonyVoice(enabled: false, interval: .fifthAbove, level: -3, pan: -30)),
-        Stock(name: "3rd & 5th Above",
-              voice1: HarmonyVoice(enabled: true, interval: .thirdAbove, level: -4, pan: -40),
-              voice2: HarmonyVoice(enabled: true, interval: .fifthAbove, level: -6, pan: 40)),
-        Stock(name: "Trio (3rd Up, 4th Down)",
-              voice1: HarmonyVoice(enabled: true, interval: .thirdAbove, level: -4, pan: -40),
-              voice2: HarmonyVoice(enabled: true, interval: .fourthBelow, level: -5, pan: 40)),
-        Stock(name: "Octave Below",
-              voice1: HarmonyVoice(enabled: true, interval: .octaveBelow, level: -6, pan: 0),
-              voice2: HarmonyVoice(enabled: false, interval: .octaveAbove, level: -9, pan: 0)),
-        Stock(name: "Octaves Up & Down",
-              voice1: HarmonyVoice(enabled: true, interval: .octaveAbove, level: -9, pan: -25),
-              voice2: HarmonyVoice(enabled: true, interval: .octaveBelow, level: -6, pan: 25)),
+        Stock("3rd Above", HarmonyVoice(interval: .thirdAbove, level: -3, pan: -30)),
+        Stock("3rd Below", HarmonyVoice(interval: .thirdBelow, level: -3, pan: 30)),
+        Stock("3rd & 5th Above",
+              HarmonyVoice(interval: .thirdAbove, level: -4, pan: -40),
+              HarmonyVoice(interval: .fifthAbove, level: -6, pan: 40)),
+        Stock("Trio (3rd Up, 4th Down)",
+              HarmonyVoice(interval: .thirdAbove, level: -4, pan: -40),
+              HarmonyVoice(interval: .fourthBelow, level: -5, pan: 40)),
+        Stock("Full Stack (3rd, 5th, Octave Down)",
+              HarmonyVoice(interval: .thirdAbove, level: -5, pan: -45),
+              HarmonyVoice(interval: .fifthAbove, level: -7, pan: 45),
+              HarmonyVoice(interval: .octaveBelow, level: -8, pan: 0, gender: -2)),
+        Stock("Octave Below",
+              HarmonyVoice(interval: .octaveBelow, level: -6, pan: 0)),
+        Stock("Deep Octave Below",
+              HarmonyVoice(interval: .octaveBelow, level: -6, pan: 0, gender: -4)),
+        Stock("Octaves Up & Down",
+              HarmonyVoice(interval: .octaveAbove, level: -9, pan: -25, gender: 2),
+              HarmonyVoice(interval: .octaveBelow, level: -6, pan: 25, gender: -2)),
     ]
 }
 

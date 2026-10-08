@@ -95,6 +95,24 @@ private func choice(_ key: String, _ name: String, _ options: [String], _ detail
                get: { Double(get($0)) }, set: { set(&$0, Int($1)) })
 }
 
+/// One harmony voice's parameters: voice1, interval1, level1, pan1, gender1, …
+private func harmonyVoiceParams(_ n: Int, _ voice: WritableKeyPath<HarmonyParams, HarmonyVoice>) -> [AppFXParam] {
+    let slotVoice = (\ChannelFXSlot.harmony).appending(path: voice)
+    return [
+        toggle("voice\(n)", "Voice \(n)", "On, or off to mute it (its settings are kept).",
+               get: { $0[keyPath: slotVoice].enabled }, set: { $0[keyPath: slotVoice].enabled = $1 }),
+        choice("interval\(n)", "Voice \(n) Interval", HarmonyInterval.allCases.map(\.label), "In the song's key.",
+               get: { $0[keyPath: slotVoice].interval.rawValue },
+               set: { $0[keyPath: slotVoice].interval = HarmonyInterval(rawValue: $1) ?? .thirdAbove }),
+        num("level\(n)", "Voice \(n) Level", -24...6, "dB", "",
+            get: { Double($0[keyPath: slotVoice].level) }, set: { $0[keyPath: slotVoice].level = Float($1) }),
+        num("pan\(n)", "Voice \(n) Pan", -100...100, "", "-100 = left, 100 = right.",
+            get: { Double($0[keyPath: slotVoice].pan) }, set: { $0[keyPath: slotVoice].pan = Float($1) }),
+        num("gender\(n)", "Voice \(n) Gender", -6...6, "semitones", "+ smaller/brighter, − bigger/deeper. Pitch stays.",
+            get: { Double($0[keyPath: slotVoice].gender) }, set: { $0[keyPath: slotVoice].gender = Float($1) }),
+    ]
+}
+
 extension BuiltInFXType {
     /// Short name used in /app/ addresses
     var oscName: String {
@@ -243,27 +261,10 @@ extension BuiltInFXType {
             num("bleedDuck", "Bleed Duck", -20...0, "dB", "Turns the mic down between phrases. 0 = off.",
                 get: { Double($0.pitchGuide.bleedDuck) }, set: { $0.pitchGuide.bleedDuck = Float($1) }),
         ]
-        case .harmony: [
-            toggle("voice1", "Voice 1", "Turns harmony voice 1 on or off.",
-                   get: { $0.harmony.voice1.enabled }, set: { $0.harmony.voice1.enabled = $1 }),
-            choice("interval1", "Voice 1 Interval", HarmonyInterval.allCases.map(\.label), "In the song's key.",
-                   get: { $0.harmony.voice1.interval.rawValue },
-                   set: { $0.harmony.voice1.interval = HarmonyInterval(rawValue: $1) ?? .thirdAbove }),
-            num("level1", "Voice 1 Level", -24...6, "dB", "",
-                get: { Double($0.harmony.voice1.level) }, set: { $0.harmony.voice1.level = Float($1) }),
-            num("pan1", "Voice 1 Pan", -100...100, "", "-100 = left, 100 = right.",
-                get: { Double($0.harmony.voice1.pan) }, set: { $0.harmony.voice1.pan = Float($1) }),
-            toggle("voice2", "Voice 2", "Turns harmony voice 2 on or off.",
-                   get: { $0.harmony.voice2.enabled }, set: { $0.harmony.voice2.enabled = $1 }),
-            choice("interval2", "Voice 2 Interval", HarmonyInterval.allCases.map(\.label), "In the song's key.",
-                   get: { $0.harmony.voice2.interval.rawValue },
-                   set: { $0.harmony.voice2.interval = HarmonyInterval(rawValue: $1) ?? .fifthAbove }),
-            num("level2", "Voice 2 Level", -24...6, "dB", "",
-                get: { Double($0.harmony.voice2.level) }, set: { $0.harmony.voice2.level = Float($1) }),
-            num("pan2", "Voice 2 Pan", -100...100, "", "-100 = left, 100 = right.",
-                get: { Double($0.harmony.voice2.pan) }, set: { $0.harmony.voice2.pan = Float($1) }),
-            toggle("lead", "Lead", "Keep the singer's own voice. Off = harmonies only.",
-                   get: { $0.harmony.passLead }, set: { $0.harmony.passLead = $1 }),
+        case .harmony:
+            harmonyVoiceParams(1, \.voice1) + harmonyVoiceParams(2, \.voice2) + harmonyVoiceParams(3, \.voice3) + [
+            num("leadLevel", "Lead Level", -60...6, "dB", "The singer's own voice. -60 = off (harmonies only).",
+                get: { Double($0.harmony.leadLevel) }, set: { $0.harmony.leadLevel = Float($1) }),
             num("humanize", "Humanize", 0...100, "%", "Small detune, drift and delay so the voices sound like singers.",
                 get: { Double($0.harmony.humanize) }, set: { $0.harmony.humanize = Float($1) }),
             toggle("followSongKey", "Follow Song Key", "Harmonize in the key of the song loaded in Perform.",

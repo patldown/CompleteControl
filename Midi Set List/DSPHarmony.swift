@@ -2,7 +2,7 @@
 //  DSPHarmony.swift
 //  Midi Set List
 //
-//  Real-time DSP kernel for Harmony: up to two key-aware harmony voices generated from
+//  Real-time DSP kernel for Harmony: up to three key-aware harmony voices generated from
 //  the singer (first input of the channel).
 //
 //  Detection — YIN every 256 samples, the same detector as Pitch Guide: above the gate,
@@ -19,8 +19,10 @@
 //
 //  Shifting — PSOLA (as in Pitch Guide): one-period grains cut from the input and laid
 //  back down every period ÷ ratio, so the harmonies keep the singer's tone (formants).
-//  Latency ≈ two pitch periods (~8–17 ms), plus Humanize's delay. The lead (dry) signal
-//  passes with no added latency.
+//  Gender reads each grain faster (+, smaller/brighter) or slower (−, bigger/deeper),
+//  moving the formants without moving the pitch.
+//  Latency ≈ two pitch periods (~8–17 ms) at Gender 0: about 1.7 periods at +6 and 2.4 at
+//  −6, plus Humanize's delay. The lead (dry) signal passes with no added latency.
 //
 //  Strict real-time contract: no allocations, locks, or Swift runtime calls in process().
 //
@@ -31,7 +33,7 @@ import Synchronization
 
 nonisolated final class HarmonyKernel: @unchecked Sendable {
 
-    static let voiceCount = 2
+    static let voiceCount = 3
 
     // MARK: - Parameters (main thread → audio thread)
     private let scaleMaskBits = Atomic<UInt32>(0xAB5)                 // C major
@@ -40,12 +42,18 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
     private let minHzBits     = Atomic<UInt32>(Float(120).bitPattern)
     private let maxHzBits     = Atomic<UInt32>(Float(800).bitPattern)
     private let humanizeBits  = Atomic<UInt32>(Float(0.3).bitPattern) // 0…1
-    private let leadBits      = Atomic<Bool>(true)
-    private let enabled0 = Atomic<Bool>(true), enabled1 = Atomic<Bool>(false)
+    private let leadGainBits  = Atomic<UInt32>(Float(1).bitPattern)   // linear; 0 = lead off
+    private let enabled0 = Atomic<Bool>(true), enabled1 = Atomic<Bool>(false), enabled2 = Atomic<Bool>(false)
     private let interval0 = Atomic<Int>(HarmonyInterval.thirdAbove.rawValue)
-    private let interval1 = Atomic<Int>(HarmonyInterval.fifthAbove.rawValue)
+    private let interval1 = Atomic<Int>(HarmonyInterval.fourthBelow.rawValue)
+    private let interval2 = Atomic<Int>(HarmonyInterval.octaveBelow.rawValue)
     private let gain0 = Atomic<UInt32>(Float(1).bitPattern), gain1 = Atomic<UInt32>(Float(1).bitPattern)
+    private let gain2 = Atomic<UInt32>(Float(1).bitPattern)
     private let pan0 = Atomic<UInt32>(Float(-0.4).bitPattern), pan1 = Atomic<UInt32>(Float(0.4).bitPattern)
+    private let pan2 = Atomic<UInt32>(Float(0).bitPattern)
+    /// Gender as a formant read rate: 2^(semitones/12); 1 = the singer's own tone
+    private let formant0 = Atomic<UInt32>(Float(1).bitPattern), formant1 = Atomic<UInt32>(Float(1).bitPattern)
+    private let formant2 = Atomic<UInt32>(Float(1).bitPattern)
 
     // MARK: - Meters (audio thread → main thread)
     /// Detected sung note as fractional MIDI; < 0 when nothing is tracked
@@ -53,6 +61,9 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
     /// Note each voice is singing (integer MIDI); < 0 when silent
     let voiceMidi0 = Atomic<UInt32>(Float(-1).bitPattern)
     let voiceMidi1 = Atomic<UInt32>(Float(-1).bitPattern)
+    let voiceMidi2 = Atomic<UInt32>(Float(-1).bitPattern)
+    /// Latency of the slowest sounding voice right now, ms (Humanize delay included)
+    let latencyMsBits = Atomic<UInt32>(Float(0).bitPattern)
     /// Input level of the latest analysis window, dBFS RMS (Learn Voice reads this)
     let inputLevelBits = Atomic<UInt32>(Float(-120).bitPattern)
     let singingFlag = Atomic<Bool>(false)
@@ -80,7 +91,9 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
     private var sungNote = -1
     private var voice0: Voice
     private var voice1: Voice
-    private var lfoPhase: (Double, Double) = (0, 0.3)
+    private var voice2: Voice
+    private var leadGain: Float = 1
+    private var lfoPhase: (Double, Double, Double) = (0, 0.3, 0.6)
 
     init() {
         ring.initialize(repeating: 0, count: Self.ringSize)
@@ -90,6 +103,7 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
         cmnd.initialize(repeating: 0, count: Self.maxLag + 4)
         voice0 = Voice(size: Self.ringSize)
         voice1 = Voice(size: Self.ringSize)
+        voice2 = Voice(size: Self.ringSize)
     }
 
     deinit {
@@ -97,6 +111,7 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
         corr.deallocate(); cmnd.deallocate()
         voice0.ola.deallocate(); voice0.olaWin.deallocate()
         voice1.ola.deallocate(); voice1.olaWin.deallocate()
+        voice2.ola.deallocate(); voice2.olaWin.deallocate()
     }
 
     // MARK: - Main thread API
@@ -107,6 +122,7 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
         period = sr / 250
         voice0.primed = false
         voice1.primed = false
+        voice2.primed = false
     }
 
     /// `p` already resolved to the song key where it follows it
@@ -117,15 +133,22 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
         minHzBits.store(p.voiceRange.minHz.bitPattern, ordering: .relaxed)
         maxHzBits.store(p.voiceRange.maxHz.bitPattern, ordering: .relaxed)
         humanizeBits.store((p.humanize / 100).bitPattern, ordering: .relaxed)
-        leadBits.store(p.passLead, ordering: .relaxed)
+        leadGainBits.store(p.leadGain.bitPattern, ordering: .relaxed)
         enabled0.store(p.voice1.enabled, ordering: .relaxed)
         enabled1.store(p.voice2.enabled, ordering: .relaxed)
+        enabled2.store(p.voice3.enabled, ordering: .relaxed)
         interval0.store(p.voice1.interval.rawValue, ordering: .relaxed)
         interval1.store(p.voice2.interval.rawValue, ordering: .relaxed)
-        gain0.store(Float(pow(10, Double(p.voice1.level) / 20)).bitPattern, ordering: .relaxed)
-        gain1.store(Float(pow(10, Double(p.voice2.level) / 20)).bitPattern, ordering: .relaxed)
+        interval2.store(p.voice3.interval.rawValue, ordering: .relaxed)
+        gain0.store(p.voice1.gain.bitPattern, ordering: .relaxed)
+        gain1.store(p.voice2.gain.bitPattern, ordering: .relaxed)
+        gain2.store(p.voice3.gain.bitPattern, ordering: .relaxed)
         pan0.store((p.voice1.pan / 100).bitPattern, ordering: .relaxed)
         pan1.store((p.voice2.pan / 100).bitPattern, ordering: .relaxed)
+        pan2.store((p.voice3.pan / 100).bitPattern, ordering: .relaxed)
+        formant0.store(p.voice1.formantRate.bitPattern, ordering: .relaxed)
+        formant1.store(p.voice2.formantRate.bitPattern, ordering: .relaxed)
+        formant2.store(p.voice3.formantRate.bitPattern, ordering: .relaxed)
     }
 
     // MARK: - Render (audio thread only — no allocations, no runtime)
@@ -135,37 +158,44 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
         guard !ptr.isEmpty, let l = ptr[0].mData?.assumingMemoryBound(to: Float.self) else { return }
         let r = ptr.count > 1 ? ptr[1].mData?.assumingMemoryBound(to: Float.self) : nil
 
-        let lead: Float = leadBits.load(ordering: .relaxed) ? 1 : 0
+        let leadTarget = Float(bitPattern: leadGainBits.load(ordering: .relaxed))
         let humanize = Double(Float(bitPattern: humanizeBits.load(ordering: .relaxed)))
-        let enabled = (enabled0.load(ordering: .relaxed), enabled1.load(ordering: .relaxed))
+        let enabled = (enabled0.load(ordering: .relaxed), enabled1.load(ordering: .relaxed),
+                       enabled2.load(ordering: .relaxed))
         let gains = (Float(bitPattern: gain0.load(ordering: .relaxed)),
-                     Float(bitPattern: gain1.load(ordering: .relaxed)))
-        let pans = (Double(Float(bitPattern: pan0.load(ordering: .relaxed))),
-                    Double(Float(bitPattern: pan1.load(ordering: .relaxed))))
+                     Float(bitPattern: gain1.load(ordering: .relaxed)),
+                     Float(bitPattern: gain2.load(ordering: .relaxed)))
+        let phis = (Self.formantRate(formant0), Self.formantRate(formant1), Self.formantRate(formant2))
         // Equal-power pan
-        func lr(_ p: Double) -> (Float, Float) {
+        func lr(_ atomic: borrowing Atomic<UInt32>) -> (Float, Float) {
+            let p = Double(Float(bitPattern: atomic.load(ordering: .relaxed)))
             let a = (max(-1, min(1, p)) + 1) * Double.pi / 4
             return (Float(cos(a)), Float(sin(a)))
         }
-        let panLR = (lr(pans.0), lr(pans.1))
+        let panLR = (lr(pan0), lr(pan1), lr(pan2))
 
-        // Humanize: voice 1 a little sharp and late, voice 2 a little flat and later, each
-        // with a slow drift, like two real singers
-        let drift = (sin(2 * Double.pi * lfoPhase.0), sin(2 * Double.pi * lfoPhase.1))
-        lfoPhase.0 += 0.23 * Double(frameCount) / sampleRate
-        lfoPhase.1 += 0.31 * Double(frameCount) / sampleRate
-        lfoPhase.0 -= lfoPhase.0.rounded(.down)
-        lfoPhase.1 -= lfoPhase.1.rounded(.down)
-        let detune = (humanize * (6 + 3 * drift.0), -humanize * (6 + 3 * drift.1))
-        let delays = (humanize * 0.020 * sampleRate, humanize * 0.032 * sampleRate)
+        // Humanize: voice 1 a little sharp and late, voice 2 a little flat and later, voice 3
+        // slightly sharp and in between, each with its own slow drift, like real singers
+        let drift = (sin(2 * Double.pi * lfoPhase.0), sin(2 * Double.pi * lfoPhase.1),
+                     sin(2 * Double.pi * lfoPhase.2))
+        let advance = Double(frameCount) / sampleRate
+        lfoPhase.0 += 0.23 * advance; lfoPhase.0 -= lfoPhase.0.rounded(.down)
+        lfoPhase.1 += 0.31 * advance; lfoPhase.1 -= lfoPhase.1.rounded(.down)
+        lfoPhase.2 += 0.17 * advance; lfoPhase.2 -= lfoPhase.2.rounded(.down)
+        let detune = (humanize * (6 + 3 * drift.0), -humanize * (6 + 3 * drift.1),
+                      humanize * (3 + 3 * drift.2))
+        let delays = (humanize * 0.020 * sampleRate, humanize * 0.032 * sampleRate,
+                      humanize * 0.026 * sampleRate)
 
         let mix = VoiceMix(openCoeff: Float(1 - exp(-1 / (sampleRate * 0.008))),
                            closeCoeff: Float(1 - exp(-1 / (sampleRate * 0.040))),
                            glideCoeff: 1 - exp(-1 / (sampleRate * 0.012)))
+        let leadCoeff = Float(1 - exp(-1 / (sampleRate * 0.020)))
         let holdSamples = Int(sampleRate * 0.06)
 
         // Work on locals; written back once per buffer
-        var v0 = voice0, v1 = voice1
+        var v0 = voice0, v1 = voice1, v2 = voice2
+        var lead = leadGain
         for i in 0..<frameCount {
             let dryL = l[i]
             let dryR = r?[i] ?? dryL
@@ -175,29 +205,50 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
             hopCounter += 1
             if hopCounter >= Self.hop {
                 hopCounter = 0
-                analyze(&v0, &v1)
+                analyze(&v0, &v1, &v2)
             }
 
             let voiced = writeIndex - lastVoicedIndex < holdSamples && sungNote >= 0
             let t = writeIndex - 1
             let refresh = (i & 15) == 0
             let y0 = render(&v0, on: enabled.0 && voiced, at: t, refresh: refresh,
-                            detune: detune.0, delay: delays.0, mix: mix) * gains.0
+                            detune: detune.0, delay: delays.0, phi: phis.0, mix: mix) * gains.0
             let y1 = render(&v1, on: enabled.1 && voiced, at: t, refresh: refresh,
-                            detune: detune.1, delay: delays.1, mix: mix) * gains.1
+                            detune: detune.1, delay: delays.1, phi: phis.1, mix: mix) * gains.1
+            let y2 = render(&v2, on: enabled.2 && voiced, at: t, refresh: refresh,
+                            detune: detune.2, delay: delays.2, phi: phis.2, mix: mix) * gains.2
+            lead += leadCoeff * (leadTarget - lead)
 
-            l[i] = dryL * lead + y0 * panLR.0.0 + y1 * panLR.1.0
-            r?[i] = dryR * lead + y0 * panLR.0.1 + y1 * panLR.1.1
+            l[i] = dryL * lead + y0 * panLR.0.0 + y1 * panLR.1.0 + y2 * panLR.2.0
+            r?[i] = dryR * lead + y0 * panLR.0.1 + y1 * panLR.1.1 + y2 * panLR.2.1
         }
         voice0 = v0
         voice1 = v1
+        voice2 = v2
+        leadGain = lead
 
         singingFlag.store(writeIndex - lastVoicedIndex < holdSamples, ordering: .relaxed)
-        let silent = Float(-1).bitPattern
-        voiceMidi0.store(enabled.0 && v0.env > 0.5 && sungNote >= 0
-                         ? Float(sungNote + Int(v0.targetSemis)).bitPattern : silent, ordering: .relaxed)
-        voiceMidi1.store(enabled.1 && v1.env > 0.5 && sungNote >= 0
-                         ? Float(sungNote + Int(v1.targetSemis)).bitPattern : silent, ordering: .relaxed)
+        func sounding(_ on: Bool, _ v: Voice) -> UInt32 {
+            on && v.env > 0.5 && sungNote >= 0 ? Float(sungNote + Int(v.targetSemis)).bitPattern
+                                                : Float(-1).bitPattern
+        }
+        voiceMidi0.store(sounding(enabled.0, v0), ordering: .relaxed)
+        voiceMidi1.store(sounding(enabled.1, v1), ordering: .relaxed)
+        voiceMidi2.store(sounding(enabled.2, v2), ordering: .relaxed)
+        // Grain latency: half the output grain plus the half-span it reads, plus the delay
+        func latency(_ on: Bool, _ v: Voice, _ phi: Double, _ delay: Double) -> Double {
+            guard on else { return 0 }
+            let h = max(period / phi, 0.75 * period / max(0.5, min(2, v.ratio)))
+            return h + h * phi + 2 + delay
+        }
+        let worst = max(latency(enabled.0, v0, phis.0, delays.0), latency(enabled.1, v1, phis.1, delays.1),
+                        latency(enabled.2, v2, phis.2, delays.2))
+        latencyMsBits.store(Float(worst / sampleRate * 1000).bitPattern, ordering: .relaxed)
+    }
+
+    @inline(__always)
+    private static func formantRate(_ atomic: borrowing Atomic<UInt32>) -> Double {
+        max(0.5, min(2, Double(Float(bitPattern: atomic.load(ordering: .relaxed)))))
     }
 
     private struct VoiceMix {
@@ -207,7 +258,7 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
     /// One output sample of a harmony voice (before its level and pan)
     @inline(__always)
     private func render(_ v: inout Voice, on: Bool, at t: Int, refresh: Bool,
-                        detune: Double, delay: Double, mix: VoiceMix) -> Float {
+                        detune: Double, delay: Double, phi: Double, mix: VoiceMix) -> Float {
         let target: Float = on ? 1 : 0
         v.env += (target > v.env ? mix.openCoeff : mix.closeCoeff) * (target - v.env)
         // Faded out: stop working, and start fresh at the next phrase
@@ -218,7 +269,7 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
         v.semis += mix.glideCoeff * (v.targetSemis - v.semis)
         if refresh { v.ratio = exp2((v.semis * 100 + detune) / 1200) }
         if !v.primed { v.prime(at: t, period: period, delay: delay) }
-        emitGrains(&v, upTo: t, delay: delay)
+        emitGrains(&v, upTo: t, delay: delay, phi: phi)
 
         let idx = t & Self.mask
         var y = v.ola[idx] / max(v.olaWin[idx], 0.25)
@@ -260,12 +311,14 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
     }
 
     /// Lays down every grain of `v` whose span starts at or before output time `t`
-    private func emitGrains(_ v: inout Voice, upTo t: Int, delay: Double) {
+    private func emitGrains(_ v: inout Voice, upTo t: Int, delay: Double, phi: Double) {
         while true {
             let r = max(0.5, min(2, v.ratio))
             let hop = period / r
-            let h = max(16, min(Self.maxLag, Int(max(period, 0.75 * hop).rounded())))
-            let span = Double(h)
+            // Output half-length: one period re-scaled by Gender (reading a grain faster
+            // squeezes its resonances up), but always long enough to reach the next grain
+            let h = max(16, min(Self.maxLag, Int(max(period / phi, 0.75 * hop).rounded())))
+            let span = Double(h) * phi              // input half-span the grain reads
             let mark = Int(v.nextMark.rounded())
             guard mark - h <= t else { break }
 
@@ -281,7 +334,7 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
             for j in -h...h {
                 let w = 0.5 + 0.5 * cos(Double.pi * Double(j) / hD)
                 let o = (mark + j) & Self.mask
-                v.ola[o] += Float(w * readAbsolute(center + Double(j)))
+                v.ola[o] += Float(w * readAbsolute(center + Double(j) * phi))
                 v.olaWin[o] += Float(w)
             }
             v.nextMark += hop
@@ -302,7 +355,7 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
 
     // MARK: - Detection + harmony choice (once per hop)
 
-    private func analyze(_ v0: inout Voice, _ v1: inout Voice) {
+    private func analyze(_ v0: inout Voice, _ v1: inout Voice, _ v2: inout Voice) {
         let sr = Float(sampleRate)
         let minHz = max(50, Float(bitPattern: minHzBits.load(ordering: .relaxed)))
         let maxHz = max(minHz * 2, Float(bitPattern: maxHzBits.load(ordering: .relaxed)))
@@ -372,9 +425,11 @@ nonisolated final class HarmonyKernel: @unchecked Sendable {
         let note = Self.nearestNote(to: midi, allowed: scale)
         sungNote = note
         let i0 = HarmonyInterval(rawValue: interval0.load(ordering: .relaxed)) ?? .thirdAbove
-        let i1 = HarmonyInterval(rawValue: interval1.load(ordering: .relaxed)) ?? .fifthAbove
+        let i1 = HarmonyInterval(rawValue: interval1.load(ordering: .relaxed)) ?? .fourthBelow
+        let i2 = HarmonyInterval(rawValue: interval2.load(ordering: .relaxed)) ?? .octaveBelow
         v0.targetSemis = Double(Self.harmonyNote(from: note, interval: i0, allowed: scale) - note)
         v1.targetSemis = Double(Self.harmonyNote(from: note, interval: i1, allowed: scale) - note)
+        v2.targetSemis = Double(Self.harmonyNote(from: note, interval: i2, allowed: scale) - note)
     }
 
     static func nearestNote(to midi: Float, allowed: UInt32) -> Int {
