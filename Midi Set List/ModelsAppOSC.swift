@@ -267,9 +267,9 @@ extension BuiltInFXType {
             num("amount", "Amount", 0...100, "%", "How much of the instrument's tone profile. 0 = flat.",
                 get: { Double($0.tone.amount) }, set: { $0.tone.amount = Float($1) }),
             choice("instrument", "Instrument", ["None"] + ToneInstrument.allCases.map(\.displayName),
-                   "Picks the profile and stops following the channel's icon. 0 = none (Tone does nothing).",
+                   "The profile. 0 = none (Tone does nothing).",
                    get: { ($0.tone.instrument?.rawValue ?? -1) + 1 },
-                   set: { $0.tone.instrument = ToneInstrument(rawValue: $1 - 1); $0.tone.followChannel = false }),
+                   set: { $0.tone.instrument = ToneInstrument(rawValue: $1 - 1) }),
         ]
         case .piezoBody: [
             num("amount", "Amount", 0...100, "%", "Body back in, quack and spikiness out. 0 = flat.",

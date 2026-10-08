@@ -242,8 +242,7 @@ struct ChannelStripView: View {
         .sheet(item: $fxEditTarget) { target in
             FXSlotEditorSheet(
                 slot: channel.slots[target.slotIndex],
-                liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: target.slotIndex),
-                channelInstrument: channel.instrument
+                liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: target.slotIndex)
             ) { updatedSlot in
                 let typeChanged = updatedSlot.type != channel.slots[target.slotIndex].type
                 var c = channel
@@ -303,8 +302,6 @@ struct ChannelStripView: View {
             Text(store.inputPort(for: channel)?.displayName ?? "Input \(channel.inputIndex + 1)")
                 .font(.caption).foregroundStyle(.secondary)
 
-            instrumentRow
-
             MixerLinkControls(channel: channel)
 
             if let renameNotice {
@@ -340,97 +337,6 @@ struct ChannelStripView: View {
             }
         }
         .padding(10)
-    }
-
-    // MARK: Instrument + Tone
-
-    private var toneSlotIndex: Int? { channel.slots.firstIndex { $0.type == .tone } }
-
-    private var toneIsOn: Bool {
-        guard channel.instrument != nil, let i = toneSlotIndex else { return false }
-        return !channel.slots[i].isBypassed
-    }
-
-    private var instrumentRow: some View {
-        HStack(spacing: 6) {
-            Menu {
-                Picker("Instrument", selection: Binding(
-                    get: { channel.instrument },
-                    set: { setInstrument($0) }
-                )) {
-                    Text("None").tag(Optional<ToneInstrument>.none)
-                    ForEach(ToneInstrument.allCases) { inst in
-                        Text("\(inst.icon) \(inst.displayName)").tag(Optional(inst))
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(channel.instrument?.icon ?? "＋").font(.callout)
-                    Text(channel.instrument?.shortName ?? "Instrument")
-                        .font(.caption)
-                        .foregroundStyle(channel.instrument == nil ? .secondary : .primary)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 8)
-                .frame(minHeight: 32)
-                .background(Color.secondary.opacity(0.12), in: Capsule())
-                .contentShape(Capsule())
-            }
-            .accessibilityLabel("Instrument: \(channel.instrument?.displayName ?? "none")")
-
-            Spacer(minLength: 0)
-
-            // Like VoiceLive's Tone: one button that makes this instrument sound right
-            Button { toggleTone() } label: {
-                Text("TONE")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(toneIsOn ? Color.white : Color.secondary)
-                    .frame(width: 52, height: 30)
-                    .background(toneIsOn ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
-                    .frame(height: 40)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .opacity(channel.instrument == nil ? 0.4 : 1)
-            .accessibilityLabel(toneIsOn ? "Tone on" : "Tone off")
-            .accessibilityHint(channel.instrument == nil ? "Pick an instrument first" : "")
-        }
-    }
-
-    /// New icon: every Tone on this channel that follows it switches profile, live
-    private func setInstrument(_ instrument: ToneInstrument?) {
-        var c = channel
-        c.instrument = instrument
-        var changed: [Int] = []
-        for i in c.slots.indices where c.slots[i].type == .tone && c.slots[i].tone.followChannel {
-            c.slots[i].tone.instrument = instrument
-            changed.append(i)
-        }
-        store.update(c)
-        if engine.isRunning {
-            for i in changed { engine.applySlot(c.slots[i], channelID: channelID, slotIndex: i) }
-        }
-    }
-
-    /// No instrument: nothing. Tone already in the chain: on/off, live. Otherwise add it to
-    /// the first empty slot (this one time the channel's audio is rebuilt).
-    private func toggleTone() {
-        guard let instrument = channel.instrument else { return }
-        if let i = toneSlotIndex {
-            toggleBypass(i)
-            return
-        }
-        guard let empty = channel.slots.firstIndex(where: { $0.type == nil }) else {
-            renameNotice = "No free FX slot for Tone"
-            return
-        }
-        var c = channel
-        var slot = ChannelFXSlot()
-        slot.type = .tone
-        slot.tone.instrument = instrument
-        c.slots[empty] = slot
-        store.update(c)
-        engine.syncChannel(channelID)
     }
 
     // MARK: FX slots
@@ -984,10 +890,8 @@ extension ChannelFXSlot {
                       : "± \(Int(p.tolerance))¢"
             return [key, speed, third]
         case .tone:
-            guard let instrument = tone.instrument else { return ["No instrument", "Does nothing"] }
-            return ["\(instrument.icon) \(instrument.shortName)",
-                    "Amount \(Int(tone.amount))%",
-                    tone.followChannel ? "Follows channel" : "Set here"]
+            guard let instrument = tone.instrument else { return ["Pick instrument", "Does nothing"] }
+            return ["\(instrument.icon) \(instrument.shortName)", "Amount \(Int(tone.amount))%"]
         case .piezoBody:
             let b = piezoBody
             if b.mute { return ["Muted", b.bodySize.displayName] }
@@ -1096,15 +1000,11 @@ struct FXSlotEditorSheet: View {
     let liveUnit: AUAudioUnit?
     let onSave: (ChannelFXSlot) -> Void
 
-    /// The channel's instrument icon, for a Tone effect that follows it
-    let channelInstrument: ToneInstrument?
-
-    init(slot: ChannelFXSlot, liveUnit: AUAudioUnit? = nil, channelInstrument: ToneInstrument? = nil,
+    init(slot: ChannelFXSlot, liveUnit: AUAudioUnit? = nil,
          onSave: @escaping (ChannelFXSlot) -> Void) {
         _slot = State(initialValue: slot)
         original = slot
         self.liveUnit = liveUnit
-        self.channelInstrument = channelInstrument
         self.onSave = onSave
     }
 
@@ -1117,13 +1017,7 @@ struct FXSlotEditorSheet: View {
         NavigationStack {
             Form {
                 Section("Effect") {
-                    Picker("Type", selection: Binding(
-                        get: { slot.type },
-                        set: { type in
-                            slot.type = type
-                            if type == .tone, slot.tone.followChannel { slot.tone.instrument = channelInstrument }
-                        }
-                    )) {
+                    Picker("Type", selection: $slot.type) {
                         Text("None").tag(Optional<BuiltInFXType>.none)
                         ForEach(BuiltInFXType.allCases) { type in
                             Label(type.displayName, systemImage: type.systemImage)
@@ -1161,8 +1055,7 @@ struct FXSlotEditorSheet: View {
                         PiezoBodyEditor(params: $slot.piezoBody,
                                         kernel: live(PiezoBodyAudioUnit.self)?.kernel)
                     case .tone:
-                        ToneEditor(params: $slot.tone, channelInstrument: channelInstrument,
-                                   kernel: live(ToneAudioUnit.self)?.kernel)
+                        ToneEditor(params: $slot.tone, kernel: live(ToneAudioUnit.self)?.kernel)
                     }
                 }
             }
@@ -1740,28 +1633,13 @@ private struct MicroDetuneEditor: View {
 
 private struct ToneEditor: View {
     @Binding var params: ToneParams
-    let channelInstrument: ToneInstrument?
     let kernel: ToneKernel?
 
     var body: some View {
         Section {
-            Toggle("Follow Channel Icon", isOn: Binding(
-                get: { params.followChannel },
-                set: { on in
-                    params.followChannel = on
-                    if on { params.instrument = channelInstrument }
-                }
-            ))
-            if params.followChannel {
-                LabeledContent("Instrument") {
-                    Text(channelInstrument.map { "\($0.icon) \($0.displayName)" } ?? "None — set the channel's icon")
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                Picker("Instrument", selection: $params.instrument) {
-                    Text("None").tag(Optional<ToneInstrument>.none)
-                    ForEach(ToneInstrument.allCases) { Text("\($0.icon) \($0.displayName)").tag(Optional($0)) }
-                }
+            Picker("Instrument", selection: $params.instrument) {
+                Text("None").tag(Optional<ToneInstrument>.none)
+                ForEach(ToneInstrument.allCases) { Text("\($0.icon) \($0.displayName)").tag(Optional($0)) }
             }
             LabeledContent("Amount: \(Int(params.amount))%") {
                 Slider(value: $params.amount, in: 0.0...100.0, step: 1)
@@ -1784,7 +1662,7 @@ private struct ToneEditor: View {
             Text("Tone")
         } footer: {
             Text(params.instrument.map { "\($0.toneDescription) Amount scales it all; 0 is flat. Zero latency." }
-                 ?? "No instrument, so Tone passes the sound through untouched. Set the channel's instrument icon (under its name) or turn off Follow and pick one.")
+                 ?? "Pick what's on this channel. Until then Tone passes the sound through untouched.")
         }
         .onChange(of: params) {
             kernel?.applyParams(instrument: params.instrument, amount: params.amount)

@@ -162,7 +162,7 @@ struct FeedbackNotchParams: Codable, Equatable {
 
 // MARK: - Tone (instrument-aware one-button sound)
 
-/// What's on a channel. Sets the channel's icon, and the profile its Tone effect uses.
+/// What a Tone effect shapes the sound for
 nonisolated enum ToneInstrument: Int, Codable, CaseIterable, Identifiable {
     case leadVocal = 0, backingVocal, acousticGuitar, electricGuitar, bass, keys, synth, kick, snare, drumKit
 
@@ -294,9 +294,7 @@ nonisolated enum ToneInstrument: Int, Codable, CaseIterable, Identifiable {
 }
 
 struct ToneParams: Codable, Equatable {
-    /// Use the channel's instrument icon (kept in `instrument`); off = the one picked here
-    var followChannel = true
-    /// The instrument in use; nil = Tone does nothing
+    /// The instrument it shapes the sound for; nil = Tone does nothing
     var instrument: ToneInstrument?
     var amount: Float = 70          // %, 0...100
 
@@ -305,7 +303,6 @@ struct ToneParams: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = ToneParams()
-        followChannel = try c.decodeIfPresent(Bool.self, forKey: .followChannel) ?? d.followChannel
         instrument = try? c.decodeIfPresent(ToneInstrument.self, forKey: .instrument)
         amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? d.amount
     }
@@ -940,8 +937,6 @@ struct AudioChannel: Codable, Identifiable, Equatable {
     var macros: [ChannelMacro] = []
     /// 1-based channel on the linked mixer; nil = same as the interface input
     var mixerChannel: Int? = nil
-    /// What's plugged in: the strip's icon, and what Tone shapes it for
-    var instrument: ToneInstrument? = nil
 
     var displayName: String { name.isEmpty ? "Input \(inputIndex + 1)" : name }
 }
@@ -983,7 +978,6 @@ extension AudioChannel {
         slots = try c.decodeIfPresent([ChannelFXSlot].self, forKey: .slots) ?? Array(repeating: ChannelFXSlot(), count: 6)
         macros = try c.decodeIfPresent([ChannelMacro].self, forKey: .macros) ?? []
         mixerChannel = try c.decodeIfPresent(Int.self, forKey: .mixerChannel)
-        instrument = try? c.decodeIfPresent(ToneInstrument.self, forKey: .instrument)
     }
 }
 
