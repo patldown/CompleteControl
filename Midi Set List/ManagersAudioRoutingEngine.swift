@@ -123,6 +123,12 @@ final class AudioRoutingEngine {
             name: "Pitch Guide",
             version: 1
         )
+        AUAudioUnit.registerSubclass(
+            MicroDetuneAudioUnit.self,
+            as: MicroDetuneAudioUnit.componentDescription,
+            name: "Micro Detune",
+            version: 1
+        )
 
         // iOS stops the engine when the hardware configuration changes (interface
         // re-plugged, sample rate) — bring it straight back rather than going silent
@@ -435,6 +441,11 @@ final class AudioRoutingEngine {
             (effect.auAudioUnit as? PitchGuideAudioUnit)?.kernel
                 .applyParams(slot.pitchGuide.resolved(songKey: songKey))
             return effect
+        case .microDetune:
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: MicroDetuneAudioUnit.componentDescription)
+            (effect.auAudioUnit as? MicroDetuneAudioUnit)?.kernel.applyParams(slot.microDetune)
+            return effect
         }
     }
 
@@ -548,6 +559,9 @@ final class AudioRoutingEngine {
         case .pitchGuide:
             ((node as? AVAudioUnitEffect)?.auAudioUnit as? PitchGuideAudioUnit)?
                 .kernel.applyParams(slot.pitchGuide.resolved(songKey: songKey))
+        case .microDetune:
+            ((node as? AVAudioUnitEffect)?.auAudioUnit as? MicroDetuneAudioUnit)?
+                .kernel.applyParams(slot.microDetune)
         case nil:
             break
         }

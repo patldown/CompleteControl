@@ -108,6 +108,7 @@ extension BuiltInFXType {
         case .fetComp:       "fet"
         case .feedbackNotch: "notch"
         case .pitchGuide:    "pitch"
+        case .microDetune:   "detune"
         }
     }
 
@@ -240,6 +241,20 @@ extension BuiltInFXType {
                    get: { $0.pitchGuide.shiftOnlyWhileSinging }, set: { $0.pitchGuide.shiftOnlyWhileSinging = $1 }),
             num("bleedDuck", "Bleed Duck", -20...0, "dB", "Turns the mic down between phrases. 0 = off.",
                 get: { Double($0.pitchGuide.bleedDuck) }, set: { $0.pitchGuide.bleedDuck = Float($1) }),
+        ]
+        case .microDetune: [
+            num("detune", "Detune", 0...50, "cents", "Left voice up, right voice down. 6–12 = classic widening.",
+                get: { Double($0.microDetune.detune) }, set: { $0.microDetune.detune = Float($1) }),
+            num("delay", "Delay", 0...100, "ms", "Right voice gets 1.4× this. 8–20 = tight double.",
+                get: { Double($0.microDetune.delay) }, set: { $0.microDetune.delay = Float($1) }),
+            num("width", "Width", 0...100, "%", "How far apart the two voices are panned.",
+                get: { Double($0.microDetune.width) }, set: { $0.microDetune.width = Float($1) }),
+            num("mix", "Mix", 0...100, "%", "50 = dry and wet both full; above that the dry fades.",
+                get: { Double($0.microDetune.mix) }, set: { $0.microDetune.mix = Float($1) }),
+            num("feedback", "Feedback", 0...70, "%", "Feeds the voices back for a shimmer.",
+                get: { Double($0.microDetune.feedback) }, set: { $0.microDetune.feedback = Float($1) }),
+            num("lowCut", "Low Cut", 20...600, "Hz", "Keeps the low end out of the voices.",
+                get: { Double($0.microDetune.lowCut) }, set: { $0.microDetune.lowCut = Float($1) }),
         ]
         }
     }

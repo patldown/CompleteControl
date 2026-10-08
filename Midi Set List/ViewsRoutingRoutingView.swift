@@ -632,6 +632,7 @@ extension BuiltInFXType {
         case .fetComp:       "FET"
         case .feedbackNotch: "Notch"
         case .pitchGuide:    "Pitch"
+        case .microDetune:   "Detune"
         }
     }
 }
@@ -693,6 +694,11 @@ extension ChannelFXSlot {
                       : p.amount < 100 ? "Amount \(Int(p.amount))%"
                       : "± \(Int(p.tolerance))¢"
             return [key, speed, third]
+        case .microDetune:
+            let d = microDetune
+            return ["±\(Int(d.detune))¢  \(Int(d.delay)) ms",
+                    "Width \(Int(d.width))%",
+                    "Mix \(Int(d.mix))%"]
         }
     }
 }
@@ -821,6 +827,9 @@ struct FXSlotEditorSheet: View {
                     case .pitchGuide:
                         PitchGuideEditor(params: $slot.pitchGuide,
                                          kernel: live(PitchGuideAudioUnit.self)?.kernel)
+                    case .microDetune:
+                        MicroDetuneEditor(params: $slot.microDetune,
+                                          kernel: live(MicroDetuneAudioUnit.self)?.kernel)
                     }
                 }
             }
@@ -1262,6 +1271,46 @@ private struct PitchGuideEditor: View {
             return "No song key — using fallback"
         }
         return "Correcting in \(key.root) \(key.scale.rawValue)"
+    }
+}
+
+private struct MicroDetuneEditor: View {
+    @Binding var params: MicroDetuneParams
+    let kernel: MicroDetuneKernel?
+
+    var body: some View {
+        Section {
+            LabeledContent("Detune: ±\(Int(params.detune)) cents") {
+                Slider(value: $params.detune, in: 0.0...50.0, step: 1)
+            }
+            LabeledContent("Delay: \(Int(params.delay)) ms") {
+                Slider(value: $params.delay, in: 0.0...100.0, step: 1)
+            }
+        } header: {
+            Text("Voices")
+        } footer: {
+            Text("Two copies of the voice: the left one tuned up and the right one down by Detune, both slightly late (the right voice gets 1.4× the delay). 6–12 cents and 8–20 ms is the classic wide, doubled vocal.")
+        }
+
+        Section {
+            LabeledContent("Width: \(Int(params.width))%") {
+                Slider(value: $params.width, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Mix: \(Int(params.mix))%") {
+                Slider(value: $params.mix, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Feedback: \(Int(params.feedback))%") {
+                Slider(value: $params.feedback, in: 0.0...70.0, step: 1)
+            }
+            LabeledContent("Low Cut: \(Int(params.lowCut)) Hz") {
+                Slider(value: $params.lowCut, in: 20.0...600.0, step: 5)
+            }
+        } header: {
+            Text("Blend")
+        } footer: {
+            Text("Mix 50% keeps the dry voice and the wide voices both at full; above that the dry fades out. Low Cut keeps the bass out of the voices so the low end stays centred. Send the channel to a stereo output to hear the width — on a mono output it becomes a thickening double. Put it after pitch correction.")
+        }
+        .onChange(of: params) { kernel?.applyParams(params) }
     }
 }
 

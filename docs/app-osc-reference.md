@@ -62,6 +62,7 @@ the first (lower slot) is `<fx>` and the second is `<fx>2`, e.g. `pitch` and `pi
 | `fet` | FET Comp (1176 style) |
 | `notch` | Feedback Notch |
 | `pitch` | Pitch Guide (pitch correction, transpose, formant) |
+| `detune` | Micro Detune (micro-pitch stereo widener) |
 
 ### Value conventions
 
@@ -175,6 +176,16 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `formant` | -6 to 6 semitones | + smaller/brighter, − bigger/darker |
 | `shiftOnlyWhileSinging` | toggle | Transpose/Formant switch off between phrases |
 | `bleedDuck` | -20 to 0 dB | Turns the mic down between phrases. 0 = off |
+
+### `detune` — Micro Detune
+| Param | Range | Notes |
+|---|---|---|
+| `detune` | 0 to 50 cents | Left voice up, right voice down. 6–12 = classic widening |
+| `delay` | 0 to 100 ms | Right voice gets 1.4× this. 8–20 = tight double |
+| `width` | 0 to 100 % | How far apart the two voices are panned |
+| `mix` | 0 to 100 % | 50 = dry and wet both full; above that the dry fades |
+| `feedback` | 0 to 70 % | Feeds the voices back for a shimmer |
+| `lowCut` | 20 to 600 Hz | Keeps the low end out of the voices |
 
 ---
 

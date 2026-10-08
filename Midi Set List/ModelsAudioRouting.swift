@@ -14,12 +14,12 @@ import Foundation
 // MARK: - FX type
 
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
-    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide
+    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide, microDetune
 
     // reverb and delay kept in enum for JSON backward-compat but are no longer available;
     // the load() migration clears any saved slots of these types.
     static var allCases: [BuiltInFXType] {
-        [.gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide]
+        [.gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide, .microDetune]
     }
 
     var id: String { rawValue }
@@ -35,6 +35,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .fetComp:    "FET Comp (1176 style)"
         case .feedbackNotch: "Feedback Notch"
         case .pitchGuide: "Pitch Guide"
+        case .microDetune: "Micro Detune (widener)"
         }
     }
 
@@ -49,6 +50,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .fetComp:    "bolt"
         case .feedbackNotch: "waveform.path.badge.minus"
         case .pitchGuide: "music.note"
+        case .microDetune: "arrow.left.and.right"
         }
     }
 }
@@ -148,6 +150,31 @@ struct FeedbackNotchParams: Codable, Equatable {
     var notches: [FeedbackNotch] = []
     var sensitivity: Float = 50     // 0...100; higher catches ringing sooner
     var maxDepth: Float = -12       // dB, -18...-6; deepest any one notch may go
+}
+
+// MARK: - Micro Detune parameters
+
+/// Micro-pitch widener: two slightly detuned, delayed voices panned apart around the dry signal
+struct MicroDetuneParams: Codable, Equatable {
+    var detune: Float = 9           // cents, 0...50; left voice up, right voice down
+    var delay: Float = 12           // ms, 0...100; the right voice gets 1.4× this
+    var width: Float = 100          // %, 0...100; how far apart the voices are panned
+    var mix: Float = 35             // %, 0...100; 50 = dry and wet both full
+    var feedback: Float = 0         // %, 0...70
+    var lowCut: Float = 150         // Hz, 20...600; keeps the low end centred and clean
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = MicroDetuneParams()
+        detune = try c.decodeIfPresent(Float.self, forKey: .detune) ?? d.detune
+        delay = try c.decodeIfPresent(Float.self, forKey: .delay) ?? d.delay
+        width = try c.decodeIfPresent(Float.self, forKey: .width) ?? d.width
+        mix = try c.decodeIfPresent(Float.self, forKey: .mix) ?? d.mix
+        feedback = try c.decodeIfPresent(Float.self, forKey: .feedback) ?? d.feedback
+        lowCut = try c.decodeIfPresent(Float.self, forKey: .lowCut) ?? d.lowCut
+    }
 }
 
 // MARK: - Pitch Guide parameters
@@ -333,6 +360,7 @@ struct ChannelFXSlot: Codable, Equatable {
     var fetComp: FETCompParams = .init()
     var feedbackNotch: FeedbackNotchParams = .init()
     var pitchGuide: PitchGuideParams = .init()
+    var microDetune: MicroDetuneParams = .init()
 
     init() {}
 
@@ -350,6 +378,7 @@ struct ChannelFXSlot: Codable, Equatable {
         fetComp = try c.decodeIfPresent(FETCompParams.self, forKey: .fetComp) ?? .init()
         feedbackNotch = try c.decodeIfPresent(FeedbackNotchParams.self, forKey: .feedbackNotch) ?? .init()
         pitchGuide = try c.decodeIfPresent(PitchGuideParams.self, forKey: .pitchGuide) ?? .init()
+        microDetune = try c.decodeIfPresent(MicroDetuneParams.self, forKey: .microDetune) ?? .init()
     }
 }
 
