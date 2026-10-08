@@ -1,8 +1,8 @@
 //
-//  LevelRiderAU.swift
+//  PitchGuideAU.swift
 //  Midi Set List
 //
-//  In-process AUAudioUnit subclass wrapping LevelRiderKernel.
+//  In-process AUAudioUnit subclass wrapping PitchGuideKernel.
 //  Registered via AUAudioUnit.registerSubclass in AudioRoutingEngine.init(),
 //  then loaded with AVAudioUnit.instantiate(with:options:.loadInProcess) —
 //  no separate app extension target required.
@@ -12,17 +12,17 @@ import AVFoundation
 import AudioToolbox
 import Synchronization
 
-final class LevelRiderAudioUnit: AUAudioUnit {
+final class PitchGuideAudioUnit: AUAudioUnit {
 
     static let componentDescription = AudioComponentDescription(
         componentType: kAudioUnitType_Effect,
-        componentSubType: 0x4C565244,       // 'LVRD'
+        componentSubType: 0x50544348,       // 'PTCH'
         componentManufacturer: 0x4D534C53,  // 'MSLS'
         componentFlags: 0,
         componentFlagsMask: 0
     )
 
-    let kernel = LevelRiderKernel()
+    let kernel = PitchGuideKernel()
 
     private var _inputBusses: AUAudioUnitBusArray!
     private var _outputBusses: AUAudioUnitBusArray!

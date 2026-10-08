@@ -1,8 +1,8 @@
 //
-//  LevelRiderAU.swift
+//  FeedbackNotchAU.swift
 //  Midi Set List
 //
-//  In-process AUAudioUnit subclass wrapping LevelRiderKernel.
+//  In-process AUAudioUnit subclass wrapping FeedbackNotchKernel.
 //  Registered via AUAudioUnit.registerSubclass in AudioRoutingEngine.init(),
 //  then loaded with AVAudioUnit.instantiate(with:options:.loadInProcess) —
 //  no separate app extension target required.
@@ -12,17 +12,17 @@ import AVFoundation
 import AudioToolbox
 import Synchronization
 
-final class LevelRiderAudioUnit: AUAudioUnit {
+final class FeedbackNotchAudioUnit: AUAudioUnit {
 
     static let componentDescription = AudioComponentDescription(
         componentType: kAudioUnitType_Effect,
-        componentSubType: 0x4C565244,       // 'LVRD'
+        componentSubType: 0x464E4F54,       // 'FNOT'
         componentManufacturer: 0x4D534C53,  // 'MSLS'
         componentFlags: 0,
         componentFlagsMask: 0
     )
 
-    let kernel = LevelRiderKernel()
+    let kernel = FeedbackNotchKernel()
 
     private var _inputBusses: AUAudioUnitBusArray!
     private var _outputBusses: AUAudioUnitBusArray!

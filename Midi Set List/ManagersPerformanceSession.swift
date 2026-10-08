@@ -271,11 +271,18 @@ final class PerformanceSession {
         }
     }
 
+    /// Points Pitch Guide at the key the audience hears in the loaded song. Call again after
+    /// changing the song's key, transpose or capo.
+    func followSongKey() {
+        AudioRoutingEngine.shared.followSongKey(activeSong?.currentKey)
+    }
+
     /// If the MIDI clock is running, move it to the new song's tempo (or stop it).
     /// A song loaded: move a running MIDI clock to its tempo (or stop it), and start the
     /// click if the song is marked for one — both from the same beat 1. `moveClock` is
     /// false for Live Follow followers that don't send commands.
     private func followClock(for song: Song, moveClock: Bool = true) {
+        followSongKey()
         let prefs = UserPreferences.shared
         let wantsClick = song.clickEnabled && song.bpm != nil && prefs.metronomeAutoStart
         let beatOne = mach_absolute_time() + HostTime.ticks(seconds: Metronome.leadIn)

@@ -64,6 +64,8 @@ final class UserPreferences: ObservableObject {
         static let metronomeAutoStart = "metronomeAutoStart"
         static let metronomeCountInOnly = "metronomeCountInOnly"
         static let metronomeOutputBus = "metronomeOutputBus"
+        static let metronomeOutputMono = "metronomeOutputMono"
+        static let metronomeMonoChannel = "metronomeMonoChannel"
     }
 
     static let scrollSpeedRange: ClosedRange<Double> = 5...100
@@ -129,6 +131,31 @@ final class UserPreferences: ObservableObject {
     @Published var metronomeOutputBus: Int {
         didSet { store(metronomeOutputBus, Key.metronomeOutputBus) }
     }
+    /// Click on one output instead of a pair (common for an in-ear mix send)
+    @Published var metronomeOutputMono: Bool {
+        didSet { store(metronomeOutputMono, Key.metronomeOutputMono) }
+    }
+    /// The output (0-based) used when the click is mono
+    @Published var metronomeMonoChannel: Int {
+        didSet { store(metronomeMonoChannel, Key.metronomeMonoChannel) }
+    }
+
+    /// The click's output as a route: a stereo pair (metronomeOutputBus) or one output
+    var metronomeOutput: OutputRoute {
+        get {
+            metronomeOutputMono ? OutputRoute(channel: metronomeMonoChannel, stereo: false)
+                                : OutputRoute(channel: metronomeOutputBus * 2, stereo: true)
+        }
+        set {
+            if newValue.stereo {
+                metronomeOutputMono = false
+                metronomeOutputBus = newValue.channel / 2
+            } else {
+                metronomeOutputMono = true
+                metronomeMonoChannel = newValue.channel
+            }
+        }
+    }
 
     /// Views picked on Perform while the override is on: kept for this visit only, so the
     /// per-song memory stays exactly as it was
@@ -152,6 +179,8 @@ final class UserPreferences: ObservableObject {
         metronomeAutoStart = true
         metronomeCountInOnly = false
         metronomeOutputBus = 0
+        metronomeOutputMono = false
+        metronomeMonoChannel = 0
         load()
 
         cancellable = NotificationCenter.default
@@ -272,6 +301,12 @@ final class UserPreferences: ObservableObject {
         }
         if let bus = (value(Key.metronomeOutputBus) as? NSNumber)?.intValue {
             metronomeOutputBus = max(0, bus)
+        }
+        if let mono = (value(Key.metronomeOutputMono) as? NSNumber)?.boolValue {
+            metronomeOutputMono = mono
+        }
+        if let channel = (value(Key.metronomeMonoChannel) as? NSNumber)?.intValue {
+            metronomeMonoChannel = max(0, channel)
         }
     }
 

@@ -201,6 +201,7 @@ struct AddEditMacroView: View {
                 .keyboardType(.URL)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+            AppEffectPickerButton(address: $oscAddress, value: $oscFloatArg)
             HStack {
                 Text("Float Value")
                     .foregroundStyle(oscFormula.trimmingCharacters(in: .whitespaces).isEmpty ? .primary : .tertiary)
@@ -214,7 +215,7 @@ struct AddEditMacroView: View {
         } header: {
             Text("OSC Message")
         } footer: {
-            Text("Sent to all connected OSC targets. XR18 faders: 0.0–1.0.")
+            Text("Sent to all connected OSC targets. XR18 faders: 0.0–1.0. Addresses starting /app/ control this app's own effects instead.")
         }
 
         Section {

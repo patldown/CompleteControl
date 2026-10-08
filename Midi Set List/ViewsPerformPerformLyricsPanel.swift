@@ -265,6 +265,8 @@ struct TransposeMenu: View {
 
     private func changed() {
         song.dateModified = Date()
+        // This is the song on stage: keep Pitch Guide in the key the audience now hears
+        AudioRoutingEngine.shared.followSongKey(song.currentKey)
         onChange()
     }
 }

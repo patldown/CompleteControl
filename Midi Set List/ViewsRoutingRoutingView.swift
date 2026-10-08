@@ -7,7 +7,10 @@
 //  Only shown when an external audio interface is connected.
 //
 
+import AVFoundation
+import CoreData
 import SwiftUI
+import Synchronization
 
 // MARK: - Top-level tab view
 
@@ -30,9 +33,55 @@ struct RoutingView: View {
             .navigationTitle("Routing")
             .toolbar { toolbar }
             .sheet(isPresented: $showingAddChannel) { AddChannelSheet() }
-            .safeAreaInset(edge: .top) {
-                if engine.needsRestart && engine.isRunning { restartBanner }
+            .task { store.enableInputEnumeration() }
+            .safeAreaInset(edge: .bottom) {
+                if store.isExternalInterfaceConnected { latencyBar }
             }
+        }
+    }
+
+    private var latencyBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "timer").foregroundStyle(.secondary)
+            if let latency = engine.roundTripLatency {
+                let ms = latency * 1000
+                Text("Latency ≈ \(String(format: "%.1f", ms)) ms")
+                    .monospacedDigit()
+                    .foregroundStyle(ms <= 10 ? Color.green : ms <= 20 ? Color.orange : Color.red)
+                if let granted = engine.actualBufferFrames, granted != engine.bufferFrames {
+                    Text("(iOS gave \(granted))").foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Start the engine to measure latency").foregroundStyle(.secondary)
+            }
+            Spacer()
+            Menu {
+                // The one routing change that restarts all audio — a setup choice, not a live one
+                Section("Changing this restarts all audio briefly. Set it before the show.") {
+                    Picker("Buffer Size", selection: Binding(
+                        get: { engine.bufferFrames },
+                        set: { engine.bufferFrames = $0 }
+                    )) {
+                        ForEach(AudioRoutingEngine.bufferSizeOptions, id: \.self) { frames in
+                            Text(Self.bufferLabel(frames)).tag(frames)
+                        }
+                    }
+                }
+            } label: {
+                Label("Buffer \(engine.bufferFrames)", systemImage: "slider.horizontal.below.rectangle")
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.regularMaterial, in: Rectangle())
+    }
+
+    private static func bufferLabel(_ frames: Int) -> String {
+        switch frames {
+        case 64:  "64 samples (lowest latency, may crackle)"
+        case 128: "128 samples (recommended)"
+        case 512: "512 samples (safest, most latency)"
+        default:  "\(frames) samples"
         }
     }
 
@@ -67,12 +116,7 @@ struct RoutingView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Button { showingAddChannel = true } label: {
-                Label("Add Channel", systemImage: "plus")
-            }
-        }
-        ToolbarItem(placement: .secondaryAction) {
+        ToolbarItem(placement: .topBarTrailing) {
             Button {
                 Task {
                     if engine.isRunning { engine.stop() } else { await engine.start() }
@@ -83,20 +127,20 @@ struct RoutingView: View {
                     systemImage: engine.isRunning ? "stop.fill" : "play.fill"
                 )
             }
-            .tint(engine.isRunning ? .red : .accentColor)
+            .tint(engine.isRunning ? .red : .green)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { showingAddChannel = true } label: {
+                Label("Add Channel", systemImage: "plus")
+            }
+        }
+        ToolbarItem(placement: .secondaryAction) {
+            ShareLink(item: AppOSC.referenceMarkdown(channels: store.channels)) {
+                Label("Share OSC Reference", systemImage: "doc.text")
+            }
         }
     }
 
-    private var restartBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            Text("FX type changed — restart to apply.").font(.caption)
-            Spacer()
-            Button("Restart") { Task { await engine.start() } }.font(.caption.bold())
-        }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(.regularMaterial, in: Rectangle())
-    }
 }
 
 // MARK: - Channel strip
@@ -108,6 +152,11 @@ private struct FXEditTarget: Identifiable {
 
 struct ChannelStripView: View {
     let channelID: UUID
+    @Environment(\.managedObjectContext) private var viewContext
+    @FocusState private var nameFocused: Bool
+    @State private var nameBeforeEdit: String?
+    @State private var renamedMacroCount = 0
+    @State private var renameNotice: String?
     @State private var fxEditTarget: FXEditTarget?
     @State private var showingMacroSave = false
     @State private var newMacroName = ""
@@ -135,20 +184,44 @@ struct ChannelStripView: View {
             macroSection
         }
         .frame(width: 185)
+        .frame(maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(alignment: .leading) {
+            if engine.isRunning {
+                TimelineView(.animation(minimumInterval: 0.05)) { _ in
+                    LevelMeterBar(db: engine.channelInputLevel(id: channelID))
+                }
+                .frame(width: 4)
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+                .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if engine.isRunning {
+                TimelineView(.animation(minimumInterval: 0.05)) { _ in
+                    LevelMeterBar(db: engine.channelOutputLevel(id: channelID))
+                }
+                .frame(width: 4)
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+                .allowsHitTesting(false)
+            }
+        }
         .sheet(item: $fxEditTarget) { target in
-            FXSlotEditorSheet(slot: channel.slots[target.slotIndex]) { updatedSlot in
+            FXSlotEditorSheet(
+                slot: channel.slots[target.slotIndex],
+                liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: target.slotIndex)
+            ) { updatedSlot in
                 let typeChanged = updatedSlot.type != channel.slots[target.slotIndex].type
                 var c = channel
                 c.slots[target.slotIndex] = updatedSlot
                 store.update(c)
                 guard engine.isRunning else { return }
                 if typeChanged {
-                    engine.needsRestart = true
+                    engine.syncChannel(channelID)   // rebuilds this channel only
                 } else {
                     engine.applyMacro(
-                        ChannelMacro(slots: c.slots, outputBus: c.outputBus,
+                        ChannelMacro(slots: c.slots, output: c.output,
                                      volume: c.volume, isMuted: c.isMuted),
                         to: channelID
                     )
@@ -174,10 +247,15 @@ struct ChannelStripView: View {
                     set: { var c = channel; c.name = $0; commit(c) }
                 ))
                 .font(.headline).textFieldStyle(.plain)
+                .focused($nameFocused)
+                .onSubmit { nameFocused = false }
+                .onChange(of: nameFocused) { _, focused in
+                    if focused { nameBeforeEdit = channel.name } else { finishRename() }
+                }
 
                 Button(role: .destructive) {
                     store.remove(channel)
-                    if engine.isRunning { Task { await engine.start() } }
+                    engine.syncChannel(channelID)
                 } label: {
                     Image(systemName: "minus.circle.fill").foregroundStyle(.red)
                 }
@@ -185,6 +263,24 @@ struct ChannelStripView: View {
 
             Text(store.inputPort(for: channel)?.displayName ?? "Input \(channel.inputIndex + 1)")
                 .font(.caption).foregroundStyle(.secondary)
+
+            if let renameNotice {
+                Text(renameNotice)
+                    .font(.caption2).foregroundStyle(.orange)
+                    .task {
+                        try? await Task.sleep(for: .seconds(4))
+                        self.renameNotice = nil
+                    }
+            }
+
+            if renamedMacroCount > 0 {
+                Text("Updated \(renamedMacroCount) OSC address\(renamedMacroCount == 1 ? "" : "es")")
+                    .font(.caption2).foregroundStyle(.green)
+                    .task {
+                        try? await Task.sleep(for: .seconds(3))
+                        renamedMacroCount = 0
+                    }
+            }
 
             let nextExists = store.availableInputs.contains {
                 $0.monoIndex == channel.inputIndex + 1
@@ -194,7 +290,7 @@ struct ChannelStripView: View {
                     get: { channel.isStereoLinked },
                     set: { val in
                         var c = channel; c.isStereoLinked = val; store.update(c)
-                        if engine.isRunning { Task { await engine.start() } }
+                        engine.updateInput(of: c)   // instant; no rebuild
                     }
                 ))
                 .font(.caption).toggleStyle(.button).buttonStyle(.bordered).controlSize(.mini)
@@ -207,8 +303,9 @@ struct ChannelStripView: View {
 
     private var fxSlots: some View {
         VStack(spacing: 0) {
-            ForEach(0..<4, id: \.self) { i in
-                FXSlotRowView(slot: channel.slots[i]) {
+            ForEach(0..<6, id: \.self) { i in
+                FXSlotRowView(slot: channel.slots[i],
+                              liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: i)) {
                     fxEditTarget = FXEditTarget(slotIndex: i)
                 } onBypassToggle: {
                     var c = channel
@@ -216,13 +313,13 @@ struct ChannelStripView: View {
                     store.update(c)
                     if engine.isRunning {
                         engine.applyMacro(
-                            ChannelMacro(slots: c.slots, outputBus: c.outputBus,
+                            ChannelMacro(slots: c.slots, output: c.output,
                                          volume: c.volume, isMuted: c.isMuted),
                             to: channelID
                         )
                     }
                 }
-                if i < 3 { Divider() }
+                if i < 5 { Divider() }
             }
         }
     }
@@ -235,14 +332,17 @@ struct ChannelStripView: View {
                 Text("Out").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Picker("Output", selection: Binding(
-                    get: { channel.outputBus },
+                    get: { channel.output },
                     set: { val in
-                        var c = channel; c.outputBus = val; store.update(c)
-                        if engine.isRunning { Task { await engine.start() } }
+                        var c = channel; c.output = val; store.update(c)
+                        engine.updateOutput(of: c)   // instant; no rebuild
                     }
                 )) {
-                    ForEach(0..<store.availableOutputBusPairCount, id: \.self) { bus in
-                        Text(store.outputBusLabel(bus)).tag(bus)
+                    Section("Stereo") {
+                        ForEach(store.outputRoutes.filter(\.stereo), id: \.self) { Text($0.label).tag($0) }
+                    }
+                    Section("Mono") {
+                        ForEach(store.outputRoutes.filter { !$0.stereo }, id: \.self) { Text($0.label).tag($0) }
                     }
                 }
                 .pickerStyle(.menu).font(.caption)
@@ -307,12 +407,30 @@ struct ChannelStripView: View {
         .padding(10)
     }
 
+    /// Name editing ended: point /app/ macros and song commands at the new name
+    private func finishRename() {
+        defer { nameBeforeEdit = nil }
+        // Names are OSC addresses, so they must be unique: "Vox" taken → "Vox 2"
+        let unique = store.uniqueName(channel.name, excluding: channelID)
+        if unique != channel.name {
+            if !channel.name.trimmingCharacters(in: .whitespaces).isEmpty
+                && unique != channel.name.trimmingCharacters(in: .whitespaces) {
+                renameNotice = "\"\(channel.name)\" is taken — named \"\(unique)\""
+            }
+            var c = channel; c.name = unique; commit(c)
+        }
+        guard let old = nameBeforeEdit, old != channel.name,
+              let index = store.channels.firstIndex(where: { $0.id == channelID }) else { return }
+        let newSegment = AppOSC.channelSegment(channel, index: index)
+        renamedMacroCount = AppOSCRouter.retargetChannel(from: old, to: newSegment, in: viewContext)
+    }
+
     private func saveMacro() {
         guard !newMacroName.isEmpty else { return }
         let c = channel
         let macro = ChannelMacro(
             name: newMacroName,
-            slots: c.slots, outputBus: c.outputBus,
+            slots: c.slots, output: c.output,
             volume: c.volume, isMuted: c.isMuted
         )
         var updated = c
@@ -326,41 +444,99 @@ struct ChannelStripView: View {
 
 struct FXSlotRowView: View {
     let slot: ChannelFXSlot
+    var liveUnit: AUAudioUnit? = nil
     let onTap: () -> Void
     let onBypassToggle: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            Button(action: onTap) {
-                HStack(spacing: 6) {
-                    if let type = slot.type {
-                        Image(systemName: type.systemImage)
-                            .foregroundStyle(Color.accentColor).font(.caption2).frame(width: 14)
-                        Text(type.displayName)
-                            .font(.caption)
-                            .foregroundStyle(slot.isBypassed ? .tertiary : .primary)
-                    } else {
-                        Image(systemName: "plus").foregroundStyle(.tertiary)
-                            .font(.caption2).frame(width: 14)
-                        Text("Empty").font(.caption).foregroundStyle(.tertiary)
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Button(action: onTap) {
+                    HStack(spacing: 6) {
+                        if let type = slot.type {
+                            Image(systemName: type.systemImage)
+                                .foregroundStyle(Color.accentColor).font(.caption2).frame(width: 14)
+                            Text(type.displayName)
+                                .font(.caption)
+                                .foregroundStyle(slot.isBypassed ? .tertiary : .primary)
+                        } else {
+                            Image(systemName: "plus").foregroundStyle(.tertiary)
+                                .font(.caption2).frame(width: 14)
+                            Text("Empty").font(.caption).foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                     }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                }
-            }
-            .buttonStyle(.plain)
-
-            if slot.type != nil {
-                Button(action: onBypassToggle) {
-                    Text("B")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(slot.isBypassed ? .orange : .secondary)
                 }
                 .buttonStyle(.plain)
+
+                if slot.type != nil {
+                    Button(action: onBypassToggle) {
+                        Text("B")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(slot.isBypassed ? .orange : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+
+            if let db = gainIndicatorDB {
+                GainStagingBar(db: db)
+                    .frame(height: 3)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 4)
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 8)
         .contentShape(Rectangle())
+    }
+
+    private var gainIndicatorDB: Float? {
+        guard !slot.isBypassed, slot.type == .gain else { return nil }
+        let db = 20 * log10f(max(slot.gain.volume, 1e-7))
+        return abs(db) > 0.5 ? db : nil
+    }
+}
+
+// Horizontal bar centred at 0: orange extends left for cuts, green extends right for boosts
+private struct GainStagingBar: View {
+    let db: Float
+
+    var body: some View {
+        Canvas { context, size in
+            let range: Double = 18
+            let clamped = max(-range, min(range, Double(db)))
+            let mid = size.width / 2
+            let barW = abs(clamped) / range * mid
+            let color = clamped < 0 ? Color.orange : Color.green
+            let x = clamped < 0 ? mid - barW : mid
+            context.fill(
+                Path(CGRect(x: x, y: 0, width: max(1, barW), height: size.height)),
+                with: .color(color.opacity(0.85))
+            )
+        }
+    }
+}
+
+// Vertical bar that fills from the bottom; green < -18, yellow -18 to -6, red above -6
+private struct LevelMeterBar: View {
+    let db: Float
+
+    var body: some View {
+        GeometryReader { geo in
+            let fill = max(0.0, min(1.0, Double(db + 60) / 60))
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                meterColor.frame(height: geo.size.height * fill)
+            }
+        }
+        .background(Color.black.opacity(0.12))
+    }
+
+    private var meterColor: Color {
+        if db > -6  { return .red }
+        if db > -18 { return .yellow }
+        return .green
     }
 }
 
@@ -369,11 +545,22 @@ struct FXSlotRowView: View {
 struct FXSlotEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var slot: ChannelFXSlot
+    private let original: ChannelFXSlot
+    /// The slot's running AU (Feedback Notch ring-out, Pitch Guide live tuning and meter)
+    let liveUnit: AUAudioUnit?
     let onSave: (ChannelFXSlot) -> Void
 
-    init(slot: ChannelFXSlot, onSave: @escaping (ChannelFXSlot) -> Void) {
+    init(slot: ChannelFXSlot, liveUnit: AUAudioUnit? = nil,
+         onSave: @escaping (ChannelFXSlot) -> Void) {
         _slot = State(initialValue: slot)
+        original = slot
+        self.liveUnit = liveUnit
         self.onSave = onSave
+    }
+
+    /// Only hand the live unit to an editor of the same type it was built for
+    private func live<T: AUAudioUnit>(_: T.Type) -> T? {
+        slot.type == original.type ? liveUnit as? T : nil
     }
 
     var body: some View {
@@ -397,15 +584,32 @@ struct FXSlotEditorSheet: View {
                     case .eq3Band:    EQ3BandEditor(params: $slot.eq)
                     case .reverb:     ReverbEditor(params: $slot.reverb)
                     case .delay:      DelayEditor(params: $slot.delay)
-                    case .levelRider: LevelRiderEditor(params: $slot.levelRider)
-                    case .pitchGuide: PitchGuideEditor(params: $slot.pitchGuide)
+                    case .levelRider:
+                        LevelRiderEditor(params: $slot.levelRider,
+                                         kernel: live(LevelRiderAudioUnit.self)?.kernel)
+                    case .optoComp:   OptoCompEditor(params: $slot.optoComp)
+                    case .fetComp:    FETCompEditor(params: $slot.fetComp)
+                    case .feedbackNotch:
+                        FeedbackNotchEditor(params: $slot.feedbackNotch,
+                                            kernel: live(FeedbackNotchAudioUnit.self)?.kernel)
+                    case .pitchGuide:
+                        PitchGuideEditor(params: $slot.pitchGuide,
+                                         kernel: live(PitchGuideAudioUnit.self)?.kernel)
                     }
                 }
             }
             .navigationTitle("FX Slot")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel", role: .cancel) { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", role: .cancel) {
+                        // Ring-out and pitch tweaks change the running effect live; put them back
+                        (liveUnit as? FeedbackNotchAudioUnit)?.kernel.applyParams(original.feedbackNotch)
+                        (liveUnit as? PitchGuideAudioUnit)?.kernel
+                            .applyParams(original.pitchGuide.resolved(songKey: AudioRoutingEngine.shared.songKey))
+                        dismiss()
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { onSave(slot); dismiss() } }
             }
         }
@@ -499,7 +703,25 @@ private struct DelayEditor: View {
 
 private struct LevelRiderEditor: View {
     @Binding var params: LevelRiderParams
+    let kernel: LevelRiderKernel?
+
     var body: some View {
+        if let kernel {
+            LearnVoiceSection(
+                readLevel: { Float(bitPattern: kernel.levelDBBits.load(ordering: .relaxed)) },
+                describe: { levels in
+                    let s = Self.settings(for: levels)
+                    return "Apply sets Target \(Int(s.target)) dBFS, Max Boost +\(Int(s.maxBoost)) dB, Max Cut \(Int(s.maxCut)) dB and Gate \(Int(s.gate)) dBFS. Tap Done to keep them."
+                },
+                apply: { levels in
+                    let s = Self.settings(for: levels)
+                    params.targetLevel = s.target
+                    params.maxBoost = s.maxBoost
+                    params.maxCut = s.maxCut
+                    params.gateThreshold = s.gate
+                }
+            )
+        }
         Section("Input") {
             LabeledContent("Trim: \(String(format: "%+.1f", params.inputTrim)) dB") {
                 Slider(value: $params.inputTrim, in: -12.0...12.0)
@@ -535,18 +757,327 @@ private struct LevelRiderEditor: View {
     }
 }
 
-private struct PitchGuideEditor: View {
-    @Binding var params: PitchGuideParams
+extension LevelRiderEditor {
+    /// Aim between the softest and loudest lines; allow just enough boost and cut to reach them
+    static func settings(for levels: VoiceLevels) -> (target: Float, maxBoost: Float, maxCut: Float, gate: Float) {
+        let target = min(-6, max(-30, ((levels.softest + levels.loudest) / 2).rounded()))
+        return (target,
+                min(9, max(0, (target - levels.softest).rounded())),
+                min(0, max(-18, (target - levels.loudest).rounded())),
+                min(-20, max(-60, levels.gate.rounded())))
+    }
+}
+
+private struct OptoCompEditor: View {
+    @Binding var params: OptoCompParams
     var body: some View {
-        Section("Pitch Guide") {
-            Text("Real-time pitch correction — coming soon.")
-                .foregroundStyle(.secondary)
+        Section {
+            Picker("Mode", selection: $params.limitMode) {
+                Text("Compress").tag(false)
+                Text("Limit").tag(true)
+            }
+            .pickerStyle(.segmented)
+            LabeledContent("Peak Reduction: \(Int(params.peakReduction))") {
+                Slider(value: $params.peakReduction, in: 0.0...100.0)
+            }
+            LabeledContent("Gain: +\(Int(params.gain)) dB") {
+                Slider(value: $params.gain, in: 0.0...40.0)
+            }
+        } header: {
+            Text("Opto Compressor")
+        } footer: {
+            Text("Smooth, slow-releasing leveling. Turn up Peak Reduction for more squeeze, then Gain to make up level.")
         }
-        Section("Mix") {
-            LabeledContent("Mix: \(Int(params.mix))%") {
-                Slider(value: $params.mix, in: 0.0...100.0)
+    }
+}
+
+private struct FETCompEditor: View {
+    @Binding var params: FETCompParams
+    var body: some View {
+        Section {
+            Picker("Ratio", selection: $params.ratio) {
+                ForEach(FETCompParams.Ratio.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            LabeledContent("Input: \(Int(params.input)) dB") {
+                Slider(value: $params.input, in: 0.0...48.0)
+            }
+            LabeledContent("Output: \(String(format: "%+.0f", params.output)) dB") {
+                Slider(value: $params.output, in: -24.0...12.0)
+            }
+            LabeledContent("Attack: \(Int(params.attack))") {
+                Slider(value: $params.attack, in: 1.0...7.0, step: 1)
+            }
+            LabeledContent("Release: \(Int(params.release))") {
+                Slider(value: $params.release, in: 1.0...7.0, step: 1)
+            }
+        } header: {
+            Text("FET Compressor")
+        } footer: {
+            Text("Fast and punchy. More Input = more compression; use Output to match level. Attack and Release: 7 is fastest. \"All\" is the aggressive all-buttons-in sound.")
+        }
+    }
+}
+
+private struct FeedbackNotchEditor: View {
+    @Binding var params: FeedbackNotchParams
+    let kernel: FeedbackNotchKernel?
+    @State private var analyzer: RingOutAnalyzer?
+
+    var body: some View {
+        Section {
+            if let kernel {
+                let running = analyzer?.isRunning == true
+                Button {
+                    if running {
+                        analyzer?.stop()
+                    } else {
+                        let a = analyzer ?? RingOutAnalyzer(kernel: kernel)
+                        analyzer = a
+                        a.start(get: { params }, set: { params = $0 })
+                    }
+                } label: {
+                    Label(running ? "Stop Ring-Out" : "Start Ring-Out",
+                          systemImage: running ? "stop.circle.fill" : "ear")
+                }
+                .tint(running ? .red : .accentColor)
+
+                if running {
+                    LabeledContent("Listening") {
+                        Text(analyzer?.candidateFrequency.map { "ringing near \(FeedbackNotch.label(for: $0))" }
+                             ?? "no ringing")
+                            .foregroundStyle(analyzer?.candidateFrequency == nil ? .secondary : Color.orange)
+                    }
+                }
+                if let action = analyzer?.lastAction {
+                    Text(action).font(.callout)
+                }
+            } else {
+                Text("Tap Done (and start the engine if it’s off), then reopen this slot to ring out.")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Ring-Out")
+        } footer: {
+            Text("With the band quiet and the mic in its show position, start ring-out and slowly raise the channel's gain on the XR18 until it rings. Each ring gets notched; keep going until you've gained a few dB, then stop and back off a little. Put this effect first in the chain.")
+        }
+
+        Section("Detection") {
+            LabeledContent("Sensitivity: \(Int(params.sensitivity))") {
+                Slider(value: $params.sensitivity, in: 0.0...100.0)
+            }
+            LabeledContent("Max Depth: \(Int(params.maxDepth)) dB") {
+                Slider(value: $params.maxDepth, in: -18.0...(-6.0), step: 1)
             }
         }
+
+        Section {
+            if params.notches.isEmpty {
+                Text("No notches yet").foregroundStyle(.secondary)
+            } else {
+                ForEach(params.notches) { notch in
+                    LabeledContent(notch.label) {
+                        Text("\(Int(notch.depth)) dB").monospacedDigit()
+                    }
+                }
+                .onDelete { params.notches.remove(atOffsets: $0) }
+                Button("Clear All Notches", role: .destructive) { params.notches.removeAll() }
+            }
+        } header: {
+            Text("Notches (\(params.notches.count)/\(FeedbackNotchKernel.maxNotches))")
+        }
+        // Deleting or clearing notches takes effect immediately. Ring-out stops by itself
+        // when the sheet closes: the analyzer is released and its timer invalidates.
+        .onChange(of: params) { kernel?.applyParams(params) }
+    }
+}
+
+private struct PitchGuideEditor: View {
+    @Binding var params: PitchGuideParams
+    let kernel: PitchGuideKernel?
+
+    var body: some View {
+        Section {
+            if let kernel {
+                TimelineView(.animation(minimumInterval: 0.05)) { _ in
+                    PitchMeter(kernel: kernel)
+                }
+            } else {
+                Text("Tap Done (and start the engine if it’s off), then reopen this slot to see what it hears.")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Live")
+        } footer: {
+            Text("Mono: corrects the first input of the channel. Put it before reverb and delay.")
+        }
+
+        if let kernel {
+            LearnVoiceSection(
+                readLevel: { Float(bitPattern: kernel.inputLevelBits.load(ordering: .relaxed)) },
+                describe: { levels in
+                    "Apply sets Gate to \(Int(min(-20, max(-70, levels.gate.rounded())))) dBFS and Bleed Duck to \(Int(levels.bleedDuck)) dB."
+                },
+                apply: { levels in
+                    params.gateThreshold = min(-20, max(-70, levels.gate.rounded()))
+                    params.bleedDuck = levels.bleedDuck
+                }
+            )
+        }
+
+        Section {
+            Toggle("Follow Song Key", isOn: $params.songKeyDrive)
+            if params.songKeyDrive {
+                LabeledContent("Now") {
+                    Text(songKeyLabel).foregroundStyle(.secondary)
+                }
+            }
+            Picker(params.songKeyDrive ? "Fallback Key" : "Key", selection: $params.key) {
+                ForEach(0..<12, id: \.self) { Text(PitchGuideParams.noteNames[$0]).tag($0) }
+            }
+            Picker(params.songKeyDrive ? "Fallback Scale" : "Scale", selection: $params.scale) {
+                ForEach(PitchScale.allCases) { Text($0.displayName).tag($0) }
+            }
+            Picker("Voice Range", selection: $params.voiceRange) {
+                ForEach(VoiceRange.allCases) { Text($0.displayName).tag($0) }
+            }
+        } header: {
+            Text("Key")
+        } footer: {
+            Text(params.songKeyDrive
+                 ? "The voice is corrected in the key of the song loaded in Perform. Transpose is separate and isn't changed by the song. The fallback is used when the song has no key set."
+                 : "The key the singer sings in. Only notes in this key and scale are targets.")
+        }
+
+        Section {
+            Stepper(value: $params.transpose, in: -12...12) {
+                LabeledContent("Transpose") {
+                    Text(params.transpose == 0 ? "Off" : String(format: "%+d st", params.transpose))
+                        .monospacedDigit()
+                }
+            }
+            LabeledContent("Wet Mix: \(Int(params.wetMix))%") {
+                Slider(value: $params.wetMix, in: 0.0...100.0, step: 1)
+            }
+        } header: {
+            Text("Transpose")
+        } footer: {
+            Text("Shifts the voice by whole semitones in the same pass as the tuning, so it adds no extra latency. Wet Mix controls how much processed signal is heard vs. the original — 100% is fully processed, lower values blend in the dry mic.")
+        }
+
+        Section {
+            Toggle("Auto Formant Correction", isOn: $params.preserveFormants)
+            LabeledContent("Formant: \(Self.formantLabel(params.formantShift))") {
+                Slider(value: $params.formantShift, in: -6.0...6.0, step: 0.5)
+            }
+        } header: {
+            Text("Voice Character")
+        } footer: {
+            Text(Self.formantFooter(params))
+        }
+
+        Section {
+            LabeledContent("Retune Speed: \(params.retuneSpeed < 1 ? "Instant" : "\(Int(params.retuneSpeed)) ms")") {
+                Slider(value: $params.retuneSpeed, in: 0.0...400.0, step: 5)
+            }
+            LabeledContent("Amount: \(Int(params.amount))%") {
+                Slider(value: $params.amount, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Humanize: \(Int(params.humanize))%") {
+                Slider(value: $params.humanize, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Tolerance: ±\(Int(params.tolerance)) cents") {
+                Slider(value: $params.tolerance, in: 0.0...50.0, step: 1)
+            }
+        } header: {
+            Text("Correction")
+        } footer: {
+            Text("Tolerance: notes within this many cents are left alone; past it, correction kicks in. Amount: how far toward the note it pulls. Humanize: loosens the retune on long held notes.")
+        }
+
+        Section {
+            LabeledContent("Pickiness: \(Int(params.pickiness))%") {
+                Slider(value: $params.pickiness, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Gate: \(Int(params.gateThreshold)) dBFS") {
+                Slider(value: $params.gateThreshold, in: -70.0...(-20.0), step: 1)
+            }
+            Toggle("Shift Only While Singing", isOn: $params.shiftOnlyWhileSinging)
+            LabeledContent("Bleed Duck: \(params.bleedDuck == 0 ? "Off" : "\(Int(params.bleedDuck)) dB")") {
+                Slider(value: $params.bleedDuck, in: -20.0...0.0, step: 1)
+            }
+        } header: {
+            Text("Bleed")
+        } footer: {
+            Text("Higher Pickiness only corrects clear, steady sung notes. Raise the Gate until bleed stops showing up in the Live meter. Between phrases (after a 0.3 s hold), Shift Only While Singing lets bleed through without Transpose or Formant, and Bleed Duck turns the mic down. Bleed under the singing itself can't be separated.")
+        }
+        .onChange(of: params) {
+            kernel?.applyParams(params.resolved(songKey: AudioRoutingEngine.shared.songKey))
+        }
+    }
+
+    private static func formantLabel(_ semis: Float) -> String {
+        semis == 0 ? "0" : String(format: "%+.1f st", semis)
+    }
+
+    private static func formantFooter(_ p: PitchGuideParams) -> String {
+        let knob = "Formant + makes the voice smaller and brighter, − bigger and darker."
+        if p.preserveFormants {
+            return "The singer keeps their natural tone however far the pitch moves; the Formant knob adds or subtracts from there. \(knob) Latency ≈ two pitch cycles."
+        }
+        if p.formantShift == 0 {
+            return "Lowest latency (one pitch cycle). Tone moves along with the pitch, like speeding up a tape. \(knob)"
+        }
+        return "Tone moves along with the pitch, then the Formant knob shifts it by a set amount. \(knob) Latency ≈ two pitch cycles while the knob is off zero."
+    }
+
+    private var songKeyLabel: String {
+        guard let key = AudioRoutingEngine.shared.songKey, key.pitchClass != nil else {
+            return "No song key — using fallback"
+        }
+        return "Correcting in \(key.root) \(key.scale.rawValue)"
+    }
+}
+
+/// What the pitch kernel hears and what it's doing about it
+private struct PitchMeter: View {
+    let kernel: PitchGuideKernel
+
+    var body: some View {
+        let detected = Float(bitPattern: kernel.detectedMidiBits.load(ordering: .relaxed))
+        let target = Float(bitPattern: kernel.targetMidiBits.load(ordering: .relaxed))
+        let cents = Float(bitPattern: kernel.correctionBits.load(ordering: .relaxed))
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent("Hearing") {
+                Text(detected < 0 ? "—" : Self.describe(detected))
+                    .monospacedDigit()
+                    .foregroundStyle(detected < 0 ? .secondary : .primary)
+            }
+            LabeledContent("Singing") {
+                let singing = kernel.singingFlag.load(ordering: .relaxed)
+                Text(singing ? "Yes" : "No")
+                    .foregroundStyle(singing ? Color.green : Color.secondary)
+            }
+            LabeledContent("Latency") {
+                Text(String(format: "%.1f ms", Float(bitPattern: kernel.latencyMsBits.load(ordering: .relaxed))))
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            LabeledContent("Correcting") {
+                Text(target < 0 ? "No" : "→ \(Self.noteName(Int(target)))  \(String(format: "%+.0f", cents))¢")
+                    .monospacedDigit()
+                    .foregroundStyle(target < 0 ? Color.secondary : Color.orange)
+            }
+        }
+    }
+
+    static func noteName(_ midi: Int) -> String {
+        PitchGuideParams.noteNames[((midi % 12) + 12) % 12] + "\(midi / 12 - 1)"
+    }
+
+    /// e.g. "A3 −12¢"
+    static func describe(_ midi: Float) -> String {
+        let nearest = Int(midi.rounded())
+        return "\(noteName(nearest))  \(String(format: "%+.0f", (midi - Float(nearest)) * 100))¢"
     }
 }
 
@@ -582,11 +1113,14 @@ struct MetronomeStripView: View {
                     Text("Out").font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Picker("Output", selection: Binding(
-                        get: { prefs.metronomeOutputBus },
-                        set: { prefs.metronomeOutputBus = $0 }
+                        get: { prefs.metronomeOutput },
+                        set: { prefs.metronomeOutput = $0; metronome.applyOutput() }
                     )) {
-                        ForEach(0..<store.availableOutputBusPairCount, id: \.self) { bus in
-                            Text(store.outputBusLabel(bus)).tag(bus)
+                        Section("Stereo") {
+                            ForEach(store.outputRoutes.filter(\.stereo), id: \.self) { Text($0.label).tag($0) }
+                        }
+                        Section("Mono") {
+                            ForEach(store.outputRoutes.filter { !$0.stereo }, id: \.self) { Text($0.label).tag($0) }
                         }
                     }
                     .pickerStyle(.menu).font(.caption)
@@ -622,8 +1156,16 @@ struct AddChannelSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Channel Name") {
+                Section {
                     TextField("e.g. Keys L, Vox, Guitar", text: $name)
+                } header: {
+                    Text("Channel Name")
+                } footer: {
+                    let unique = store.uniqueName(name, excluding: nil)
+                    if unique != name.trimmingCharacters(in: .whitespaces) {
+                        Text("That name is taken — it will be added as \"\(unique)\". Names must be unique because macros use them as OSC addresses.")
+                            .foregroundStyle(.orange)
+                    }
                 }
 
                 Section("Hardware Input") {
@@ -652,6 +1194,7 @@ struct AddChannelSheet: View {
             }
             .navigationTitle("Add Channel")
             .navigationBarTitleDisplayMode(.inline)
+            .task { store.enableInputEnumeration() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", role: .cancel) { dismiss() }
@@ -664,7 +1207,7 @@ struct AddChannelSheet: View {
                             isStereoLinked: stereoLink
                         )
                         store.add(ch)
-                        if engine.isRunning { Task { await engine.start() } }
+                        engine.syncChannel(ch.id)
                         dismiss()
                     }
                     .disabled(store.availableInputs.isEmpty)

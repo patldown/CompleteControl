@@ -474,10 +474,19 @@ struct MacroChatView: View {
     /// on-device model only gets MIDI fields to fill in. "OSC 1" style oscillator labels
     /// in synth specs don't count — only OSC the network protocol does.
     private var deviceUsesOSC: Bool {
+        if controlsThisApp { return true }
         if device.categories.contains(where: { $0.macros.contains(where: \.isOSC) }) { return true }
         let spec = DeviceSpecManager.specContext(for: device)
         return spec.range(of: #"(?i)open sound control|\bOSC\b[^\n]{0,40}\b(address|path|port|udp)"#,
                           options: .regularExpression) != nil
+    }
+
+    /// A device named for this app ("Complete Control", "App", "This App") holds macros for
+    /// the app's own effects, so the assistant gets the /app/ OSC reference instead of a spec
+    private var controlsThisApp: Bool {
+        let name = device.name.lowercased()
+        return name.contains("complete control") || name == "app" || name == "this app"
+            || device.categories.contains { $0.macros.contains { ($0.oscAddress ?? "").hasPrefix(AppOSC.prefix) } }
     }
 
     /// The user asked for OSC in this message ("via OSC", "OSC fader") — not "OSC 2" the oscillator.
@@ -492,6 +501,17 @@ struct MacroChatView: View {
             Device: \(device.name), MIDI channel \(device.midiChannel).
             Category: \(category.name).
             """
+        if controlsThisApp {
+            instructions += """
+
+                This device is the Complete Control app itself. Every macro is OSC with an /app/ \
+                address from the reference below, and oscFloatArg is the setting's value. Use only \
+                channels, effects and parameters listed there.
+
+                \(AppOSC.referenceMarkdown(channels: AudioRoutingStore.shared.channels, compact: true))
+                """
+            return LanguageModelSession(instructions: instructions)
+        }
         if !deviceUsesOSC {
             instructions += "\nThis is a MIDI instrument. Every macro uses MIDI fields only — never OSC."
         }
@@ -724,6 +744,16 @@ struct MacroChatView: View {
             Device: \(device.name), MIDI channel \(device.midiChannel).
             Category: \(category.name).
             """
+        if controlsThisApp {
+            prompt += """
+
+                This device is the Complete Control app itself. Every macro is OSC: set \
+                oscAddress to an /app/ address from the reference below, and oscFloatArg to the value. \
+                Use only channels, effects and parameters listed there.
+
+                \(AppOSC.referenceMarkdown(channels: AudioRoutingStore.shared.channels))
+                """
+        }
         prompt += """
 
             CORRECTION OVERRIDE (highest priority — supersedes spec):

@@ -120,6 +120,17 @@ class OSCManager {
 
     /// Sends an OSC message with an optional float argument to all connected targets.
     func send(address: String, floatArg: Double?) {
+        // /app/… controls this app's own effects — handled here, never sent to the network
+        if AppOSC.isAppAddress(address) {
+            do {
+                let result = try AppOSCRouter.handle(address: address, value: floatArg)
+                activityLog?.log("App: \(result)", direction: .out, proto: .osc)
+            } catch {
+                activityLog?.log("App OSC \(address): \(error.localizedDescription)", direction: .error, proto: .osc)
+            }
+            lastSentAddress = address
+            return
+        }
         guard !connections.isEmpty else {
             activityLog?.log("OSC send skipped (no connections): \(address)", direction: .error, proto: .osc)
             return
