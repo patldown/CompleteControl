@@ -87,6 +87,7 @@ enum AITask: String, CaseIterable {
     case setListAssistant = "task_set_list_assistant"
     case songDetails      = "task_song_details"
     case snapshotNames    = "task_snapshot_names"
+    case mixLevels        = "task_mix_levels"
 
     var displayName: String {
         switch self {
@@ -99,6 +100,7 @@ enum AITask: String, CaseIterable {
         case .setListAssistant: return "Set List Assistant"
         case .songDetails:     return "Song Details (Shortcut)"
         case .snapshotNames:   return "Suggest Snapshot Names"
+        case .mixLevels:       return "Set Mix Levels (wand)"
         }
     }
 }

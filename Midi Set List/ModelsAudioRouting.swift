@@ -783,6 +783,8 @@ struct AudioChannel: Codable, Identifiable, Equatable {
     var isMuted: Bool = false
     var slots: [ChannelFXSlot] = Array(repeating: ChannelFXSlot(), count: 6)
     var macros: [ChannelMacro] = []
+    /// 1-based channel on the linked mixer; nil = same as the interface input
+    var mixerChannel: Int? = nil
 
     var displayName: String { name.isEmpty ? "Input \(inputIndex + 1)" : name }
 }
@@ -823,6 +825,7 @@ extension AudioChannel {
         isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
         slots = try c.decodeIfPresent([ChannelFXSlot].self, forKey: .slots) ?? Array(repeating: ChannelFXSlot(), count: 6)
         macros = try c.decodeIfPresent([ChannelMacro].self, forKey: .macros) ?? []
+        mixerChannel = try c.decodeIfPresent(Int.self, forKey: .mixerChannel)
     }
 }
 

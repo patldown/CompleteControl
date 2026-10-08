@@ -351,7 +351,7 @@ enum AppOSC {
     /// Names a channel can't take: they'd be read as a position (ch2) or the engine address
     static func isReservedName(_ name: String) -> Bool {
         let n = normalize(name)
-        if n == "engine" { return true }
+        if n == "engine" || n == "mix" { return true }
         return n.hasPrefix("ch") && n.count > 2 && n.dropFirst(2).allSatisfy(\.isNumber)
     }
 
@@ -397,6 +397,8 @@ extension AppOSC {
         - `/app/<channel>/<fx>/bypass` 1 = bypassed, 0 = active
         - `/app/<channel>/<fx>/<param>` see tables below
         - `/app/engine/run` 1 = start the routing engine, 0 = stop
+        - `/app/mix/<preset>` recall a mix preset (any value); `/app/mix/<preset>/<channel>` just that channel's part
+        - `/app/<channel>/preset/<name>` recall one of the channel's own presets
 
         `<channel>` is the routing channel's name (case, spaces, `-` and `_` ignored) or `ch1`, \
         `ch2`… by position. `<fx>` is the effect's short name; a second instance of the same \

@@ -19,6 +19,7 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 midiSection
+                mixerLinkSection
                 bandSection
                 lyricsSection
                 metronomeSection
@@ -74,6 +75,28 @@ struct SettingsView: View {
             Text("MIDI & Pedals")
         } footer: {
             Text("MIDI: choose the receive channel and which messages recall snapshots or change songs. Page-turner pedals: Bluetooth pedals that act as a keyboard, for turning pages and more.")
+        }
+    }
+
+    // MARK: - Mixer Link
+
+    private var mixerLinkSection: some View {
+        Section {
+            NavigationLink {
+                MixerLinkSettingsView()
+            } label: {
+                LabeledContent {
+                    let s = MixerLink.shared.settings
+                    Text(s.showGain && s.showFader ? "Gain & Faders"
+                         : s.showGain ? "Gain" : s.showFader ? "Faders" : "Off")
+                } label: {
+                    Label("Mixer Link", systemImage: "slider.vertical.3")
+                }
+            }
+        } header: {
+            Text("Mixer")
+        } footer: {
+            Text("Gain knobs and faders on each Routing channel that control an OSC mixer such as the XR18, plus Auto Gain.")
         }
     }
 
@@ -475,6 +498,7 @@ private extension AITask {
         case .specAnalysis: return "Used by \"Generate Reference with AI\" on a device page. Claude or ChatGPT handle long manuals best."
         case .bulkSplit: return "Rewrites a multi-action chat message into a list of single actions."
         case .setListAssistant: return "Creates, reorders and trims set lists from a request. Always shows a summary for approval first."
+        case .mixLevels: return "Sets mixer fader levels in Routing from your channel names and a description of the song. Shows the levels for approval first."
         default:         return nil
         }
     }

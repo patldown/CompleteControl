@@ -236,6 +236,8 @@ class OSCManager {
                 let (address, floatArg) = Self.parseOSCPacket(from: data)
                 let msg = floatArg.map { "\(address) \u{2192} \(String(format: "%.4g", $0))" } ?? address
                 self?.activityLog?.log(msg, direction: .in, proto: .osc)
+                // Linked gain / fader values from the mixer move the strip's controls
+                Task { @MainActor in MixerLink.shared.received(address: address, value: floatArg) }
             }
             // For UDP, isComplete is true per datagram — always re-arm unless connection errored
             guard error == nil else { return }

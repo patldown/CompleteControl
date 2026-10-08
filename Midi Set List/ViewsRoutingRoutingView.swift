@@ -18,6 +18,10 @@ struct RoutingView: View {
     private let store = AudioRoutingStore.shared
     private let engine = AudioRoutingEngine.shared
     @State private var showingAddChannel = false
+    @State private var showingMixPresets = false
+    @State private var showingAIMix = false
+    @ObservedObject private var ai = AISettings.shared
+    private let link = MixerLink.shared
 
     var body: some View {
         NavigationStack {
@@ -33,6 +37,8 @@ struct RoutingView: View {
             .navigationTitle("Routing")
             .toolbar { toolbar }
             .sheet(isPresented: $showingAddChannel) { AddChannelSheet() }
+            .sheet(isPresented: $showingMixPresets) { MixPresetsSheet() }
+            .sheet(isPresented: $showingAIMix) { MixLevelsSheet() }
             .task { store.enableInputEnumeration() }
             .safeAreaInset(edge: .bottom) {
                 if store.isExternalInterfaceConnected { latencyBar }
@@ -137,9 +143,29 @@ struct RoutingView: View {
                 Label("Add Channel", systemImage: "plus")
             }
         }
+        ToolbarItemGroup(placement: .topBarLeading) {
+            if !store.channels.isEmpty {
+                Button { showingMixPresets = true } label: {
+                    Label("Mix Presets", systemImage: "square.stack.3d.up")
+                }
+                if link.settings.showFader && ai.isAvailable(.mixLevels) {
+                    Button { showingAIMix = true } label: {
+                        Label("AI Mix", systemImage: "wand.and.stars")
+                    }
+                }
+            }
+        }
         ToolbarItem(placement: .secondaryAction) {
             ShareLink(item: AppOSC.referenceMarkdown(channels: store.channels)) {
                 Label("Share OSC Reference", systemImage: "doc.text")
+            }
+        }
+        if link.settings.showGain || link.settings.showFader {
+            ToolbarItem(placement: .secondaryAction) {
+                Button { link.requestCurrentValues() } label: {
+                    Label("Read Gain & Faders from Mixer", systemImage: "arrow.down.circle")
+                }
+                .disabled(!link.isConnected)
             }
         }
     }
@@ -275,6 +301,8 @@ struct ChannelStripView: View {
 
             Text(store.inputPort(for: channel)?.displayName ?? "Input \(channel.inputIndex + 1)")
                 .font(.caption).foregroundStyle(.secondary)
+
+            MixerLinkControls(channel: channel)
 
             if let renameNotice {
                 Text(renameNotice)
@@ -437,7 +465,8 @@ struct ChannelStripView: View {
                 ForEach(channel.macros) { macro in
                     HStack {
                         Button {
-                            engine.applyMacro(macro, to: channelID)
+                            // Live: updates matching effects and the volume, rebuilds nothing
+                            MixPresetStore.shared.recall(macro, on: channel)
                         } label: {
                             Text(macro.name)
                                 .font(.caption).lineLimit(1)
@@ -487,6 +516,169 @@ struct ChannelStripView: View {
         updated.macros.append(macro)
         store.update(updated)
         newMacroName = ""
+    }
+}
+
+// MARK: - Mixer link controls (gain knob, fader, Auto Gain)
+
+/// The linked mixer channel's preamp gain and fader, under the strip's name. Shown when
+/// turned on in Settings › Mixer Link; every move sends OSC.
+struct MixerLinkControls: View {
+    let channel: AudioChannel
+    private let link = MixerLink.shared
+
+    var body: some View {
+        let s = link.settings
+        if s.showGain || s.showFader {
+            VStack(alignment: .leading, spacing: 6) {
+                if s.showGain { gainRow(s) }
+                if s.showFader { faderRow(s) }
+                if let state = link.autoGain[channel.id] { autoGainStatus(state) }
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    private func gainRow(_ s: MixerLinkSettings) -> some View {
+        let gain = link.gainDB[channel.id]
+        return HStack(spacing: 8) {
+            MixerKnob(value: gain ?? s.gainMinDB, range: s.gainMinDB...s.gainMaxDB, known: gain != nil) {
+                link.setGain($0, for: channel)
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Gain").font(.caption2).foregroundStyle(.secondary)
+                Text(gain.map { String(format: "%+.0f dB", $0) } ?? "—")
+                    .font(.caption.monospacedDigit())
+            }
+            Spacer(minLength: 0)
+            autoGainButton
+        }
+    }
+
+    @ViewBuilder
+    private var autoGainButton: some View {
+        if case .listening(let left) = link.autoGain[channel.id] {
+            Button { link.cancelAutoGain(for: channel.id) } label: {
+                Text("\(left)s")
+                    .font(.caption.weight(.bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 30)
+                    .background(Color.red, in: Capsule())
+                    .frame(width: 44, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop Auto Gain")
+        } else {
+            Button { Task { await link.runAutoGain(for: channel.id) } } label: {
+                Text("A")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 40, height: 30)
+                    .background(Color.accentColor.opacity(0.15), in: Capsule())
+                    .frame(width: 44, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Auto Gain")
+        }
+    }
+
+    private func faderRow(_ s: MixerLinkSettings) -> some View {
+        let db = link.faderDB[channel.id]
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Fader").font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Text(db.map { MixerLinkSettings.faderLabel($0, floor: s.faderFloorDB) } ?? "—")
+                    .font(.caption.monospacedDigit())
+            }
+            Slider(value: Binding(
+                get: { Double(s.faderFloat(db ?? s.faderFloorDB)) },
+                set: { link.setFader(s.faderDB(Float($0)), for: channel) }
+            ), in: 0...1)
+            .controlSize(.small)
+        }
+    }
+
+    private func autoGainStatus(_ state: MixerLink.AutoGainState) -> some View {
+        Group {
+            switch state {
+            case .listening:
+                Text("Sing or play your loudest part…").foregroundStyle(.orange)
+            case .done(let message):
+                Text("Auto Gain \(message)").foregroundStyle(.green)
+            case .failed(let message):
+                Text(message).foregroundStyle(.red)
+            }
+        }
+        .font(.caption2)
+        .fixedSize(horizontal: false, vertical: true)
+        .onTapGesture { link.clearAutoGainMessage(for: channel.id) }
+        .task(id: state) {
+            if case .listening = state { return }
+            try? await Task.sleep(for: .seconds(8))
+            link.clearAutoGainMessage(for: channel.id)
+        }
+    }
+}
+
+/// A rotary knob: drag up/down to turn (150 pt = full range), double-tap to step +1
+private struct MixerKnob: View {
+    let value: Float
+    let range: ClosedRange<Float>
+    /// False until the mixer's value is known: drawn dimmed
+    var known = true
+    let onChange: (Float) -> Void
+    @State private var dragStart: Float?
+
+    private var fraction: Double {
+        Double((value - range.lowerBound) / max(1, range.upperBound - range.lowerBound))
+    }
+
+    var body: some View {
+        let sweep = 0.75   // 270° of travel, gap at the bottom
+        ZStack {
+            Circle()
+                .trim(from: 0, to: sweep)
+                .stroke(Color.secondary.opacity(0.25), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(135))
+            Circle()
+                .trim(from: 0, to: sweep * fraction)
+                .stroke(known ? Color.accentColor : Color.secondary,
+                        style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(135))
+            Capsule()
+                .fill(Color.primary.opacity(known ? 0.8 : 0.3))
+                .frame(width: 2, height: 9)
+                .offset(y: -9)
+                .rotationEffect(.degrees(-135 + 270 * fraction))
+        }
+        .frame(width: 36, height: 36)
+        .padding(4)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 2)
+                .onChanged { g in
+                    let start = dragStart ?? value
+                    dragStart = start
+                    let span = range.upperBound - range.lowerBound
+                    let v = start - Float(g.translation.height) / 150 * span
+                    onChange(min(range.upperBound, max(range.lowerBound, v.rounded())))
+                }
+                .onEnded { _ in dragStart = nil }
+        )
+        .onTapGesture(count: 2) { onChange(min(range.upperBound, value + 1)) }
+        .accessibilityElement()
+        .accessibilityLabel("Gain")
+        .accessibilityValue(String(format: "%.0f dB", value))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: onChange(min(range.upperBound, value + 1))
+            case .decrement: onChange(max(range.lowerBound, value - 1))
+            @unknown default: break
+            }
+        }
     }
 }
 

@@ -29,6 +29,9 @@ messages, so any macro, song command or AI assistant can change any effect setti
 | `/app/<channel>/<fx>/bypass` | 1 = bypassed, 0 = active | Bypass one effect |
 | `/app/<channel>/<fx>/<param>` | see §3 | Set one effect parameter |
 | `/app/engine/run` | 1 = start, 0 = stop | Start/stop the routing engine |
+| `/app/mix/<preset>` | any | Recall a mix preset: its ticked effects, faders and volumes, live (nothing reloads) |
+| `/app/mix/<preset>/<channel>` | any | Recall just that channel's part of the mix preset |
+| `/app/<channel>/preset/<name>` | any | Recall one of the channel's own presets, live |
 
 ### `<channel>` — which routing channel
 

@@ -62,6 +62,7 @@ struct Midi_Set_ListApp: App {
                     midiManager.oscManager = oscManager
                     midiManager.activityLog = activityLog
                     oscManager.activityLog = activityLog
+                    MixerLink.shared.oscManager = oscManager
                     AudioRoutingEngine.shared.activityLog = activityLog
                     performance.midiManager = midiManager
                     performance.activityLog = activityLog
