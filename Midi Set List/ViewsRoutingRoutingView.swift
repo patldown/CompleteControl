@@ -1328,15 +1328,15 @@ private struct MicroDetuneEditor: View {
                 }
                 let ms = params.delays(bpm: songBPM)
                 LabeledContent("Now") {
-                    Text(songBPM.map { "\($0) BPM: \(Int(ms.a)) / \(Int(ms.b)) ms" }
-                         ?? "No song tempo — using \(Int(params.delayA)) / \(Int(params.delayB)) ms")
+                    Text(songBPM.map { "\($0) BPM: \(Int(ms.a)) / \(Int(ms.b)) ms + ~25" }
+                         ?? "No song tempo — using \(Int(params.delayA)) / \(Int(params.delayB)) ms + ~25")
                         .foregroundStyle(.secondary)
                 }
             } else {
-                LabeledContent("Delay A: \(Int(params.delayA)) ms") {
+                LabeledContent("Delay A: \(Int(params.delayA)) ms + ~25 shifter") {
                     Slider(value: Self.delayScale($params.delayA), in: 0...1)
                 }
-                LabeledContent("Delay B: \(Int(params.delayB)) ms") {
+                LabeledContent("Delay B: \(Int(params.delayB)) ms + ~25 shifter") {
                     Slider(value: Self.delayScale($params.delayB), in: 0...1)
                 }
             }
@@ -1346,7 +1346,7 @@ private struct MicroDetuneEditor: View {
         } header: {
             Text("Delay")
         } footer: {
-            Text("A few ms to ~30 ms thickens and widens; 80 ms and up is a pitched slapback. Feedback sends each voice back through its own shifter, so every repeat climbs (A) or falls (B) further. Tempo Sync follows the song loaded in Perform.")
+            Text("The shifted voices always arrive about 25 ms (0–50 ms, sweeping) later than the Delay setting: the pitch shifter reads from a short stretch of recent audio. The dry voice has no added delay. A few ms to ~30 ms thickens and widens; 80 ms and up is a pitched slapback. Feedback sends each voice back through its own shifter, so every repeat climbs (A) or falls (B) further. Tempo Sync follows the song loaded in Perform.")
         }
 
         Section {

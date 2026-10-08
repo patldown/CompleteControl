@@ -182,8 +182,8 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 |---|---|---|
 | `pitchA` | 0 to 50 cents | Voice A (left) shifted up. 9 = classic |
 | `pitchB` | -50 to 0 cents | Voice B (right) shifted down. -9 = classic |
-| `delayA` | 0 to 2000 ms | Voice A delay (when not tempo-synced) |
-| `delayB` | 0 to 2000 ms | Voice B delay (when not tempo-synced) |
+| `delayA` | 0 to 2000 ms | Voice A delay (when not tempo-synced). The shifter adds ~25 ms on top |
+| `delayB` | 0 to 2000 ms | Voice B delay (when not tempo-synced). The shifter adds ~25 ms on top |
 | `tempoSync` | toggle | Delays follow the loaded song's tempo as note values |
 | `noteA` | choice | 0 1/32, 1 1/16T, 2 1/16, 3 1/8T, 4 1/16., 5 1/8, 6 1/4T, 7 1/8., 8 1/4, 9 1/4., 10 1/2 |
 | `noteB` | choice | Same as `noteA` |
