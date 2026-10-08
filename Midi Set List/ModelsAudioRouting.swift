@@ -225,7 +225,37 @@ nonisolated enum ToneInstrument: Int, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Full-Amount settings
+    /// Target tonal balance in octave bands at 125, 250, 500, 1k, 2k, 4k and 8k Hz, in dB
+    /// relative to pink noise (only the shape matters). Adaptive Tone corrects toward it.
+    var balance: (Double, Double, Double, Double, Double, Double, Double) {
+        switch self {
+        case .leadVocal:      (-8, -1, 2, 2, 1, -1, -6)
+        case .backingVocal:   (-10, -3, 1, 2, 2, 0, -5)
+        case .acousticGuitar: (-4, -1, 0, 1, 1, 0, -3)
+        case .electricGuitar: (-6, -1, 2, 3, 1, -3, -10)
+        case .bass:           (6, 3, 0, -3, -6, -10, -16)
+        case .keys:           (-2, 0, 1, 0, -1, -2, -5)
+        case .synth:          (0, 0, 0, 0, -1, -2, -4)
+        case .kick:           (8, 2, -6, -6, -3, -2, -8)
+        case .snare:          (-6, 2, 0, -1, 0, 0, -3)
+        case .drumKit:        (-6, -3, -2, -1, 0, 1, 1)
+        }
+    }
+
+    /// Compressor threshold above the running average level, dB: lower = more leveling
+    var compOverAverageDB: Double {
+        switch self {
+        case .leadVocal:      6
+        case .backingVocal:   4
+        case .acousticGuitar, .electricGuitar: 8
+        case .bass:           6
+        case .keys, .synth:   10
+        case .kick, .snare:   8
+        case .drumKit:        10
+        }
+    }
+
+    /// Full-Amount settings: the most each EQ move may do (adaptive Tone applies only what's needed)
     var profile: ToneProfile {
         typealias B = ToneProfile.Band
         switch self {

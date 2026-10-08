@@ -1644,29 +1644,65 @@ private struct ToneEditor: View {
             LabeledContent("Amount: \(Int(params.amount))%") {
                 Slider(value: $params.amount, in: 0.0...100.0, step: 1)
             }
-            if let kernel, params.instrument != nil {
+            if let kernel, let instrument = params.instrument {
                 TimelineView(.animation(minimumInterval: 0.1)) { _ in
-                    let gr = Float(bitPattern: kernel.gainReductionBits.load(ordering: .relaxed))
-                    let ess = Float(bitPattern: kernel.deEssBits.load(ordering: .relaxed))
-                    LabeledContent("Leveling") {
-                        Text(gr < 0.5 ? "—" : String(format: "−%.0f dB", gr)).monospacedDigit().foregroundStyle(.secondary)
-                    }
-                    if params.instrument?.profile.deEss == true {
-                        LabeledContent("De-essing") {
-                            Text(ess < 0.5 ? "—" : String(format: "−%.0f dB", ess)).monospacedDigit().foregroundStyle(.secondary)
-                        }
-                    }
+                    ToneMeter(kernel: kernel, profile: instrument.profile)
                 }
             }
         } header: {
             Text("Tone")
         } footer: {
-            Text(params.instrument.map { "\($0.toneDescription) Amount scales it all; 0 is flat. Zero latency." }
+            Text(params.instrument.map { "\($0.toneDescription) It listens first: each move is applied only as far as the sound needs it (never more than the instrument's usual amount), and leveling and de-essing follow the playing level. Give it a few seconds of playing to settle. Amount scales it all; 0 is flat. Zero latency." }
                  ?? "Pick what's on this channel. Until then Tone passes the sound through untouched.")
         }
         .onChange(of: params) {
             kernel?.applyParams(instrument: params.instrument, amount: params.amount)
         }
+    }
+}
+
+/// What adaptive Tone is doing right now
+private struct ToneMeter: View {
+    let kernel: ToneKernel
+    let profile: ToneProfile
+
+    var body: some View {
+        let confidence = Float(bitPattern: kernel.confidenceBits.load(ordering: .relaxed))
+        let moves = [(profile.bands.0, Float(bitPattern: kernel.band0Bits.load(ordering: .relaxed))),
+                     (profile.bands.1, Float(bitPattern: kernel.band1Bits.load(ordering: .relaxed))),
+                     (profile.bands.2, Float(bitPattern: kernel.band2Bits.load(ordering: .relaxed))),
+                     (profile.bands.3, Float(bitPattern: kernel.band3Bits.load(ordering: .relaxed)))]
+        let gr = Float(bitPattern: kernel.gainReductionBits.load(ordering: .relaxed))
+        let ess = Float(bitPattern: kernel.deEssBits.load(ordering: .relaxed))
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent("Status") {
+                Text(confidence < 0.01 ? "Waiting for sound" : confidence < 1 ? "Listening… \(Int(confidence * 100))%" : "Adapting")
+                    .foregroundStyle(confidence < 1 ? Color.orange : Color.green)
+            }
+            ForEach(Array(moves.enumerated()), id: \.offset) { _, move in
+                if move.0.db != 0 {
+                    let db = move.1
+                    LabeledContent(Self.label(move.0)) {
+                        Text(abs(db) < 0.1 ? "—" : String(format: "%+.1f dB", db))
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
+            }
+            LabeledContent("Leveling") {
+                Text(gr < 0.5 ? "—" : String(format: "−%.0f dB", gr)).monospacedDigit().foregroundStyle(.secondary)
+            }
+            if profile.deEss {
+                LabeledContent("De-essing") {
+                    Text(ess < 0.5 ? "—" : String(format: "−%.0f dB", ess)).monospacedDigit().foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private static func label(_ band: ToneProfile.Band) -> String {
+        let f = band.freq >= 1_000 ? String(format: "%g kHz", band.freq / 1_000) : "\(Int(band.freq)) Hz"
+        let what = band.kind == .highShelf ? "above" : band.kind == .lowShelf ? "below" : "at"
+        return "\(band.db < 0 ? "Cut" : "Boost") \(what) \(f)"
     }
 }
 
