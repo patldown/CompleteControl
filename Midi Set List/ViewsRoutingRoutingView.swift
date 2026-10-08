@@ -52,7 +52,7 @@ struct RoutingView: View {
                     Text("(iOS gave \(granted))").foregroundStyle(.secondary)
                 }
             } else {
-                Text("Start the engine to measure latency").foregroundStyle(.secondary)
+                Text("Turn Audio on to measure latency").foregroundStyle(.secondary)
             }
             Spacer()
             Menu {
@@ -117,17 +117,20 @@ struct RoutingView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
+            // A power switch with its state in words, so it can't be mistaken for Perform's play
             Button {
                 Task {
                     if engine.isRunning { engine.stop() } else { await engine.start() }
                 }
             } label: {
-                Label(
-                    engine.isRunning ? "Stop Engine" : "Start Engine",
-                    systemImage: engine.isRunning ? "stop.fill" : "play.fill"
-                )
+                Label(engine.isRunning ? "Audio On" : "Audio Off", systemImage: "power")
+                    .labelStyle(.titleAndIcon)
+                    .font(.subheadline.weight(.semibold))
             }
-            .tint(engine.isRunning ? .red : .green)
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .tint(engine.isRunning ? .green : .gray)
+            .accessibilityHint(engine.isRunning ? "Turns the routing audio off" : "Turns the routing audio on")
         }
         ToolbarItem(placement: .primaryAction) {
             Button { showingAddChannel = true } label: {
@@ -160,6 +163,7 @@ struct ChannelStripView: View {
     @State private var fxEditTarget: FXEditTarget?
     @State private var showingMacroSave = false
     @State private var newMacroName = ""
+    @State private var confirmingRemove = false
 
     private let store = AudioRoutingStore.shared
     private let engine = AudioRoutingEngine.shared
@@ -184,7 +188,7 @@ struct ChannelStripView: View {
             macroSection
         }
         .frame(width: 185)
-        .frame(maxHeight: .infinity)
+        .frame(maxHeight: .infinity, alignment: .top)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
         .overlay(alignment: .leading) {
@@ -254,10 +258,16 @@ struct ChannelStripView: View {
                 }
 
                 Button(role: .destructive) {
-                    store.remove(channel)
-                    engine.syncChannel(channelID)
+                    confirmingRemove = true
                 } label: {
                     Image(systemName: "minus.circle.fill").foregroundStyle(.red)
+                }
+                .confirmationDialog("Remove \(channel.name.isEmpty ? "this channel" : channel.name)?",
+                                    isPresented: $confirmingRemove, titleVisibility: .visible) {
+                    Button("Remove Channel", role: .destructive) {
+                        store.remove(channel)
+                        engine.syncChannel(channelID)
+                    }
                 }
             }
 
@@ -377,8 +387,10 @@ struct ChannelStripView: View {
                     newMacroName = "Preset \(channel.macros.count + 1)"
                     showingMacroSave = true
                 } label: {
-                    Image(systemName: "plus.circle").font(.caption)
+                    Image(systemName: "plus.circle.fill").font(.title3)
+                        .frame(width: 44, height: 32).contentShape(Rectangle())
                 }
+                .accessibilityLabel("Save Preset")
             }
 
             if channel.macros.isEmpty {
@@ -460,26 +472,34 @@ struct FXSlotRowView: View {
                                 .font(.caption)
                                 .foregroundStyle(slot.isBypassed ? .tertiary : .primary)
                         } else {
-                            Image(systemName: "plus").foregroundStyle(.tertiary)
-                                .font(.caption2).frame(width: 14)
-                            Text("Empty").font(.caption).foregroundStyle(.tertiary)
+                            Image(systemName: "plus.circle.fill").foregroundStyle(.secondary)
+                                .font(.body).frame(width: 14)
+                            Text("Add FX").font(.caption).foregroundStyle(.secondary)
                         }
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                        Spacer(minLength: 0)
                     }
+                    .frame(minHeight: 40)
+                    // Plain buttons only hit on drawn pixels; make the gaps count too
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
                 if slot.type != nil {
                     Button(action: onBypassToggle) {
                         Text("B")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(slot.isBypassed ? .orange : .secondary)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(slot.isBypassed ? Color.white : Color.secondary)
+                            .frame(width: 36, height: 28)
+                            .background(slot.isBypassed ? Color.orange : Color.secondary.opacity(0.15),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .frame(width: 44, height: 40)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(slot.isBypassed ? "Bypassed" : "Bypass")
                 }
             }
-            .padding(.horizontal, 10).padding(.vertical, 8)
+            .padding(.leading, 10).padding(.trailing, slot.type == nil ? 10 : 2)
 
             if let db = gainIndicatorDB {
                 GainStagingBar(db: db)
@@ -853,7 +873,7 @@ private struct FeedbackNotchEditor: View {
                     Text(action).font(.callout)
                 }
             } else {
-                Text("Tap Done (and start the engine if it’s off), then reopen this slot to ring out.")
+                Text("Tap Done (and turn Audio on if it’s off), then reopen this slot to ring out.")
                     .foregroundStyle(.secondary)
             }
         } header: {
@@ -903,7 +923,7 @@ private struct PitchGuideEditor: View {
                     PitchMeter(kernel: kernel)
                 }
             } else {
-                Text("Tap Done (and start the engine if it’s off), then reopen this slot to see what it hears.")
+                Text("Tap Done (and turn Audio on if it’s off), then reopen this slot to see what it hears.")
                     .foregroundStyle(.secondary)
             }
         } header: {
@@ -978,7 +998,7 @@ private struct PitchGuideEditor: View {
 
         Section {
             LabeledContent("Retune Speed: \(params.retuneSpeed < 1 ? "Instant" : "\(Int(params.retuneSpeed)) ms")") {
-                Slider(value: $params.retuneSpeed, in: 0.0...400.0, step: 5)
+                Slider(value: $params.retuneSpeed, in: 0.0...400.0, step: 1)
             }
             LabeledContent("Amount: \(Int(params.amount))%") {
                 Slider(value: $params.amount, in: 0.0...100.0, step: 1)
@@ -992,7 +1012,7 @@ private struct PitchGuideEditor: View {
         } header: {
             Text("Correction")
         } footer: {
-            Text("Tolerance: notes within this many cents are left alone; past it, correction kicks in. Amount: how far toward the note it pulls. Humanize: loosens the retune on long held notes.")
+            Text("Retune Speed is how long the glide to the note takes to cover about two-thirds of the gap, so it lands in roughly 3× that. Auto-Tune's number is closer to the time to land, so start at about a third of it: Auto-Tune 15 ≈ 5 ms, 25 ≈ 8 ms, 50 ≈ 17 ms. Tolerance: notes within this many cents are left alone; past it, correction kicks in. Amount: how far toward the note it pulls. Humanize: loosens the retune on long held notes.")
         }
 
         Section {

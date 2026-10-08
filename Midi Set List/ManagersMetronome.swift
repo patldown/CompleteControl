@@ -33,11 +33,26 @@ final class Metronome {
     private(set) var lastError: String?
 
     @ObservationIgnored private var engine: AVAudioEngine?
+    /// Output channels the running click engine was built with
+    @ObservationIgnored private var engineChannels = 0
     @ObservationIgnored private let render = MetronomeRender()
     @ObservationIgnored private var countInTask: Task<Void, Never>?
     @ObservationIgnored private let prefs = UserPreferences.shared
 
-    private init() {}
+    private init() {
+        // iOS stops an engine when the hardware changes under it — e.g. the routing engine
+        // opening up the interface's extra outputs. Rebuild on the same beat instead of
+        // going silent until the next stop and play.
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main
+        ) { [weak self] note in
+            let changed = note.object as AnyObject?
+            MainActor.assumeIsolated {
+                guard let self, let engine = self.engine, changed === engine else { return }
+                self.restartAudio()
+            }
+        }
+    }
 
     /// Starts clicking at `bpm`, beat 1 at `startAt` (host time; nil = a moment from now).
     /// `countIn` plays one bar and stops.
@@ -78,6 +93,7 @@ final class Metronome {
         render.active.store(false, ordering: .relaxed)
         engine?.stop()
         engine = nil
+        engineChannels = 0
         isRunning = false
         isCountIn = false
     }
@@ -92,6 +108,25 @@ final class Metronome {
         let route = prefs.metronomeOutput
         render.outputChannel.store(route.channel, ordering: .relaxed)
         render.outputStereo.store(route.stereo, ordering: .relaxed)
+        // Built before the interface's extra outputs were open: rebuild wider, same beat
+        let needed = route.channel + (route.stereo ? 2 : 1)
+        if engine != nil, needed > engineChannels,
+           AVAudioSession.sharedInstance().outputNumberOfChannels >= needed
+            || AVAudioSession.sharedInstance().maximumOutputNumberOfChannels >= needed {
+            restartAudio()
+        }
+    }
+
+    /// Rebuilds the audio on the running timeline; the click carries on from the next beat
+    private func restartAudio() {
+        guard isRunning, prefs.metronomeSound else { return }
+        engine?.stop()
+        engine = nil
+        do {
+            try startAudio()
+        } catch {
+            lastError = "Couldn't restart the click: \(error.localizedDescription)"
+        }
     }
 
     /// Time from pressing start to the first click: long enough for the audio to get going
@@ -148,6 +183,7 @@ final class Metronome {
         engine.prepare()
         try engine.start()
         self.engine = engine
+        engineChannels = Int(channels)
     }
 
     /// Built outside the main actor: the render block runs on the real-time audio thread
