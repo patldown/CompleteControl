@@ -56,6 +56,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
     private let formantBits    = Atomic<UInt32>(Float(0).bitPattern)  // semitones, manual offset
     private let onlySingingBits = Atomic<Bool>(true)
     private let duckDBBits     = Atomic<UInt32>(Float(0).bitPattern)  // ≤ 0; 0 = off
+    private let wetMixBits     = Atomic<UInt32>(Float(1).bitPattern)  // 0…1; 1 = 100% wet
 
     // MARK: - Meters (audio thread → main thread)
     /// Detected input note as fractional MIDI number; < 0 when nothing is being tracked
@@ -158,6 +159,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         formantBits.store(p.formantShift.bitPattern, ordering: .relaxed)
         onlySingingBits.store(p.shiftOnlyWhileSinging, ordering: .relaxed)
         duckDBBits.store(min(0, p.bleedDuck).bitPattern, ordering: .relaxed)
+        wetMixBits.store(max(0, min(1, p.wetMix / 100)).bitPattern, ordering: .relaxed)
     }
 
     // MARK: - Render (audio thread only — no allocations, no runtime)
@@ -189,8 +191,12 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
             wA = 2 * period; wB = wA; dA = period; dB = 0
         }
 
+        let wetFactor = Float(bitPattern: wetMixBits.load(ordering: .relaxed))
+        let dryFactor = 1 - wetFactor
+
         for i in 0..<frameCount {
-            ring[writeIndex & mask] = io[i]
+            let dry = io[i]
+            ring[writeIndex & mask] = dry
             writeIndex += 1
 
             hopCounter += 1
@@ -224,7 +230,8 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
                 var y = ola[idx] / max(olaWin[idx], 0.25)
                 ola[idx] = 0; olaWin[idx] = 0
                 if y.isNaN || y.isInfinite { y = 0 }
-                io[i] = y * Float(duckGain)
+                let wet = y * Float(duckGain)
+                io[i] = wetFactor < 0.999 ? wet * wetFactor + dry * dryFactor : wet
                 continue
             }
 
@@ -247,7 +254,7 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
             let norm = 1 / max(1e-6, gA + gB)
             var y = Float((gA * read(dA) + gB * read(dB)) * norm * duckGain)
             if y.isNaN || y.isInfinite { y = 0 }
-            io[i] = y
+            io[i] = wetFactor < 0.999 ? y * wetFactor + dry * dryFactor : y
         }
 
         // Mono effect: every output channel gets the corrected signal

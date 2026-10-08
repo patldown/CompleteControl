@@ -16,6 +16,12 @@ import Foundation
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
     case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide
 
+    // reverb and delay kept in enum for JSON backward-compat but are no longer available;
+    // the load() migration clears any saved slots of these types.
+    static var allCases: [BuiltInFXType] {
+        [.gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide]
+    }
+
     var id: String { rawValue }
 
     var displayName: String {
@@ -256,6 +262,8 @@ struct PitchGuideParams: Codable, Equatable {
     var shiftOnlyWhileSinging: Bool = true
     /// How far to turn the mic down between phrases; 0 = off
     var bleedDuck: Float = 0            // dB, -20...0
+    /// Balance between processed and dry signal; 100 = fully processed, 0 = bypass
+    var wetMix: Float = 100             // %, 0...100
 
     init() {}
 
@@ -278,6 +286,7 @@ struct PitchGuideParams: Codable, Equatable {
         formantShift = try c.decodeIfPresent(Float.self, forKey: .formantShift) ?? d.formantShift
         shiftOnlyWhileSinging = try c.decodeIfPresent(Bool.self, forKey: .shiftOnlyWhileSinging) ?? d.shiftOnlyWhileSinging
         bleedDuck = try c.decodeIfPresent(Float.self, forKey: .bleedDuck) ?? d.bleedDuck
+        wetMix = try c.decodeIfPresent(Float.self, forKey: .wetMix) ?? d.wetMix
     }
 
     /// These params with the correction's key and scale taken from the song, when following
@@ -352,7 +361,7 @@ struct OutputRoute: Codable, Hashable {
 struct ChannelMacro: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
     var name: String = "Preset"
-    var slots: [ChannelFXSlot] = Array(repeating: ChannelFXSlot(), count: 4)
+    var slots: [ChannelFXSlot] = Array(repeating: ChannelFXSlot(), count: 6)
     var output: OutputRoute = .init()
     var volume: Float = 1.0
     var isMuted: Bool = false
@@ -370,7 +379,7 @@ struct AudioChannel: Codable, Identifiable, Equatable {
     var output: OutputRoute = .init()
     var volume: Float = 1.0
     var isMuted: Bool = false
-    var slots: [ChannelFXSlot] = Array(repeating: ChannelFXSlot(), count: 4)
+    var slots: [ChannelFXSlot] = Array(repeating: ChannelFXSlot(), count: 6)
     var macros: [ChannelMacro] = []
 
     var displayName: String { name.isEmpty ? "Input \(inputIndex + 1)" : name }
@@ -393,7 +402,7 @@ extension ChannelMacro {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Preset"
-        slots = try c.decodeIfPresent([ChannelFXSlot].self, forKey: .slots) ?? Array(repeating: ChannelFXSlot(), count: 4)
+        slots = try c.decodeIfPresent([ChannelFXSlot].self, forKey: .slots) ?? Array(repeating: ChannelFXSlot(), count: 6)
         output = try decodeOutput(c, key: .output, decoder: decoder)
         volume = try c.decodeIfPresent(Float.self, forKey: .volume) ?? 1
         isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
@@ -410,7 +419,7 @@ extension AudioChannel {
         output = try decodeOutput(c, key: .output, decoder: decoder)
         volume = try c.decodeIfPresent(Float.self, forKey: .volume) ?? 1
         isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
-        slots = try c.decodeIfPresent([ChannelFXSlot].self, forKey: .slots) ?? Array(repeating: ChannelFXSlot(), count: 4)
+        slots = try c.decodeIfPresent([ChannelFXSlot].self, forKey: .slots) ?? Array(repeating: ChannelFXSlot(), count: 6)
         macros = try c.decodeIfPresent([ChannelMacro].self, forKey: .macros) ?? []
     }
 }

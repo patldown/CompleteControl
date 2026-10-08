@@ -68,12 +68,35 @@ final class AudioRoutingStore {
         else { return }
         // Older saves could hold duplicate names; make them unique so /app/ addresses are unambiguous
         var fixed: [AudioChannel] = []
+        var needsSave = false
         for var channel in decoded {
             channel.name = Self.uniqueName(channel.name, excluding: channel.id, among: fixed)
+            // Migrate: expand channels saved with fewer than 6 FX slots
+            if channel.slots.count < 6 {
+                channel.slots += Array(repeating: ChannelFXSlot(), count: 6 - channel.slots.count)
+                needsSave = true
+            }
+            for i in channel.macros.indices where channel.macros[i].slots.count < 6 {
+                channel.macros[i].slots += Array(repeating: ChannelFXSlot(),
+                                                 count: 6 - channel.macros[i].slots.count)
+                needsSave = true
+            }
+            // Migrate: clear reverb/delay slots (removed; interface handles room FX onboard)
+            for i in channel.slots.indices where channel.slots[i].type == .reverb || channel.slots[i].type == .delay {
+                channel.slots[i] = ChannelFXSlot()
+                needsSave = true
+            }
+            for mi in channel.macros.indices {
+                for si in channel.macros[mi].slots.indices
+                where channel.macros[mi].slots[si].type == .reverb || channel.macros[mi].slots[si].type == .delay {
+                    channel.macros[mi].slots[si] = ChannelFXSlot()
+                    needsSave = true
+                }
+            }
             fixed.append(channel)
         }
         channels = fixed
-        if fixed.map(\.name) != decoded.map(\.name) { save() }
+        if fixed.map(\.name) != decoded.map(\.name) || needsSave { save() }
     }
 
     // MARK: - Unique names

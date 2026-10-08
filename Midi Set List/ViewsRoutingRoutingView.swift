@@ -116,17 +116,7 @@ struct RoutingView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Button { showingAddChannel = true } label: {
-                Label("Add Channel", systemImage: "plus")
-            }
-        }
-        ToolbarItem(placement: .secondaryAction) {
-            ShareLink(item: AppOSC.referenceMarkdown(channels: store.channels)) {
-                Label("Share OSC Reference", systemImage: "doc.text")
-            }
-        }
-        ToolbarItem(placement: .secondaryAction) {
+        ToolbarItem(placement: .topBarTrailing) {
             Button {
                 Task {
                     if engine.isRunning { engine.stop() } else { await engine.start() }
@@ -137,7 +127,17 @@ struct RoutingView: View {
                     systemImage: engine.isRunning ? "stop.fill" : "play.fill"
                 )
             }
-            .tint(engine.isRunning ? .red : .accentColor)
+            .tint(engine.isRunning ? .red : .green)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { showingAddChannel = true } label: {
+                Label("Add Channel", systemImage: "plus")
+            }
+        }
+        ToolbarItem(placement: .secondaryAction) {
+            ShareLink(item: AppOSC.referenceMarkdown(channels: store.channels)) {
+                Label("Share OSC Reference", systemImage: "doc.text")
+            }
         }
     }
 
@@ -184,8 +184,29 @@ struct ChannelStripView: View {
             macroSection
         }
         .frame(width: 185)
+        .frame(maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(alignment: .leading) {
+            if engine.isRunning {
+                TimelineView(.animation(minimumInterval: 0.05)) { _ in
+                    LevelMeterBar(db: engine.channelInputLevel(id: channelID))
+                }
+                .frame(width: 4)
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+                .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if engine.isRunning {
+                TimelineView(.animation(minimumInterval: 0.05)) { _ in
+                    LevelMeterBar(db: engine.channelOutputLevel(id: channelID))
+                }
+                .frame(width: 4)
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+                .allowsHitTesting(false)
+            }
+        }
         .sheet(item: $fxEditTarget) { target in
             FXSlotEditorSheet(
                 slot: channel.slots[target.slotIndex],
@@ -282,8 +303,9 @@ struct ChannelStripView: View {
 
     private var fxSlots: some View {
         VStack(spacing: 0) {
-            ForEach(0..<4, id: \.self) { i in
-                FXSlotRowView(slot: channel.slots[i]) {
+            ForEach(0..<6, id: \.self) { i in
+                FXSlotRowView(slot: channel.slots[i],
+                              liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: i)) {
                     fxEditTarget = FXEditTarget(slotIndex: i)
                 } onBypassToggle: {
                     var c = channel
@@ -297,7 +319,7 @@ struct ChannelStripView: View {
                         )
                     }
                 }
-                if i < 3 { Divider() }
+                if i < 5 { Divider() }
             }
         }
     }
@@ -422,41 +444,99 @@ struct ChannelStripView: View {
 
 struct FXSlotRowView: View {
     let slot: ChannelFXSlot
+    var liveUnit: AUAudioUnit? = nil
     let onTap: () -> Void
     let onBypassToggle: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            Button(action: onTap) {
-                HStack(spacing: 6) {
-                    if let type = slot.type {
-                        Image(systemName: type.systemImage)
-                            .foregroundStyle(Color.accentColor).font(.caption2).frame(width: 14)
-                        Text(type.displayName)
-                            .font(.caption)
-                            .foregroundStyle(slot.isBypassed ? .tertiary : .primary)
-                    } else {
-                        Image(systemName: "plus").foregroundStyle(.tertiary)
-                            .font(.caption2).frame(width: 14)
-                        Text("Empty").font(.caption).foregroundStyle(.tertiary)
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Button(action: onTap) {
+                    HStack(spacing: 6) {
+                        if let type = slot.type {
+                            Image(systemName: type.systemImage)
+                                .foregroundStyle(Color.accentColor).font(.caption2).frame(width: 14)
+                            Text(type.displayName)
+                                .font(.caption)
+                                .foregroundStyle(slot.isBypassed ? .tertiary : .primary)
+                        } else {
+                            Image(systemName: "plus").foregroundStyle(.tertiary)
+                                .font(.caption2).frame(width: 14)
+                            Text("Empty").font(.caption).foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                     }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                }
-            }
-            .buttonStyle(.plain)
-
-            if slot.type != nil {
-                Button(action: onBypassToggle) {
-                    Text("B")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(slot.isBypassed ? .orange : .secondary)
                 }
                 .buttonStyle(.plain)
+
+                if slot.type != nil {
+                    Button(action: onBypassToggle) {
+                        Text("B")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(slot.isBypassed ? .orange : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+
+            if let db = gainIndicatorDB {
+                GainStagingBar(db: db)
+                    .frame(height: 3)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 4)
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 8)
         .contentShape(Rectangle())
+    }
+
+    private var gainIndicatorDB: Float? {
+        guard !slot.isBypassed, slot.type == .gain else { return nil }
+        let db = 20 * log10f(max(slot.gain.volume, 1e-7))
+        return abs(db) > 0.5 ? db : nil
+    }
+}
+
+// Horizontal bar centred at 0: orange extends left for cuts, green extends right for boosts
+private struct GainStagingBar: View {
+    let db: Float
+
+    var body: some View {
+        Canvas { context, size in
+            let range: Double = 18
+            let clamped = max(-range, min(range, Double(db)))
+            let mid = size.width / 2
+            let barW = abs(clamped) / range * mid
+            let color = clamped < 0 ? Color.orange : Color.green
+            let x = clamped < 0 ? mid - barW : mid
+            context.fill(
+                Path(CGRect(x: x, y: 0, width: max(1, barW), height: size.height)),
+                with: .color(color.opacity(0.85))
+            )
+        }
+    }
+}
+
+// Vertical bar that fills from the bottom; green < -18, yellow -18 to -6, red above -6
+private struct LevelMeterBar: View {
+    let db: Float
+
+    var body: some View {
+        GeometryReader { geo in
+            let fill = max(0.0, min(1.0, Double(db + 60) / 60))
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                meterColor.frame(height: geo.size.height * fill)
+            }
+        }
+        .background(Color.black.opacity(0.12))
+    }
+
+    private var meterColor: Color {
+        if db > -6  { return .red }
+        if db > -18 { return .yellow }
+        return .green
     }
 }
 
@@ -876,10 +956,13 @@ private struct PitchGuideEditor: View {
                         .monospacedDigit()
                 }
             }
+            LabeledContent("Wet Mix: \(Int(params.wetMix))%") {
+                Slider(value: $params.wetMix, in: 0.0...100.0, step: 1)
+            }
         } header: {
             Text("Transpose")
         } footer: {
-            Text("Shifts the voice by whole semitones in the same pass as the tuning, so it adds no extra latency. The voice is tuned in the key it's sung in, then moved: sung in D with +2 comes out in E. Set Amount to 0% for transpose only.")
+            Text("Shifts the voice by whole semitones in the same pass as the tuning, so it adds no extra latency. Wet Mix controls how much processed signal is heard vs. the original — 100% is fully processed, lower values blend in the dry mic.")
         }
 
         Section {

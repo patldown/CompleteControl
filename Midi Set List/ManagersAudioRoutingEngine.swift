@@ -29,6 +29,7 @@
 
 import AVFoundation
 import Observation
+import Synchronization
 
 @Observable
 @MainActor
@@ -333,38 +334,35 @@ final class AudioRoutingEngine {
             return
         }
 
+        // FX type changed: restart cleanly rather than hot-rewiring packer connections
+        // (hot-wiring causes a race with allocateRenderResources on the running packer)
+        if store.channels.contains(where: { $0.id == id }) {
+            logRebuild(store.channels.first { $0.id == id }?.displayName ?? "channel",
+                       "restarting engine for FX change", since: started)
+            Task { await start() }
+            return
+        }
+
+        // Channel removed: fade to silence, then tear down
         syncing.insert(id)
         fade(existing.inputMixer, to: 0) { [weak self] in
             guard let self else { return }
-            guard let eng = self.engine, var graph = self.graphs[id] else {
-                self.syncing.remove(id)   // engine stopped mid-fade
+            guard let eng = self.engine, let graph = self.graphs[id] else {
+                self.syncing.remove(id)
                 return
             }
-            if let channel = self.store.channels.first(where: { $0.id == id }) {
-                self.teardownChain(graph, in: eng)
-                self.buildChain(for: channel, into: &graph, in: eng)
-                self.graphs[id] = graph
-                self.updateInput(of: channel)
-                if !eng.isRunning { try? eng.start() }
-                self.fade(graph.inputMixer, to: channel.isMuted ? 0 : channel.volume) {
-                    self.logRebuild(channel.displayName, "rebuilt", since: started)
-                    self.finishSync(id)
-                }
-            } else {
-                // Removed
-                self.teardownChain(graph, in: eng)
-                for node in [graph.inputMixer, graph.picker] as [AVAudioNode] {
-                    eng.disconnectNodeInput(node)
-                    eng.disconnectNodeOutput(node)
-                    eng.detach(node)
-                }
-                self.graphs[id] = nil
-                if let bus = self.packerBus.removeValue(forKey: id) {
-                    (self.packer?.auAudioUnit as? OutputPackerAudioUnit)?.routes.clear(bus: bus)
-                }
-                self.connectInputs(in: eng)
-                self.finishSync(id)
+            self.teardownChain(graph, in: eng)
+            for node in [graph.inputMixer, graph.picker] as [AVAudioNode] {
+                eng.disconnectNodeInput(node)
+                eng.disconnectNodeOutput(node)
+                eng.detach(node)
             }
+            self.graphs[id] = nil
+            if let bus = self.packerBus.removeValue(forKey: id) {
+                (self.packer?.auAudioUnit as? OutputPackerAudioUnit)?.routes.clear(bus: bus)
+            }
+            self.connectInputs(in: eng)
+            self.finishSync(id)
         }
     }
 
@@ -406,14 +404,8 @@ final class AudioRoutingEngine {
             let eq = AVAudioUnitEQ(numberOfBands: 3)
             applyEQ(slot.eq, to: eq)
             return eq
-        case .reverb:
-            let rv = AVAudioUnitReverb()
-            applyReverb(slot.reverb, to: rv)
-            return rv
-        case .delay:
-            let dl = AVAudioUnitDelay()
-            applyDelay(slot.delay, to: dl)
-            return dl
+        case .reverb, .delay:
+            return nil   // removed; interface handles room FX onboard
         case .levelRider:
             // AVAudioUnitEffect(audioComponentDescription:) calls AudioComponentFindNext,
             // which finds subclasses registered via AUAudioUnit.registerSubclass — sync,
@@ -510,6 +502,22 @@ final class AudioRoutingEngine {
         graphs[channel.id]?.inputMixer.volume = channel.isMuted ? 0 : channel.volume
     }
 
+    // MARK: - Level meters (audio thread → main thread)
+
+    /// Pre-FX input level from the interface for this channel (dBFS, -120 when stopped)
+    func channelInputLevel(id: UUID) -> Float {
+        guard let picker = graphs[id]?.picker,
+              let sel = (picker.auAudioUnit as? InputPickerAudioUnit)?.selection else { return -120 }
+        return Float(bitPattern: sel.levelBits.load(ordering: .relaxed))
+    }
+
+    /// Post-FX output level going to the interface output for this channel (dBFS, -120 when stopped)
+    func channelOutputLevel(id: UUID) -> Float {
+        guard let bus = packerBus[id],
+              let routes = (packer?.auAudioUnit as? OutputPackerAudioUnit)?.routes else { return -120 }
+        return routes.level(bus)
+    }
+
     private func applySlotParams(_ slot: ChannelFXSlot, to node: AVAudioNode?) {
         guard let node else { return }
         (node as? AVAudioUnitEffect)?.bypass = slot.isBypassed
@@ -521,10 +529,8 @@ final class AudioRoutingEngine {
             }
         case .eq3Band:
             if let eq = node as? AVAudioUnitEQ { applyEQ(slot.eq, to: eq) }
-        case .reverb:
-            if let rv = node as? AVAudioUnitReverb { applyReverb(slot.reverb, to: rv) }
-        case .delay:
-            if let dl = node as? AVAudioUnitDelay { applyDelay(slot.delay, to: dl) }
+        case .reverb, .delay:
+            break
         case .levelRider:
             if let effect = node as? AVAudioUnitEffect,
                let au = effect.auAudioUnit as? LevelRiderAudioUnit {
@@ -559,17 +565,6 @@ final class AudioRoutingEngine {
         b[2].gain = p.highShelfGain;   b[2].bypass = false
     }
 
-    private func applyReverb(_ p: ReverbParams, to rv: AVAudioUnitReverb) {
-        if let preset = AVAudioUnitReverbPreset(rawValue: p.roomPreset) { rv.loadFactoryPreset(preset) }
-        rv.wetDryMix = p.wetDryMix
-    }
-
-    private func applyDelay(_ p: DelayParams, to dl: AVAudioUnitDelay) {
-        dl.delayTime = p.delayTime
-        dl.feedback = p.feedback
-        dl.lowPassCutoff = p.lowPassCutoff
-        dl.wetDryMix = p.wetDryMix
-    }
 }
 
 // MARK: - Supporting types

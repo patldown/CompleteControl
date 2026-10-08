@@ -70,6 +70,8 @@ nonisolated final class InputSelection: Sendable {
     /// Hardware channel (0-based) for the left and right outputs; -1 = silence
     let left = Atomic<Int>(0)
     let right = Atomic<Int>(0)
+    /// Peak dBFS of the selected input channel, audio thread → main thread
+    let levelBits = Atomic<UInt32>(Float(-120).bitPattern)
 }
 
 final class InputPickerAudioUnit: AUAudioUnit {
@@ -148,6 +150,12 @@ final class InputPickerAudioUnit: AUAudioUnit {
                     dst.update(repeating: 0, count: frames)
                 }
             }
+            // Compute input peak dBFS from left output channel for the level meter
+            if out.count > 0, let s = samples(out[0]) {
+                var peak: Float = 0
+                for i in 0..<frames { let v = abs(s[i]); if v > peak { peak = v } }
+                sel.levelBits.store((peak > 1e-7 ? 20 * log10f(peak) : -120).bitPattern, ordering: .relaxed)
+            }
             return noErr
         }
     }
@@ -161,14 +169,17 @@ final class InputPickerAudioUnit: AUAudioUnit {
 nonisolated final class OutputRoutes: @unchecked Sendable {
     let count: Int
     private let codes: UnsafeMutablePointer<Int32>
+    private let levelBitsPtr: UnsafeMutablePointer<UInt32>
 
     init(count: Int) {
         self.count = count
         codes = .allocate(capacity: count)
         codes.initialize(repeating: -1, count: count)
+        levelBitsPtr = .allocate(capacity: count)
+        levelBitsPtr.initialize(repeating: Float(-120).bitPattern, count: count)
     }
 
-    deinit { codes.deallocate() }
+    deinit { codes.deallocate(); levelBitsPtr.deallocate() }
 
     func set(bus: Int, channel: Int, stereo: Bool) {
         guard bus >= 0, bus < count else { return }
@@ -181,6 +192,16 @@ nonisolated final class OutputRoutes: @unchecked Sendable {
     }
 
     @inline(__always) func code(_ bus: Int) -> Int32 { codes[bus] }
+
+    func level(_ bus: Int) -> Float {
+        guard bus >= 0, bus < count else { return -120 }
+        return Float(bitPattern: levelBitsPtr[bus])
+    }
+
+    @inline(__always) func storeLevel(_ bus: Int, bits: UInt32) {
+        guard bus >= 0, bus < count else { return }
+        levelBitsPtr[bus] = bits
+    }
 }
 
 final class OutputPackerAudioUnit: AUAudioUnit {
@@ -257,6 +278,11 @@ final class OutputPackerAudioUnit: AUAudioUnit {
                       let left = samples(list[0])
                 else { continue }
                 let right = (list.count > 1 ? samples(list[1]) : nil) ?? left
+
+                // Compute per-bus peak dBFS for the channel output level meter
+                var peak: Float = 0
+                for i in 0..<frames { let v = abs(left[i]); if v > peak { peak = v } }
+                routes.storeLevel(bus, bits: (peak > 1e-7 ? 20 * log10f(peak) : Float(-120)).bitPattern)
 
                 if stereo {
                     if let dst = samples(out[start]) { for i in 0..<frames { dst[i] += left[i] } }
