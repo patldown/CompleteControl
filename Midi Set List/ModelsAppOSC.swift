@@ -206,7 +206,7 @@ extension BuiltInFXType {
                        get: { _ in 0 }, set: { slot, _ in slot.feedbackNotch.notches.removeAll() }),
         ]
         case .pitchGuide: [
-            num("retuneSpeed", "Retune Speed", 0...400, "ms", "0 = instant (robotic), 30–80 = natural.",
+            num("retuneSpeed", "Retune Speed", 0...400, "ms", "Time to land on the note, like Auto-Tune. 0 = instant (robotic), 10–25 = tight, 50–150 = natural.",
                 get: { Double($0.pitchGuide.retuneSpeed) }, set: { $0.pitchGuide.retuneSpeed = Float($1) }),
             num("amount", "Amount", 0...100, "%", "How far toward the note it pulls. 0 = transpose only.",
                 get: { Double($0.pitchGuide.amount) }, set: { $0.pitchGuide.amount = Float($1) }),

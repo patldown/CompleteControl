@@ -242,7 +242,7 @@ extension PitchScale {
 struct PitchGuideParams: Codable, Equatable {
     var key: Int = 0                    // 0=C … 11=B
     var scale: PitchScale = .major
-    var retuneSpeed: Float = 50         // ms, 0...400; 0 = instant (robotic)
+    var retuneSpeed: Float = 50         // ms to land on the note, 0...400; 0 = instant (robotic)
     var tolerance: Float = 10           // cents, 0...50; deviations this small are left alone
     var amount: Float = 100             // %, 0...100; how much of the error is removed
     var humanize: Float = 0             // %, 0...100; slows retune on held notes
@@ -264,6 +264,9 @@ struct PitchGuideParams: Codable, Equatable {
     var bleedDuck: Float = 0            // dB, -20...0
     /// Balance between processed and dry signal; 100 = fully processed, 0 = bypass
     var wetMix: Float = 100             // %, 0...100
+    /// Saved after Retune Speed came to mean time to land (like Auto-Tune) rather than the
+    /// glide's time constant. Missing on older saves, whose speeds are scaled to match.
+    var retuneSpeedLands: Bool = true
 
     init() {}
 
@@ -274,6 +277,11 @@ struct PitchGuideParams: Codable, Equatable {
         key = try c.decodeIfPresent(Int.self, forKey: .key) ?? d.key
         scale = (try? c.decodeIfPresent(PitchScale.self, forKey: .scale)) ?? d.scale
         retuneSpeed = try c.decodeIfPresent(Float.self, forKey: .retuneSpeed) ?? d.retuneSpeed
+        // Older saves stored the time constant; landing takes about 3× that, so keep their sound
+        if try c.decodeIfPresent(Bool.self, forKey: .retuneSpeedLands) != true,
+           c.contains(.retuneSpeed) {
+            retuneSpeed = min(400, retuneSpeed * 3)
+        }
         tolerance = try min(50, c.decodeIfPresent(Float.self, forKey: .tolerance) ?? d.tolerance)
         amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? d.amount
         humanize = try c.decodeIfPresent(Float.self, forKey: .humanize) ?? d.humanize

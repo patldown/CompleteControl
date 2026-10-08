@@ -1012,7 +1012,7 @@ private struct PitchGuideEditor: View {
         } header: {
             Text("Correction")
         } footer: {
-            Text("Retune Speed is how long the glide to the note takes to cover about two-thirds of the gap, so it lands in roughly 3× that. Auto-Tune's number is closer to the time to land, so start at about a third of it: Auto-Tune 15 ≈ 5 ms, 25 ≈ 8 ms, 50 ≈ 17 ms. Tolerance: notes within this many cents are left alone; past it, correction kicks in. Amount: how far toward the note it pulls. Humanize: loosens the retune on long held notes.")
+            Text("Retune Speed: how long the glide takes to land on the note, on the same scale as Auto-Tune's knob (Auto-Tune 15 ≈ 15 ms). 0 is the robotic effect, 10–25 tight pop, 50–150 natural. Tolerance: notes within this many cents are left alone; past it, correction kicks in. Amount: how far toward the note it pulls. Humanize: loosens the retune on long held notes.")
         }
 
         Section {

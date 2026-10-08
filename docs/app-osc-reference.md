@@ -160,7 +160,7 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 ### `pitch` — Pitch Guide
 | Param | Range | Notes |
 |---|---|---|
-| `retuneSpeed` | 0 to 400 ms | 0 = instant/robotic, 30–80 natural |
+| `retuneSpeed` | 0 to 400 ms | Time to land on the note, same scale as Auto-Tune. 0 = instant/robotic, 10–25 tight, 50–150 natural |
 | `amount` | 0 to 100 % | How far toward the note. 0 = transpose only |
 | `humanize` | 0 to 100 % | Loosens retune on long held notes |
 | `tolerance` | 0 to 50 cents | Notes this close are left alone |
@@ -183,7 +183,7 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | Goal | Address | Value |
 |---|---|---|
 | Tight tuning on the lead vocal | `/app/Lead Vox/pitch/retuneSpeed` | 15 |
-| Natural tuning on the lead vocal | `/app/Lead Vox/pitch/retuneSpeed` | 60 |
+| Natural tuning on the lead vocal | `/app/Lead Vox/pitch/retuneSpeed` | 120 |
 | Transpose BGV up a whole step | `/app/BGV/pitch/transpose` | 2 |
 | Octave-down doubler on the 2nd Pitch Guide | `/app/Lead Vox/pitch2/transpose` | -12 |
 | Correct in A minor | `/app/Lead Vox/pitch/key` + `/app/Lead Vox/pitch/scale` | 9, then 2 |

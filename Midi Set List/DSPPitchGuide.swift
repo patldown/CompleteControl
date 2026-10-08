@@ -450,7 +450,9 @@ nonisolated final class PitchGuideKernel: @unchecked Sendable {
         if heldSeconds > 0.15 {
             retuneMs *= 1 + 3 * Float(bitPattern: humanizeBits.load(ordering: .relaxed))
         }
-        smoothCoeff = retuneMs < 1 ? 1 : 1 - exp(-1 / (sr * retuneMs / 1000))
+        // Retune Speed is the time to land (~95% of the way, three time constants), like Auto-Tune
+        let timeConstantMs = retuneMs / 3
+        smoothCoeff = timeConstantMs < 1 ? 1 : 1 - exp(-1 / (sr * timeConstantMs / 1000))
     }
 
     /// Nothing sung (or not confidently): glide back to no correction
