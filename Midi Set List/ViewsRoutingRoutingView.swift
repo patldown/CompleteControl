@@ -164,6 +164,8 @@ struct ChannelStripView: View {
     @State private var showingMacroSave = false
     @State private var newMacroName = ""
     @State private var confirmingRemove = false
+    /// Shared by every strip so they flip together and stay lined up side by side
+    @AppStorage("routingFXExpanded") private var fxExpanded = false
 
     private let store = AudioRoutingStore.shared
     private let engine = AudioRoutingEngine.shared
@@ -313,24 +315,60 @@ struct ChannelStripView: View {
 
     private var fxSlots: some View {
         VStack(spacing: 0) {
-            ForEach(0..<6, id: \.self) { i in
-                FXSlotRowView(slot: channel.slots[i],
-                              liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: i)) {
-                    fxEditTarget = FXEditTarget(slotIndex: i)
-                } onBypassToggle: {
-                    var c = channel
-                    c.slots[i].isBypassed.toggle()
-                    store.update(c)
-                    if engine.isRunning {
-                        engine.applyMacro(
-                            ChannelMacro(slots: c.slots, output: c.output,
-                                         volume: c.volume, isMuted: c.isMuted),
-                            to: channelID
-                        )
+            Button {
+                withAnimation(.snappy) { fxExpanded.toggle() }
+            } label: {
+                HStack {
+                    Text("FX").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(fxExpanded ? 0 : -90))
+                }
+                .padding(.horizontal, 10)
+                .frame(minHeight: 32)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(fxExpanded ? "Show effects as rows" : "Show effect details")
+            Divider()
+
+            if fxExpanded {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)],
+                          spacing: 6) {
+                    ForEach(0..<6, id: \.self) { i in
+                        FXSlotBlockView(slot: channel.slots[i]) {
+                            fxEditTarget = FXEditTarget(slotIndex: i)
+                        } onBypassToggle: {
+                            toggleBypass(i)
+                        }
                     }
                 }
-                if i < 5 { Divider() }
+                .padding(8)
+            } else {
+                ForEach(0..<6, id: \.self) { i in
+                    FXSlotRowView(slot: channel.slots[i],
+                                  liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: i)) {
+                        fxEditTarget = FXEditTarget(slotIndex: i)
+                    } onBypassToggle: {
+                        toggleBypass(i)
+                    }
+                    if i < 5 { Divider() }
+                }
             }
+        }
+    }
+
+    private func toggleBypass(_ i: Int) {
+        var c = channel
+        c.slots[i].isBypassed.toggle()
+        store.update(c)
+        if engine.isRunning {
+            engine.applyMacro(
+                ChannelMacro(slots: c.slots, output: c.output,
+                             volume: c.volume, isMuted: c.isMuted),
+                to: channelID
+            )
         }
     }
 
@@ -485,18 +523,8 @@ struct FXSlotRowView: View {
                 .buttonStyle(.plain)
 
                 if slot.type != nil {
-                    Button(action: onBypassToggle) {
-                        Text("B")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(slot.isBypassed ? Color.white : Color.secondary)
-                            .frame(width: 36, height: 28)
-                            .background(slot.isBypassed ? Color.orange : Color.secondary.opacity(0.15),
-                                        in: RoundedRectangle(cornerRadius: 6))
-                            .frame(width: 44, height: 40)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(slot.isBypassed ? "Bypassed" : "Bypass")
+                    BypassChip(isBypassed: slot.isBypassed, action: onBypassToggle)
+                        .frame(width: 44, height: 40)
                 }
             }
             .padding(.leading, 10).padding(.trailing, slot.type == nil ? 10 : 2)
@@ -515,6 +543,184 @@ struct FXSlotRowView: View {
         guard !slot.isBypassed, slot.type == .gain else { return nil }
         let db = 20 * log10f(max(slot.gain.volume, 1e-7))
         return abs(db) > 0.5 ? db : nil
+    }
+}
+
+/// The B button: orange when bypassed, with a finger-sized hit area around it
+private struct BypassChip: View {
+    let isBypassed: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("B")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(isBypassed ? Color.white : Color.secondary)
+                .frame(width: 36, height: 28)
+                .background(isBypassed ? Color.orange : Color.secondary.opacity(0.15),
+                            in: RoundedRectangle(cornerRadius: 6))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isBypassed ? "Bypassed" : "Bypass")
+    }
+}
+
+// MARK: - FX slot block (expanded view: a glanceable summary; edits happen in the sheet)
+
+struct FXSlotBlockView: View {
+    let slot: ChannelFXSlot
+    let onTap: () -> Void
+    let onBypassToggle: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 3) {
+                if let type = slot.type {
+                    HStack(spacing: 4) {
+                        Image(systemName: type.systemImage)
+                            .font(.caption2).foregroundStyle(Color.accentColor)
+                        Text(type.shortName).font(.caption.weight(.semibold)).lineLimit(1)
+                    }
+                    // Leave room for the B chip in the corner
+                    .padding(.trailing, 30)
+                    Spacer(minLength: 2)
+                    if slot.isBypassed {
+                        Text("Bypassed").font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                    } else {
+                        ForEach(slot.summary, id: \.self) { line in
+                            Text(line)
+                                .font(.caption2).monospacedDigit()
+                                .lineLimit(1).minimumScaleFactor(0.7)
+                        }
+                    }
+                } else {
+                    Spacer(minLength: 0)
+                    Image(systemName: "plus.circle.fill").font(.title3).foregroundStyle(.secondary)
+                    Text("Add FX").font(.caption2).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 82, maxHeight: 82,
+                   alignment: slot.type == nil ? .center : .topLeading)
+            .padding(6)
+            .opacity(slot.isBypassed ? 0.6 : 1)
+            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .topTrailing) {
+            if slot.type != nil {
+                BypassChip(isBypassed: slot.isBypassed, action: onBypassToggle)
+                    .frame(width: 40, height: 36)
+            }
+        }
+    }
+}
+
+extension BuiltInFXType {
+    /// Fits a summary block's header
+    var shortName: String {
+        switch self {
+        case .gain:          "Gain"
+        case .eq3Band:       "EQ"
+        case .reverb:        "Reverb"
+        case .delay:         "Delay"
+        case .levelRider:    "Rider"
+        case .optoComp:      "Opto"
+        case .fetComp:       "FET"
+        case .feedbackNotch: "Notch"
+        case .pitchGuide:    "Pitch"
+        }
+    }
+}
+
+extension ChannelFXSlot {
+    /// Up to three short lines of the settings that matter most, for a glance check
+    var summary: [String] {
+        func db(_ v: Float) -> String { v == 0 ? "0" : String(format: "%+.1f", v) }
+        func hz(_ v: Float) -> String { v >= 1_000 ? String(format: "%.1fk", v / 1_000) : "\(Int(v))" }
+        switch type {
+        case nil:
+            return []
+        case .gain:
+            let level = 20 * log10f(max(gain.volume, 1e-7))
+            let pan = abs(gain.pan) < 0.01 ? "C" : "\(gain.pan < 0 ? "L" : "R")\(Int((abs(gain.pan) * 100).rounded()))"
+            return [gain.volume < 1e-6 ? "−∞ dB" : "\(db(level.rounded(toPlaces: 1))) dB", "Pan \(pan)"]
+        case .eq3Band:
+            let bands = [("Lo", eq.lowShelfGain, eq.lowShelfFrequency),
+                         ("Mid", eq.midGain, eq.midFrequency),
+                         ("Hi", eq.highShelfGain, eq.highShelfFrequency)]
+                .filter { abs($0.1) >= 0.05 }
+                .map { "\($0.0) \(db($0.1)) @\(hz($0.2))" }
+            return bands.isEmpty ? ["Flat"] : bands
+        case .reverb:
+            return [ReverbParams.presetNames.indices.contains(reverb.roomPreset)
+                        ? ReverbParams.presetNames[reverb.roomPreset] : "Room",
+                    "Wet \(Int(reverb.wetDryMix))%"]
+        case .delay:
+            return ["\(Int((delay.delayTime * 1000).rounded())) ms", "FB \(Int(delay.feedback))%",
+                    "Wet \(Int(delay.wetDryMix))%"]
+        case .levelRider:
+            return ["Target \(Int(levelRider.targetLevel))",
+                    "+\(Int(levelRider.maxBoost)) / \(Int(levelRider.maxCut)) dB",
+                    "Gate \(Int(levelRider.gateThreshold))"]
+        case .optoComp:
+            return [optoComp.limitMode ? "Limit" : "Compress",
+                    "PR \(Int(optoComp.peakReduction))",
+                    "Gain +\(Int(optoComp.gain))"]
+        case .fetComp:
+            return [fetComp.ratio == .allButtons ? "All buttons" : "\(fetComp.ratio.label):1",
+                    "In \(Int(fetComp.input)) Out \(db(fetComp.output.rounded()))",
+                    "Atk \(Int(fetComp.attack)) Rel \(Int(fetComp.release))"]
+        case .feedbackNotch:
+            let n = feedbackNotch.notches.count
+            guard n > 0 else { return ["No notches", "Ring out to set"] }
+            let deepest = feedbackNotch.notches.min { $0.depth < $1.depth }!
+            return ["\(n) notch\(n == 1 ? "" : "es")", "Deepest \(deepest.label)"]
+        case .pitchGuide:
+            let p = pitchGuide
+            let songKey = AudioRoutingEngine.shared.songKey
+            let key: String
+            if p.songKeyDrive, let songKey, songKey.pitchClass != nil {
+                key = "♪ \(songKey.root) \(PitchScale(songKey.scale).shortName)"
+            } else {
+                key = "\(p.keyName) \(p.scale.shortName)"
+            }
+            let speed = p.retuneSpeed < 1 ? "Instant" : "Speed \(Int(p.retuneSpeed)) ms"
+            let third = p.transpose != 0 ? String(format: "%+d st", p.transpose)
+                      : p.amount < 100 ? "Amount \(Int(p.amount))%"
+                      : "± \(Int(p.tolerance))¢"
+            return [key, speed, third]
+        }
+    }
+}
+
+extension PitchScale {
+    var shortName: String {
+        switch self {
+        case .chromatic:       "Chrom"
+        case .major:           "Maj"
+        case .naturalMinor:    "Min"
+        case .harmonicMinor:   "Harm Min"
+        case .melodicMinor:    "Mel Min"
+        case .dorian:          "Dorian"
+        case .mixolydian:      "Mixo"
+        case .majorPentatonic: "Maj Pent"
+        case .minorPentatonic: "Min Pent"
+        case .blues:           "Blues"
+        case .phrygian:        "Phryg"
+        case .lydian:          "Lydian"
+        case .locrian:         "Locrian"
+        }
+    }
+}
+
+private extension Float {
+    func rounded(toPlaces places: Int) -> Float {
+        let m = powf(10, Float(places))
+        return (self * m).rounded() / m
     }
 }
 
