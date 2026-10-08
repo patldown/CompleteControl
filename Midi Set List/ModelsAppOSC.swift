@@ -109,6 +109,7 @@ extension BuiltInFXType {
         case .feedbackNotch: "notch"
         case .pitchGuide:    "pitch"
         case .microDetune:   "detune"
+        case .harmony:       "harmony"
         }
     }
 
@@ -241,6 +242,41 @@ extension BuiltInFXType {
                    get: { $0.pitchGuide.shiftOnlyWhileSinging }, set: { $0.pitchGuide.shiftOnlyWhileSinging = $1 }),
             num("bleedDuck", "Bleed Duck", -20...0, "dB", "Turns the mic down between phrases. 0 = off.",
                 get: { Double($0.pitchGuide.bleedDuck) }, set: { $0.pitchGuide.bleedDuck = Float($1) }),
+        ]
+        case .harmony: [
+            toggle("voice1", "Voice 1", "Turns harmony voice 1 on or off.",
+                   get: { $0.harmony.voice1.enabled }, set: { $0.harmony.voice1.enabled = $1 }),
+            choice("interval1", "Voice 1 Interval", HarmonyInterval.allCases.map(\.label), "In the song's key.",
+                   get: { $0.harmony.voice1.interval.rawValue },
+                   set: { $0.harmony.voice1.interval = HarmonyInterval(rawValue: $1) ?? .thirdAbove }),
+            num("level1", "Voice 1 Level", -24...6, "dB", "",
+                get: { Double($0.harmony.voice1.level) }, set: { $0.harmony.voice1.level = Float($1) }),
+            num("pan1", "Voice 1 Pan", -100...100, "", "-100 = left, 100 = right.",
+                get: { Double($0.harmony.voice1.pan) }, set: { $0.harmony.voice1.pan = Float($1) }),
+            toggle("voice2", "Voice 2", "Turns harmony voice 2 on or off.",
+                   get: { $0.harmony.voice2.enabled }, set: { $0.harmony.voice2.enabled = $1 }),
+            choice("interval2", "Voice 2 Interval", HarmonyInterval.allCases.map(\.label), "In the song's key.",
+                   get: { $0.harmony.voice2.interval.rawValue },
+                   set: { $0.harmony.voice2.interval = HarmonyInterval(rawValue: $1) ?? .fifthAbove }),
+            num("level2", "Voice 2 Level", -24...6, "dB", "",
+                get: { Double($0.harmony.voice2.level) }, set: { $0.harmony.voice2.level = Float($1) }),
+            num("pan2", "Voice 2 Pan", -100...100, "", "-100 = left, 100 = right.",
+                get: { Double($0.harmony.voice2.pan) }, set: { $0.harmony.voice2.pan = Float($1) }),
+            toggle("lead", "Lead", "Keep the singer's own voice. Off = harmonies only.",
+                   get: { $0.harmony.passLead }, set: { $0.harmony.passLead = $1 }),
+            num("humanize", "Humanize", 0...100, "%", "Small detune, drift and delay so the voices sound like singers.",
+                get: { Double($0.harmony.humanize) }, set: { $0.harmony.humanize = Float($1) }),
+            toggle("followSongKey", "Follow Song Key", "Harmonize in the key of the song loaded in Perform.",
+                   get: { $0.harmony.songKeyDrive }, set: { $0.harmony.songKeyDrive = $1 }),
+            choice("key", "Key", PitchGuideParams.noteNames, "Fallback when following the song key.",
+                   get: { $0.harmony.key }, set: { $0.harmony.key = $1 }),
+            choice("scale", "Scale", PitchScale.allCases.map(\.displayName), "",
+                   get: { PitchScale.allCases.firstIndex(of: $0.harmony.scale) ?? 0 },
+                   set: { $0.harmony.scale = PitchScale.allCases[$1] }),
+            num("pickiness", "Pickiness", 0...100, "%", "Higher = only clear, steady notes get harmonies.",
+                get: { Double($0.harmony.pickiness) }, set: { $0.harmony.pickiness = Float($1) }),
+            num("gate", "Gate", -70...(-20), "dBFS", "Quieter input (bleed) gets no harmonies.",
+                get: { Double($0.harmony.gateThreshold) }, set: { $0.harmony.gateThreshold = Float($1) }),
         ]
         case .microDetune: [
             num("pitchA", "Pitch A", 0...50, "cents", "Voice A (left) shifted up. 9 = classic.",

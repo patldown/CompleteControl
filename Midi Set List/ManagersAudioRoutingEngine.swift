@@ -126,6 +126,12 @@ final class AudioRoutingEngine {
             version: 1
         )
         AUAudioUnit.registerSubclass(
+            HarmonyAudioUnit.self,
+            as: HarmonyAudioUnit.componentDescription,
+            name: "Harmony",
+            version: 1
+        )
+        AUAudioUnit.registerSubclass(
             MicroDetuneAudioUnit.self,
             as: MicroDetuneAudioUnit.componentDescription,
             name: "Micro Detune",
@@ -448,6 +454,12 @@ final class AudioRoutingEngine {
                 audioComponentDescription: MicroDetuneAudioUnit.componentDescription)
             (effect.auAudioUnit as? MicroDetuneAudioUnit)?.kernel.applyParams(slot.microDetune, bpm: songBPM)
             return effect
+        case .harmony:
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: HarmonyAudioUnit.componentDescription)
+            (effect.auAudioUnit as? HarmonyAudioUnit)?.kernel
+                .applyParams(slot.harmony.resolved(songKey: songKey))
+            return effect
         }
     }
 
@@ -498,14 +510,16 @@ final class AudioRoutingEngine {
         return effect.auAudioUnit
     }
 
-    /// A song loaded (or its transpose changed): retarget every Pitch Guide following the song key
+    /// A song loaded (or its transpose changed): retarget every Pitch Guide and Harmony following the song key
     func followSongKey(_ key: MusicalKey?) {
         guard key != songKey else { return }
         songKey = key
         for channel in store.channels {
             guard let graph = graphs[channel.id] else { continue }
             for (i, slot) in channel.slots.enumerated()
-            where slot.type == .pitchGuide && slot.pitchGuide.songKeyDrive && i < graph.fxNodes.count {
+            where i < graph.fxNodes.count
+                && ((slot.type == .pitchGuide && slot.pitchGuide.songKeyDrive)
+                    || (slot.type == .harmony && slot.harmony.songKeyDrive)) {
                 applySlotParams(slot, to: graph.fxNodes[i])
             }
         }
@@ -577,6 +591,9 @@ final class AudioRoutingEngine {
         case .microDetune:
             ((node as? AVAudioUnitEffect)?.auAudioUnit as? MicroDetuneAudioUnit)?
                 .kernel.applyParams(slot.microDetune, bpm: songBPM)
+        case .harmony:
+            ((node as? AVAudioUnitEffect)?.auAudioUnit as? HarmonyAudioUnit)?
+                .kernel.applyParams(slot.harmony.resolved(songKey: songKey))
         case nil:
             break
         }

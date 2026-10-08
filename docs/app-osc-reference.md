@@ -63,6 +63,7 @@ the first (lower slot) is `<fx>` and the second is `<fx>2`, e.g. `pitch` and `pi
 | `notch` | Feedback Notch |
 | `pitch` | Pitch Guide (pitch correction, transpose, formant) |
 | `detune` | Micro Detune (micro-pitch stereo widener) |
+| `harmony` | Harmony (key-aware harmonizer) |
 
 ### Value conventions
 
@@ -176,6 +177,21 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `formant` | -6 to 6 semitones | + smaller/brighter, − bigger/darker |
 | `shiftOnlyWhileSinging` | toggle | Transpose/Formant switch off between phrases |
 | `bleedDuck` | -20 to 0 dB | Turns the mic down between phrases. 0 = off |
+
+### `harmony` — Harmony
+| Param | Range | Notes |
+|---|---|---|
+| `voice1` / `voice2` | toggle | Turns each harmony voice on or off |
+| `interval1` / `interval2` | choice | 0 Octave Below, 1 6th Below, 2 5th Below, 3 4th Below, 4 3rd Below, 5 3rd Above, 6 4th Above, 7 5th Above, 8 6th Above, 9 Octave Above — in the song's key |
+| `level1` / `level2` | -24 to 6 dB | |
+| `pan1` / `pan2` | -100 to 100 | -100 = left, 100 = right |
+| `lead` | toggle | Keep the singer's own voice. 0 = harmonies only |
+| `humanize` | 0 to 100 % | Small detune, drift and delay so the voices sound like singers |
+| `followSongKey` | toggle | Harmonize in the key of the song loaded in Perform |
+| `key` | choice | Same as `pitch` — fallback when following the song key |
+| `scale` | choice | Same as `pitch` |
+| `pickiness` | 0 to 100 % | Higher = only clear, steady notes get harmonies |
+| `gate` | -70 to -20 dBFS | Quieter input (bleed) gets no harmonies |
 
 ### `detune` — Micro Detune
 | Param | Range | Notes |

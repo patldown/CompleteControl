@@ -14,12 +14,12 @@ import Foundation
 // MARK: - FX type
 
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
-    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide, microDetune
+    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide, microDetune, harmony
 
     // reverb and delay kept in enum for JSON backward-compat but are no longer available;
     // the load() migration clears any saved slots of these types.
     static var allCases: [BuiltInFXType] {
-        [.gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide, .microDetune]
+        [.gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide, .harmony, .microDetune]
     }
 
     var id: String { rawValue }
@@ -36,6 +36,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .feedbackNotch: "Feedback Notch"
         case .pitchGuide: "Pitch Guide"
         case .microDetune: "Micro Detune (widener)"
+        case .harmony:    "Harmony (key-aware)"
         }
     }
 
@@ -51,6 +52,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .feedbackNotch: "waveform.path.badge.minus"
         case .pitchGuide: "music.note"
         case .microDetune: "arrow.left.and.right"
+        case .harmony:    "music.quarternote.3"
         }
     }
 }
@@ -150,6 +152,162 @@ struct FeedbackNotchParams: Codable, Equatable {
     var notches: [FeedbackNotch] = []
     var sensitivity: Float = 50     // 0...100; higher catches ringing sooner
     var maxDepth: Float = -12       // dB, -18...-6; deepest any one notch may go
+}
+
+// MARK: - Harmony parameters
+
+/// A harmony voice's interval from the sung note, counted in steps of the key's scale
+nonisolated enum HarmonyInterval: Int, Codable, CaseIterable, Identifiable {
+    case octaveBelow = 0, sixthBelow, fifthBelow, fourthBelow, thirdBelow
+    case thirdAbove, fourthAbove, fifthAbove, sixthAbove, octaveAbove
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .octaveBelow: "Octave Below"
+        case .sixthBelow:  "6th Below"
+        case .fifthBelow:  "5th Below"
+        case .fourthBelow: "4th Below"
+        case .thirdBelow:  "3rd Below"
+        case .thirdAbove:  "3rd Above"
+        case .fourthAbove: "4th Above"
+        case .fifthAbove:  "5th Above"
+        case .sixthAbove:  "6th Above"
+        case .octaveAbove: "Octave Above"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .octaveBelow: "−8va"
+        case .sixthBelow:  "−6th"
+        case .fifthBelow:  "−5th"
+        case .fourthBelow: "−4th"
+        case .thirdBelow:  "−3rd"
+        case .thirdAbove:  "+3rd"
+        case .fourthAbove: "+4th"
+        case .fifthAbove:  "+5th"
+        case .sixthAbove:  "+6th"
+        case .octaveAbove: "+8va"
+        }
+    }
+
+    /// Scale steps from the sung note in a seven-note scale (a 3rd is two steps)
+    var steps: Int {
+        switch self {
+        case .octaveBelow: -7
+        case .sixthBelow:  -5
+        case .fifthBelow:  -4
+        case .fourthBelow: -3
+        case .thirdBelow:  -2
+        case .thirdAbove:  2
+        case .fourthAbove: 3
+        case .fifthAbove:  4
+        case .sixthAbove:  5
+        case .octaveAbove: 7
+        }
+    }
+
+    /// Semitone sizes to try, in order, for scales that aren't seven notes. A tuple so the
+    /// audio thread never builds an array.
+    var semitones: (Int, Int?, Int?) {
+        switch self {
+        case .octaveBelow: (-12, nil, nil)
+        case .sixthBelow:  (-9, -8, nil)
+        case .fifthBelow:  (-7, -8, -6)
+        case .fourthBelow: (-5, -6, nil)
+        case .thirdBelow:  (-3, -4, nil)
+        case .thirdAbove:  (4, 3, nil)
+        case .fourthAbove: (5, 6, nil)
+        case .fifthAbove:  (7, 6, 8)
+        case .sixthAbove:  (9, 8, nil)
+        case .octaveAbove: (12, nil, nil)
+        }
+    }
+}
+
+struct HarmonyVoice: Codable, Equatable {
+    var enabled = true
+    var interval: HarmonyInterval = .thirdAbove
+    var level: Float = -3           // dB, -24...+6
+    var pan: Float = -40            // -100 (L) ... +100 (R)
+}
+
+/// Key-aware harmonizer: up to two voices made from the singer, in the song's key
+struct HarmonyParams: Codable, Equatable {
+    var voice1 = HarmonyVoice()
+    var voice2 = HarmonyVoice(enabled: false, interval: .fourthBelow, level: -3, pan: 40)
+    /// Use the loaded song's key and scale; `key`/`scale` are the fallback
+    var songKeyDrive = true
+    var key = 0                     // 0=C … 11=B
+    var scale: PitchScale = .major
+    var humanize: Float = 30        // %, 0...100; small detune, drift and delay per voice
+    /// Keep the singer's own voice in the output; off = harmonies only
+    var passLead = true
+    var pickiness: Float = 50       // %, 0...100
+    var gateThreshold: Float = -45  // dBFS, -70...-20
+    var voiceRange: VoiceRange = .mid
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = HarmonyParams()
+        voice1 = try c.decodeIfPresent(HarmonyVoice.self, forKey: .voice1) ?? d.voice1
+        voice2 = try c.decodeIfPresent(HarmonyVoice.self, forKey: .voice2) ?? d.voice2
+        songKeyDrive = try c.decodeIfPresent(Bool.self, forKey: .songKeyDrive) ?? d.songKeyDrive
+        key = try c.decodeIfPresent(Int.self, forKey: .key) ?? d.key
+        scale = (try? c.decodeIfPresent(PitchScale.self, forKey: .scale)) ?? d.scale
+        humanize = try c.decodeIfPresent(Float.self, forKey: .humanize) ?? d.humanize
+        passLead = try c.decodeIfPresent(Bool.self, forKey: .passLead) ?? d.passLead
+        pickiness = try c.decodeIfPresent(Float.self, forKey: .pickiness) ?? d.pickiness
+        gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
+        voiceRange = (try? c.decodeIfPresent(VoiceRange.self, forKey: .voiceRange)) ?? d.voiceRange
+    }
+
+    /// These params in the song's key and scale, when following it and it has a key
+    func resolved(songKey: MusicalKey?) -> HarmonyParams {
+        guard songKeyDrive, let songKey, let pc = songKey.pitchClass else { return self }
+        var p = self
+        p.key = ((pc % 12) + 12) % 12
+        p.scale = PitchScale(songKey.scale)
+        return p
+    }
+
+    /// 12-bit mask of the key's notes (bit 0 = C)
+    var allowedPitchClassMask: UInt32 {
+        scale.intervals.reduce(0) { $0 | (1 << UInt32((key + $1) % 12)) }
+    }
+
+    struct Stock: Identifiable {
+        let name: String
+        let voice1: HarmonyVoice
+        let voice2: HarmonyVoice
+        var id: String { name }
+    }
+
+    /// Ready-made voicings; choosing one sets the voices and leaves key and detection alone
+    static let stock: [Stock] = [
+        Stock(name: "3rd Above",
+              voice1: HarmonyVoice(enabled: true, interval: .thirdAbove, level: -3, pan: -30),
+              voice2: HarmonyVoice(enabled: false, interval: .fifthAbove, level: -3, pan: 30)),
+        Stock(name: "3rd Below",
+              voice1: HarmonyVoice(enabled: true, interval: .thirdBelow, level: -3, pan: 30),
+              voice2: HarmonyVoice(enabled: false, interval: .fifthAbove, level: -3, pan: -30)),
+        Stock(name: "3rd & 5th Above",
+              voice1: HarmonyVoice(enabled: true, interval: .thirdAbove, level: -4, pan: -40),
+              voice2: HarmonyVoice(enabled: true, interval: .fifthAbove, level: -6, pan: 40)),
+        Stock(name: "Trio (3rd Up, 4th Down)",
+              voice1: HarmonyVoice(enabled: true, interval: .thirdAbove, level: -4, pan: -40),
+              voice2: HarmonyVoice(enabled: true, interval: .fourthBelow, level: -5, pan: 40)),
+        Stock(name: "Octave Below",
+              voice1: HarmonyVoice(enabled: true, interval: .octaveBelow, level: -6, pan: 0),
+              voice2: HarmonyVoice(enabled: false, interval: .octaveAbove, level: -9, pan: 0)),
+        Stock(name: "Octaves Up & Down",
+              voice1: HarmonyVoice(enabled: true, interval: .octaveAbove, level: -9, pan: -25),
+              voice2: HarmonyVoice(enabled: true, interval: .octaveBelow, level: -6, pan: 25)),
+    ]
 }
 
 // MARK: - Micro Detune parameters
@@ -471,6 +629,7 @@ struct ChannelFXSlot: Codable, Equatable {
     var feedbackNotch: FeedbackNotchParams = .init()
     var pitchGuide: PitchGuideParams = .init()
     var microDetune: MicroDetuneParams = .init()
+    var harmony: HarmonyParams = .init()
 
     init() {}
 
@@ -489,6 +648,7 @@ struct ChannelFXSlot: Codable, Equatable {
         feedbackNotch = try c.decodeIfPresent(FeedbackNotchParams.self, forKey: .feedbackNotch) ?? .init()
         pitchGuide = try c.decodeIfPresent(PitchGuideParams.self, forKey: .pitchGuide) ?? .init()
         microDetune = try c.decodeIfPresent(MicroDetuneParams.self, forKey: .microDetune) ?? .init()
+        harmony = try c.decodeIfPresent(HarmonyParams.self, forKey: .harmony) ?? .init()
     }
 }
 

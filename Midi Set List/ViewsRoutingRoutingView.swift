@@ -633,6 +633,7 @@ extension BuiltInFXType {
         case .feedbackNotch: "Notch"
         case .pitchGuide:    "Pitch"
         case .microDetune:   "Detune"
+        case .harmony:       "Harmony"
         }
     }
 }
@@ -694,6 +695,16 @@ extension ChannelFXSlot {
                       : p.amount < 100 ? "Amount \(Int(p.amount))%"
                       : "± \(Int(p.tolerance))¢"
             return [key, speed, third]
+        case .harmony:
+            let h = harmony
+            let voices = [h.voice1, h.voice2].filter(\.enabled).map(\.interval.shortLabel)
+            let songKey = AudioRoutingEngine.shared.songKey
+            let key = h.songKeyDrive && songKey?.pitchClass != nil
+                ? "♪ \(songKey!.root) \(PitchScale(songKey!.scale).shortName)"
+                : "\(PitchGuideParams.noteNames[h.key % 12]) \(h.scale.shortName)"
+            return [voices.isEmpty ? "No voices" : voices.joined(separator: " "),
+                    key,
+                    h.passLead ? "Humanize \(Int(h.humanize))%" : "Harmonies only"]
         case .microDetune:
             let d = microDetune
             let bpm = AudioRoutingEngine.shared.songBPM
@@ -834,6 +845,9 @@ struct FXSlotEditorSheet: View {
                     case .microDetune:
                         MicroDetuneEditor(params: $slot.microDetune,
                                           kernel: live(MicroDetuneAudioUnit.self)?.kernel)
+                    case .harmony:
+                        HarmonyEditor(params: $slot.harmony,
+                                      kernel: live(HarmonyAudioUnit.self)?.kernel)
                     }
                 }
             }
@@ -848,6 +862,8 @@ struct FXSlotEditorSheet: View {
                             .applyParams(original.pitchGuide.resolved(songKey: AudioRoutingEngine.shared.songKey))
                         (liveUnit as? MicroDetuneAudioUnit)?.kernel
                             .applyParams(original.microDetune, bpm: AudioRoutingEngine.shared.songBPM)
+                        (liveUnit as? HarmonyAudioUnit)?.kernel
+                            .applyParams(original.harmony.resolved(songKey: AudioRoutingEngine.shared.songKey))
                         dismiss()
                     }
                 }
@@ -1401,6 +1417,168 @@ private struct MicroDetuneEditor: View {
             get: { (Double(ms.wrappedValue) / Double(MicroDetuneParams.maxDelayMs)).squareRoot() },
             set: { ms.wrappedValue = (Float($0 * $0) * MicroDetuneParams.maxDelayMs).rounded() }
         )
+    }
+}
+
+private struct HarmonyEditor: View {
+    @Binding var params: HarmonyParams
+    let kernel: HarmonyKernel?
+
+    var body: some View {
+        Section {
+            if let kernel {
+                TimelineView(.animation(minimumInterval: 0.05)) { _ in
+                    HarmonyMeter(kernel: kernel)
+                }
+            } else {
+                Text("Tap Done (and turn Audio on if it’s off), then reopen this slot to see what it hears.")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Live")
+        } footer: {
+            Text("Harmonizes the first input of the channel. Put it after Pitch Guide, so the harmonies follow the corrected note, and before reverb and delay.")
+        }
+
+        if let kernel {
+            LearnVoiceSection(
+                readLevel: { Float(bitPattern: kernel.inputLevelBits.load(ordering: .relaxed)) },
+                describe: { levels in
+                    "Apply sets Gate to \(Int(min(-20, max(-70, levels.gate.rounded())))) dBFS."
+                },
+                apply: { levels in
+                    params.gateThreshold = min(-20, max(-70, levels.gate.rounded()))
+                }
+            )
+        }
+
+        Section {
+            Menu {
+                ForEach(HarmonyParams.stock) { stock in
+                    Button(stock.name) {
+                        params.voice1 = stock.voice1
+                        params.voice2 = stock.voice2
+                    }
+                }
+            } label: {
+                LabeledContent("Stock Voicings") {
+                    Text(stockName ?? "Custom").foregroundStyle(.secondary)
+                }
+            }
+        } footer: {
+            Text("Sets the two voices. Key and detection stay as they are.")
+        }
+
+        voiceSection("Voice 1", voice: $params.voice1)
+        voiceSection("Voice 2", voice: $params.voice2)
+
+        Section {
+            Toggle("Follow Song Key", isOn: $params.songKeyDrive)
+            if params.songKeyDrive {
+                LabeledContent("Now") {
+                    Text(songKeyLabel).foregroundStyle(.secondary)
+                }
+            }
+            Picker(params.songKeyDrive ? "Fallback Key" : "Key", selection: $params.key) {
+                ForEach(0..<12, id: \.self) { Text(PitchGuideParams.noteNames[$0]).tag($0) }
+            }
+            Picker(params.songKeyDrive ? "Fallback Scale" : "Scale", selection: $params.scale) {
+                ForEach(PitchScale.allCases) { Text($0.displayName).tag($0) }
+            }
+        } header: {
+            Text("Key")
+        } footer: {
+            Text("Intervals are counted in the key's scale: a 3rd above is a major or minor 3rd, whichever is in the key. Pentatonic, blues and chromatic scales use the nearest interval that fits.")
+        }
+
+        Section {
+            Toggle("Lead", isOn: $params.passLead)
+            LabeledContent("Humanize: \(Int(params.humanize))%") {
+                Slider(value: $params.humanize, in: 0.0...100.0, step: 1)
+            }
+        } header: {
+            Text("Blend")
+        } footer: {
+            Text("Lead keeps the singer's own voice in this channel; turn it off to send harmonies only (e.g. to their own output or a separate effect). Humanize puts each voice a few cents off and a little late (up to 20 and 32 ms), drifting slowly, so they sound like singers rather than a copy. Harmonies arrive ~10–20 ms after the lead plus that delay.")
+        }
+
+        Section {
+            Picker("Voice Range", selection: $params.voiceRange) {
+                ForEach(VoiceRange.allCases) { Text($0.displayName).tag($0) }
+            }
+            LabeledContent("Pickiness: \(Int(params.pickiness))%") {
+                Slider(value: $params.pickiness, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Gate: \(Int(params.gateThreshold)) dBFS") {
+                Slider(value: $params.gateThreshold, in: -70.0...(-20.0), step: 1)
+            }
+        } header: {
+            Text("Detection")
+        } footer: {
+            Text("Harmonies only sing on clear, steady sung notes; they fade out on breaths, consonants and between phrases. Raise the Gate until bleed no longer shows up in the Live meter.")
+        }
+        .onChange(of: params) {
+            kernel?.applyParams(params.resolved(songKey: AudioRoutingEngine.shared.songKey))
+        }
+    }
+
+    @ViewBuilder
+    private func voiceSection(_ title: String, voice: Binding<HarmonyVoice>) -> some View {
+        Section(title) {
+            Toggle("On", isOn: voice.enabled)
+            if voice.wrappedValue.enabled {
+                Picker("Interval", selection: voice.interval) {
+                    ForEach(HarmonyInterval.allCases) { Text($0.label).tag($0) }
+                }
+                LabeledContent("Level: \(String(format: "%+.0f", voice.wrappedValue.level)) dB") {
+                    Slider(value: voice.level, in: -24.0...6.0, step: 1)
+                }
+                LabeledContent("Pan: \(Self.panLabel(voice.wrappedValue.pan))") {
+                    Slider(value: voice.pan, in: -100.0...100.0, step: 5)
+                }
+            }
+        }
+    }
+
+    private static func panLabel(_ pan: Float) -> String {
+        abs(pan) < 1 ? "C" : "\(pan < 0 ? "L" : "R")\(Int(abs(pan)))"
+    }
+
+    private var stockName: String? {
+        HarmonyParams.stock.first { $0.voice1 == params.voice1 && $0.voice2 == params.voice2 }?.name
+    }
+
+    private var songKeyLabel: String {
+        guard let key = AudioRoutingEngine.shared.songKey, key.pitchClass != nil else {
+            return "No song key — using fallback"
+        }
+        return "Harmonizing in \(key.root) \(key.scale.rawValue)"
+    }
+}
+
+/// What the harmonizer hears and the notes its voices are singing
+private struct HarmonyMeter: View {
+    let kernel: HarmonyKernel
+
+    var body: some View {
+        let detected = Float(bitPattern: kernel.detectedMidiBits.load(ordering: .relaxed))
+        let v1 = Float(bitPattern: kernel.voiceMidi0.load(ordering: .relaxed))
+        let v2 = Float(bitPattern: kernel.voiceMidi1.load(ordering: .relaxed))
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent("Hearing") {
+                Text(detected < 0 ? "—" : PitchMeter.describe(detected))
+                    .monospacedDigit()
+                    .foregroundStyle(detected < 0 ? .secondary : .primary)
+            }
+            LabeledContent("Voice 1") { voiceText(v1) }
+            LabeledContent("Voice 2") { voiceText(v2) }
+        }
+    }
+
+    private func voiceText(_ midi: Float) -> some View {
+        Text(midi < 0 ? "—" : PitchMeter.noteName(Int(midi)))
+            .monospacedDigit()
+            .foregroundStyle(midi < 0 ? Color.secondary : Color.green)
     }
 }
 

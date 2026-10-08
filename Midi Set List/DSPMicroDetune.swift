@@ -81,7 +81,7 @@ nonisolated final class MicroDetuneKernel: @unchecked Sendable {
     }
 
     /// `bpm` is the loaded song's tempo, for tempo-synced delays
-    func applyParams(_ p: MicroDetuneParams, bpm: Int?) {
+    @MainActor func applyParams(_ p: MicroDetuneParams, bpm: Int?) {
         let delays = p.delays(bpm: bpm)
         pitchABits.store(p.pitchA.bitPattern, ordering: .relaxed)
         pitchBBits.store(p.pitchB.bitPattern, ordering: .relaxed)
