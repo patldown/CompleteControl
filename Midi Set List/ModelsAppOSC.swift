@@ -128,6 +128,7 @@ extension BuiltInFXType {
         case .pitchGuide:    "pitch"
         case .microDetune:   "detune"
         case .harmony:       "harmony"
+        case .piezoBody:     "body"
         }
     }
 
@@ -260,6 +261,19 @@ extension BuiltInFXType {
                    get: { $0.pitchGuide.shiftOnlyWhileSinging }, set: { $0.pitchGuide.shiftOnlyWhileSinging = $1 }),
             num("bleedDuck", "Bleed Duck", -20...0, "dB", "Turns the mic down between phrases. 0 = off.",
                 get: { Double($0.pitchGuide.bleedDuck) }, set: { $0.pitchGuide.bleedDuck = Float($1) }),
+        ]
+        case .piezoBody: [
+            num("amount", "Amount", 0...100, "%", "Body back in, quack and spikiness out. 0 = flat.",
+                get: { Double($0.piezoBody.amount) }, set: { $0.piezoBody.amount = Float($1) }),
+            choice("size", "Body Size", GuitarBodySize.allCases.map(\.displayName), "Where the body resonances sit.",
+                   get: { GuitarBodySize.allCases.firstIndex(of: $0.piezoBody.bodySize) ?? 1 },
+                   set: { $0.piezoBody.bodySize = GuitarBodySize.allCases[$1] }),
+            toggle("phase", "Phase Invert", "Flip polarity; try it when the low end feeds back.",
+                   get: { $0.piezoBody.phaseInvert }, set: { $0.piezoBody.phaseInvert = $1 }),
+            toggle("mute", "Mute", "Silence the guitar (e.g. to tune).",
+                   get: { $0.piezoBody.mute }, set: { $0.piezoBody.mute = $1 }),
+            num("level", "Level", -12...6, "dB", "Output level.",
+                get: { Double($0.piezoBody.level) }, set: { $0.piezoBody.level = Float($1) }),
         ]
         case .harmony:
             harmonyVoiceParams(1, \.voice1) + harmonyVoiceParams(2, \.voice2) + harmonyVoiceParams(3, \.voice3) + [

@@ -14,12 +14,14 @@ import Foundation
 // MARK: - FX type
 
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
-    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide, microDetune, harmony
+    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide, microDetune, harmony,
+         piezoBody
 
     // reverb and delay kept in enum for JSON backward-compat but are no longer available;
     // the load() migration clears any saved slots of these types.
     static var allCases: [BuiltInFXType] {
-        [.gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide, .harmony, .microDetune]
+        [.gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide, .harmony, .microDetune,
+         .piezoBody]
     }
 
     var id: String { rawValue }
@@ -37,6 +39,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .pitchGuide: "Pitch Guide"
         case .microDetune: "Micro Detune (widener)"
         case .harmony:    "Harmony (key-aware)"
+        case .piezoBody:  "Piezo Body (acoustic pickup)"
         }
     }
 
@@ -53,6 +56,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .pitchGuide: "music.note"
         case .microDetune: "arrow.left.and.right"
         case .harmony:    "music.quarternote.3"
+        case .piezoBody:  "guitars"
         }
     }
 }
@@ -152,6 +156,51 @@ struct FeedbackNotchParams: Codable, Equatable {
     var notches: [FeedbackNotch] = []
     var sensitivity: Float = 50     // 0...100; higher catches ringing sooner
     var maxDepth: Float = -12       // dB, -18...-6; deepest any one notch may go
+}
+
+// MARK: - Piezo Body parameters
+
+/// Where the guitar's body resonances sit
+enum GuitarBodySize: String, Codable, CaseIterable, Identifiable {
+    case parlor, dreadnought, jumbo
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .parlor:      "Parlor"
+        case .dreadnought: "Dreadnought"
+        case .jumbo:       "Jumbo"
+        }
+    }
+    /// Air and top resonances, Hz
+    var resonances: (Float, Float) {
+        switch self {
+        case .parlor:      (130, 260)
+        case .dreadnought: (100, 210)
+        case .jumbo:       (85, 180)
+        }
+    }
+}
+
+/// Acoustic pickup enhancer: body resonance back in, quack and spikiness out, one knob
+struct PiezoBodyParams: Codable, Equatable {
+    var amount: Float = 60          // %, 0...100
+    var bodySize: GuitarBodySize = .dreadnought
+    var phaseInvert = false
+    var mute = false
+    var level: Float = 0            // dB, -12...+6
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PiezoBodyParams()
+        amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? d.amount
+        bodySize = (try? c.decodeIfPresent(GuitarBodySize.self, forKey: .bodySize)) ?? d.bodySize
+        phaseInvert = try c.decodeIfPresent(Bool.self, forKey: .phaseInvert) ?? d.phaseInvert
+        mute = try c.decodeIfPresent(Bool.self, forKey: .mute) ?? d.mute
+        level = try c.decodeIfPresent(Float.self, forKey: .level) ?? d.level
+    }
 }
 
 // MARK: - Harmony parameters
@@ -674,6 +723,7 @@ struct ChannelFXSlot: Codable, Equatable {
     var pitchGuide: PitchGuideParams = .init()
     var microDetune: MicroDetuneParams = .init()
     var harmony: HarmonyParams = .init()
+    var piezoBody: PiezoBodyParams = .init()
 
     init() {}
 
@@ -693,6 +743,7 @@ struct ChannelFXSlot: Codable, Equatable {
         pitchGuide = try c.decodeIfPresent(PitchGuideParams.self, forKey: .pitchGuide) ?? .init()
         microDetune = try c.decodeIfPresent(MicroDetuneParams.self, forKey: .microDetune) ?? .init()
         harmony = try c.decodeIfPresent(HarmonyParams.self, forKey: .harmony) ?? .init()
+        piezoBody = try c.decodeIfPresent(PiezoBodyParams.self, forKey: .piezoBody) ?? .init()
     }
 }
 

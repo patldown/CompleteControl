@@ -64,6 +64,7 @@ the first (lower slot) is `<fx>` and the second is `<fx>2`, e.g. `pitch` and `pi
 | `pitch` | Pitch Guide (pitch correction, transpose, formant) |
 | `detune` | Micro Detune (micro-pitch stereo widener) |
 | `harmony` | Harmony (key-aware harmonizer) |
+| `body` | Piezo Body (acoustic pickup enhancer) |
 
 ### Value conventions
 
@@ -177,6 +178,15 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `formant` | -6 to 6 semitones | + smaller/brighter, − bigger/darker |
 | `shiftOnlyWhileSinging` | toggle | Transpose/Formant switch off between phrases |
 | `bleedDuck` | -20 to 0 dB | Turns the mic down between phrases. 0 = off |
+
+### `body` — Piezo Body
+| Param | Range | Notes |
+|---|---|---|
+| `amount` | 0 to 100 % | Body back in, quack and spikiness out. 0 = flat |
+| `size` | choice | 0 Parlor, 1 Dreadnought, 2 Jumbo — where the body resonances sit |
+| `phase` | toggle | Flip polarity; try it when the low end feeds back |
+| `mute` | toggle | Silence the guitar (e.g. to tune) |
+| `level` | -12 to 6 dB | Output level |
 
 ### `harmony` — Harmony
 | Param | Range | Notes |

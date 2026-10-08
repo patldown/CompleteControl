@@ -634,6 +634,7 @@ extension BuiltInFXType {
         case .pitchGuide:    "Pitch"
         case .microDetune:   "Detune"
         case .harmony:       "Harmony"
+        case .piezoBody:     "Body"
         }
     }
 }
@@ -695,6 +696,12 @@ extension ChannelFXSlot {
                       : p.amount < 100 ? "Amount \(Int(p.amount))%"
                       : "± \(Int(p.tolerance))¢"
             return [key, speed, third]
+        case .piezoBody:
+            let b = piezoBody
+            if b.mute { return ["Muted", b.bodySize.displayName] }
+            return ["Amount \(Int(b.amount))%",
+                    b.bodySize.displayName,
+                    b.phaseInvert ? "Phase Ø" : (b.level == 0 ? "Level 0 dB" : String(format: "Level %+.0f dB", b.level))]
         case .harmony:
             let h = harmony
             let voices = [h.voice1, h.voice2, h.voice3].filter(\.enabled).map(\.interval.shortLabel)
@@ -848,6 +855,9 @@ struct FXSlotEditorSheet: View {
                     case .harmony:
                         HarmonyEditor(params: $slot.harmony,
                                       kernel: live(HarmonyAudioUnit.self)?.kernel)
+                    case .piezoBody:
+                        PiezoBodyEditor(params: $slot.piezoBody,
+                                        kernel: live(PiezoBodyAudioUnit.self)?.kernel)
                     }
                 }
             }
@@ -862,6 +872,7 @@ struct FXSlotEditorSheet: View {
                             .applyParams(original.pitchGuide.resolved(songKey: AudioRoutingEngine.shared.songKey))
                         (liveUnit as? MicroDetuneAudioUnit)?.kernel
                             .applyParams(original.microDetune, bpm: AudioRoutingEngine.shared.songBPM)
+                        (liveUnit as? PiezoBodyAudioUnit)?.kernel.applyParams(original.piezoBody)
                         (liveUnit as? HarmonyAudioUnit)?.kernel
                             .applyParams(original.harmony.resolved(songKey: AudioRoutingEngine.shared.songKey))
                         dismiss()
@@ -1417,6 +1428,49 @@ private struct MicroDetuneEditor: View {
             get: { (Double(ms.wrappedValue) / Double(MicroDetuneParams.maxDelayMs)).squareRoot() },
             set: { ms.wrappedValue = (Float($0 * $0) * MicroDetuneParams.maxDelayMs).rounded() }
         )
+    }
+}
+
+private struct PiezoBodyEditor: View {
+    @Binding var params: PiezoBodyParams
+    let kernel: PiezoBodyKernel?
+
+    var body: some View {
+        Section {
+            LabeledContent("Amount: \(Int(params.amount))%") {
+                Slider(value: $params.amount, in: 0.0...100.0, step: 1)
+            }
+            Picker("Body Size", selection: $params.bodySize) {
+                ForEach(GuitarBodySize.allCases) { Text($0.displayName).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if let kernel {
+                TimelineView(.animation(minimumInterval: 0.1)) { _ in
+                    LabeledContent("Smoothing") {
+                        let gr = Float(bitPattern: kernel.gainReductionBits.load(ordering: .relaxed))
+                        Text(gr < 0.5 ? "—" : String(format: "−%.0f dB", gr))
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Text("Piezo Body")
+        } footer: {
+            Text("For under-saddle (piezo) pickups. Amount puts back the body resonance a mic would hear, softens the nasal quack around 1.6 kHz and the brittle top, and evens out pick attack. Body Size moves the resonances to suit the guitar. Zero latency.")
+        }
+
+        Section {
+            Toggle("Phase Invert", isOn: $params.phaseInvert)
+            Toggle("Mute", isOn: $params.mute).tint(.orange)
+            LabeledContent("Level: \(String(format: "%+.0f", params.level)) dB") {
+                Slider(value: $params.level, in: -12.0...6.0, step: 0.5)
+            }
+        } header: {
+            Text("Output")
+        } footer: {
+            Text("If the low end starts to boom or feed back on stage, try Phase Invert first. For feedback that rings at one pitch, put a Feedback Notch before this effect and ring it out at soundcheck.")
+        }
+        .onChange(of: params) { kernel?.applyParams(params) }
     }
 }
 
