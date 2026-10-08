@@ -2,22 +2,24 @@
 //  DSPMicroDetune.swift
 //  Midi Set List
 //
-//  Real-time DSP kernel for Micro Detune: the classic micro-pitch widener (the Eventide
-//  H3000 / MicroPitch trick). Two copies of the voice, one nudged up a few cents and the
-//  other down, each slightly delayed and panned apart, are added back to the dry signal.
-//  The small pitch and time differences make a mono source sound wide and doubled.
+//  Real-time DSP kernel for Micro Detune: a dual pitch-shifted delay after Eventide's
+//  MicroPitch. Voice A takes the left input, shifts it up by Pitch A and delays it by
+//  Delay A; voice B takes the right input, shifts it down by Pitch B and delays it by
+//  Delay B. A plays on the left, B on the right (on a mono output they sum 50/50).
+//  The small pitch and time differences make a source sound wide and doubled.
 //  Strict real-time contract: no allocations, locks, or Swift runtime calls in process().
 //
-//  Signal path:
-//    in (L+R)/2 ─▶ delay line ─┬▶ voice L: +Detune cents, Delay ms      ─▶ low cut ─┐
-//                    ▲         └▶ voice R: −Detune cents, Delay × 1.4 ms ─▶ low cut ─┤
-//                    └──────────── Feedback ◀─────────────────────────────────────────┤
-//    out = dry × dryGain + voices panned by Width × wetGain ◀─────────────────────────┘
+//  Signal path, per voice:
+//    in ─▶ (+) ─▶ delay line ─▶ shifter (Pitch ± Mod) ─▶ Tone tilt ─▶ Low Cut ─┬─▶ × Pitch Mix × wet ─▶ out
+//           ▲                                                                 │
+//           └──────────────────────────── Feedback ◀──────────────────────────┘
+//  Feedback goes back through the shifter, so each repeat moves further in pitch: the
+//  rising / falling repeats MicroPitch is known for.
 //
-//  Each voice is a rotating-tap shifter: two taps sweep through a short window at a
-//  rate set by the shift ratio, half a window apart, and crossfade so the jump back
-//  at the end of the window is never heard. At a few cents the sweep is very slow
-//  (about 10 s per window at 9 cents), so it's smooth and costs almost nothing.
+//  Each shifter is a rotating-tap delay: two taps sweep through a short window at a rate
+//  set by the shift ratio, half a window apart, crossfaded by sin² so the jump back at the
+//  end of the window is never heard. At a few cents the sweep takes seconds, so it's smooth
+//  and cheap. Mod moves the shift with a sine LFO (B is a quarter cycle behind A).
 //
 
 import AVFoundation
@@ -26,73 +28,72 @@ import Synchronization
 nonisolated final class MicroDetuneKernel: @unchecked Sendable {
 
     // MARK: - Parameters (main thread → audio thread)
-    private let detuneBits   = Atomic<UInt32>(Float(9).bitPattern)     // cents, 0...50
-    private let delayBits    = Atomic<UInt32>(Float(12).bitPattern)    // ms, 0...100
-    private let widthBits    = Atomic<UInt32>(Float(1).bitPattern)     // 0...1
-    private let mixBits      = Atomic<UInt32>(Float(0.35).bitPattern)  // 0...1
-    private let feedbackBits = Atomic<UInt32>(Float(0).bitPattern)     // 0...0.7
-    private let lowCutBits   = Atomic<UInt32>(Float(150).bitPattern)   // Hz, 20...600
+    private let pitchABits   = Atomic<UInt32>(Float(9).bitPattern)     // cents
+    private let pitchBBits   = Atomic<UInt32>(Float(-9).bitPattern)    // cents
+    private let delayABits   = Atomic<UInt32>(Float(0).bitPattern)     // ms (tempo already resolved)
+    private let delayBBits   = Atomic<UInt32>(Float(12).bitPattern)    // ms
+    private let pitchMixBits = Atomic<UInt32>(Float(0.5).bitPattern)   // 0...1
+    private let mixBits      = Atomic<UInt32>(Float(0.4).bitPattern)   // 0...1
+    private let feedbackBits = Atomic<UInt32>(Float(0).bitPattern)     // 0...0.95
+    private let toneBits     = Atomic<UInt32>(Float(0).bitPattern)     // -1...1
+    private let lowCutBits   = Atomic<UInt32>(Float(20).bitPattern)    // Hz
+    private let modDepthBits = Atomic<UInt32>(Float(0).bitPattern)     // 0...1
+    private let modRateBits  = Atomic<UInt32>(Float(0.5).bitPattern)   // Hz
 
     // MARK: - Audio thread state
 
-    /// Holds over a second at 96 kHz: max delay (140 ms on the right voice) plus the window
-    private static let bufferSize = 1 << 17
+    /// Holds 2.7 s at 96 kHz: the 2 s max delay plus the shifter window
+    private static let bufferSize = 1 << 18
     private static let mask = bufferSize - 1
-    private let buffer: UnsafeMutablePointer<Float>
+    private var voiceA: Voice
+    private var voiceB: Voice
     private var writeIndex = 0
     private var sampleRate: Double = 48_000
-
-    /// Sweep window of each shifter, in samples
     private var windowSamples: Double = 2_400
-    /// Tap phase of each voice (0..<1 through the window)
-    private var phaseL: Double = 0
-    private var phaseR: Double = 0.25   // offset so the two voices never crossfade together
-    /// Base delays and gains glide to new settings so knob moves don't click
-    private var delayL: Double = 0
-    private var delayR: Double = 0
+    private var smoothCoeff: Double = 0.001
+    private var lfoPhase: Double = 0
     private var dryGain: Float = 1
     private var wetGain: Float = 0
-    private var smoothCoeff: Double = 0.001
-    /// One-pole high-pass on each voice
-    private var hpL = HighPass()
-    private var hpR = HighPass()
-    private var lastWetL: Float = 0
-    private var lastWetR: Float = 0
+    private var gainA: Float = 1
+    private var gainB: Float = 1
 
     init() {
-        buffer = .allocate(capacity: Self.bufferSize)
-        buffer.initialize(repeating: 0, count: Self.bufferSize)
+        voiceA = Voice(size: Self.bufferSize)
+        voiceB = Voice(size: Self.bufferSize)
+        voiceB.phase = 0.25   // so the two voices never crossfade at the same moment
     }
 
-    deinit { buffer.deallocate() }
+    deinit {
+        voiceA.buffer.deallocate()
+        voiceB.buffer.deallocate()
+    }
 
     // MARK: - Main thread API
 
     func setSampleRate(_ sr: Double) {
         guard sr > 0 else { return }
         sampleRate = sr
-        windowSamples = sr * 0.050           // 50 ms window
-        smoothCoeff = 1 - exp(-1 / (sr * 0.030))
-        buffer.update(repeating: 0, count: Self.bufferSize)
+        windowSamples = sr * 0.050           // 50 ms shifter window
+        smoothCoeff = 1 - exp(-1 / (sr * 0.050))
         writeIndex = 0
-        let p = currentDelayMs()
-        delayL = p * sr / 1000
-        delayR = p * 1.4 * sr / 1000
-        lastWetL = 0
-        lastWetR = 0
+        voiceA.reset(delay: Double(Float(bitPattern: delayABits.load(ordering: .relaxed))) * sr / 1000)
+        voiceB.reset(delay: Double(Float(bitPattern: delayBBits.load(ordering: .relaxed))) * sr / 1000)
     }
 
-    func applyParams(_ p: MicroDetuneParams) {
-        detuneBits.store(p.detune.bitPattern, ordering: .relaxed)
-        delayBits.store(p.delay.bitPattern, ordering: .relaxed)
-        widthBits.store((p.width / 100).bitPattern, ordering: .relaxed)
+    /// `bpm` is the loaded song's tempo, for tempo-synced delays
+    func applyParams(_ p: MicroDetuneParams, bpm: Int?) {
+        let delays = p.delays(bpm: bpm)
+        pitchABits.store(p.pitchA.bitPattern, ordering: .relaxed)
+        pitchBBits.store(p.pitchB.bitPattern, ordering: .relaxed)
+        delayABits.store(min(MicroDetuneParams.maxDelayMs, max(0, delays.a)).bitPattern, ordering: .relaxed)
+        delayBBits.store(min(MicroDetuneParams.maxDelayMs, max(0, delays.b)).bitPattern, ordering: .relaxed)
+        pitchMixBits.store((p.pitchMix / 100).bitPattern, ordering: .relaxed)
         mixBits.store((p.mix / 100).bitPattern, ordering: .relaxed)
-        feedbackBits.store((min(70, max(0, p.feedback)) / 100).bitPattern, ordering: .relaxed)
+        feedbackBits.store((min(95, max(0, p.feedback)) / 100).bitPattern, ordering: .relaxed)
+        toneBits.store((p.tone / 100).bitPattern, ordering: .relaxed)
         lowCutBits.store(p.lowCut.bitPattern, ordering: .relaxed)
-    }
-
-    private func currentDelayMs() -> Double {
-        Double(Float(bitPattern: delayBits.load(ordering: .relaxed)))
+        modDepthBits.store((p.modDepth / 100).bitPattern, ordering: .relaxed)
+        modRateBits.store(p.modRate.bitPattern, ordering: .relaxed)
     }
 
     // MARK: - Render (audio thread only — no allocations, no runtime)
@@ -102,85 +103,139 @@ nonisolated final class MicroDetuneKernel: @unchecked Sendable {
         guard !ptr.isEmpty, let l = ptr[0].mData?.assumingMemoryBound(to: Float.self) else { return }
         let r = ptr.count > 1 ? ptr[1].mData?.assumingMemoryBound(to: Float.self) : nil
 
-        let cents = Double(Float(bitPattern: detuneBits.load(ordering: .relaxed)))
-        let width = Float(bitPattern: widthBits.load(ordering: .relaxed))
-        let mix = Float(bitPattern: mixBits.load(ordering: .relaxed))
         let feedback = Float(bitPattern: feedbackBits.load(ordering: .relaxed))
+        let mix = Float(bitPattern: mixBits.load(ordering: .relaxed))
+        let pitchMix = Float(bitPattern: pitchMixBits.load(ordering: .relaxed))
+        let tone = Double(Float(bitPattern: toneBits.load(ordering: .relaxed)))
         let lowCut = Double(Float(bitPattern: lowCutBits.load(ordering: .relaxed)))
-        let targetDelayL = currentDelayMs() * sampleRate / 1000
-        let targetDelayR = targetDelayL * 1.4
+        let depth = Double(Float(bitPattern: modDepthBits.load(ordering: .relaxed)))
+        let rate = Double(Float(bitPattern: modRateBits.load(ordering: .relaxed)))
+        let targetDelayA = Double(Float(bitPattern: delayABits.load(ordering: .relaxed))) * sampleRate / 1000
+        let targetDelayB = Double(Float(bitPattern: delayBBits.load(ordering: .relaxed))) * sampleRate / 1000
 
-        // Up to 50%, the wet rises with the dry at full; past it the dry falls away
-        let targetDry = min(1, 2 * (1 - mix))
-        let targetWet = min(1, 2 * mix)
-        // Width pans each voice: 1 = hard left/right, 0 = both centre
-        let near = (1 + width) / 2, far = (1 - width) / 2
+        // Mod: the shift swings from 0 to 2× around its setting at full depth. Once per
+        // buffer is plenty for an LFO of at most 10 Hz.
+        let lfoA = sin(2 * Double.pi * lfoPhase)
+        let lfoB = sin(2 * Double.pi * (lfoPhase + 0.25))
+        lfoPhase += rate * Double(frameCount) / sampleRate
+        lfoPhase -= lfoPhase.rounded(.down)
+        let centsA = Double(Float(bitPattern: pitchABits.load(ordering: .relaxed))) * (1 + depth * lfoA)
+        let centsB = Double(Float(bitPattern: pitchBBits.load(ordering: .relaxed))) * (1 + depth * lfoB)
+        // Tap delays move by (1 − ratio) samples per sample: shortening = higher pitch
+        let stepA = (1 - pow(2, centsA / 1200)) / windowSamples
+        let stepB = (1 - pow(2, centsB / 1200)) / windowSamples
 
-        // Tap delays move by (1 − ratio) samples per sample: shorter = higher pitch
-        let stepUp = (1 - pow(2, cents / 1200)) / windowSamples
-        let stepDown = (1 - pow(2, -cents / 1200)) / windowSamples
-        let hpCoeff = Float(exp(-2 * Double.pi * lowCut / sampleRate))
+        // Up to 50%, the wet rises with the dry at full; past it the dry falls away.
+        // Pitch Mix the same way between the voices.
+        let targetDry = min(1, 2 * (1 - mix)), targetWet = min(1, 2 * mix)
+        let targetA = min(1, 2 * (1 - pitchMix)), targetB = min(1, 2 * pitchMix)
+
+        // Tone tilts ±6 dB around 700 Hz; Low Cut is a one-pole high-pass (20 Hz ≈ off)
+        let lowGain = Float(pow(10, -6 * tone / 20)), highGain = Float(pow(10, 6 * tone / 20))
+        let filters = Filters(
+            tiltCoeff: Float(1 - exp(-2 * Double.pi * 700 / sampleRate)),
+            lowGain: lowGain, highGain: highGain,
+            hpCoeff: Float(exp(-2 * Double.pi * lowCut / sampleRate)))
+        // Tone's boost would push the loop past unity at high feedback; take it back out
+        let loopGain = feedback / max(lowGain, highGain)
         let window = windowSamples
+        let smooth = smoothCoeff, smoothF = Float(smoothCoeff)
+
+        // Work on locals; the class's stored state is written back once per buffer
+        var voiceA = self.voiceA, voiceB = self.voiceB
+        var writeIndex = self.writeIndex
+        var dryGain = self.dryGain, wetGain = self.wetGain, gainA = self.gainA, gainB = self.gainB
 
         for i in 0..<frameCount {
             let dryL = l[i]
             let dryR = r?[i] ?? dryL
-            let input = (dryL + dryR) * 0.5
 
-            buffer[writeIndex] = input + feedback * (lastWetL + lastWetR) * 0.5
+            voiceA.buffer[writeIndex] = dryL + max(-4, min(4, loopGain * voiceA.last))
+            voiceB.buffer[writeIndex] = dryR + max(-4, min(4, loopGain * voiceB.last))
 
-            delayL += (targetDelayL - delayL) * smoothCoeff
-            delayR += (targetDelayR - delayR) * smoothCoeff
-            dryGain += (targetDry - dryGain) * Float(smoothCoeff)
-            wetGain += (targetWet - wetGain) * Float(smoothCoeff)
+            voiceA.delay += (targetDelayA - voiceA.delay) * smooth
+            voiceB.delay += (targetDelayB - voiceB.delay) * smooth
+            dryGain += (targetDry - dryGain) * smoothF
+            wetGain += (targetWet - wetGain) * smoothF
+            gainA += (targetA - gainA) * smoothF
+            gainB += (targetB - gainB) * smoothF
 
-            let voiceL = hpL.process(shifted(phase: phaseL, base: delayL, window: window), coeff: hpCoeff)
-            let voiceR = hpR.process(shifted(phase: phaseR, base: delayR, window: window), coeff: hpCoeff)
-            lastWetL = voiceL
-            lastWetR = voiceR
-
-            phaseL = wrap(phaseL + stepUp)
-            phaseR = wrap(phaseR + stepDown)
+            let a = voiceA.render(at: writeIndex, window: window, step: stepA, filters: filters)
+            let b = voiceB.render(at: writeIndex, window: window, step: stepB, filters: filters)
             writeIndex = (writeIndex + 1) & Self.mask
 
-            l[i] = dryL * dryGain + (voiceL * near + voiceR * far) * wetGain
-            r?[i] = dryR * dryGain + (voiceR * near + voiceL * far) * wetGain
+            l[i] = dryL * dryGain + a * gainA * wetGain
+            r?[i] = dryR * dryGain + b * gainB * wetGain
         }
-        // Keep silence from decaying into denormals
-        if abs(lastWetL) < 1e-15 { lastWetL = 0 }
-        if abs(lastWetR) < 1e-15 { lastWetR = 0 }
+        voiceA.flushDenormals()
+        voiceB.flushDenormals()
+        self.voiceA = voiceA
+        self.voiceB = voiceB
+        self.writeIndex = writeIndex
+        self.dryGain = dryGain; self.wetGain = wetGain; self.gainA = gainA; self.gainB = gainB
     }
 
-    /// One shifted voice: two taps half a window apart, each faded by sin² so they sum to 1
-    @inline(__always)
-    private func shifted(phase: Double, base: Double, window: Double) -> Float {
-        let p2 = wrap(phase + 0.5)
-        let g1 = sin(Double.pi * phase), g2 = sin(Double.pi * p2)
-        return read(base + 1 + phase * window) * Float(g1 * g1)
-             + read(base + 1 + p2 * window) * Float(g2 * g2)
+    private struct Filters {
+        let tiltCoeff: Float, lowGain: Float, highGain: Float, hpCoeff: Float
     }
 
-    /// Linear-interpolated read `delay` samples behind the write position
-    @inline(__always)
-    private func read(_ delay: Double) -> Float {
-        let position = Double(writeIndex) - delay + Double(Self.bufferSize)
-        let index = Int(position)
-        let frac = Float(position - Double(index))
-        let a = buffer[index & Self.mask], b = buffer[(index + 1) & Self.mask]
-        return a + (b - a) * frac
-    }
+    /// One shifted voice with its own delay line, so its feedback is shifted again each pass
+    private struct Voice {
+        let buffer: UnsafeMutablePointer<Float>
+        var phase: Double = 0       // tap position through the window, 0..<1
+        var delay: Double = 0       // base delay in samples, gliding to the target
+        var last: Float = 0         // previous output, for feedback
+        private var tiltLow: Float = 0
+        private var hpX: Float = 0
+        private var hpY: Float = 0
 
-    @inline(__always)
-    private func wrap(_ x: Double) -> Double { x - x.rounded(.down) }
+        init(size: Int) {
+            buffer = .allocate(capacity: size)
+            buffer.initialize(repeating: 0, count: size)
+        }
 
-    private struct HighPass {
-        private var x1: Float = 0
-        private var y1: Float = 0
-        mutating func process(_ x: Float, coeff: Float) -> Float {
-            let y = coeff * (y1 + x - x1)
-            x1 = x
-            y1 = abs(y) < 1e-15 ? 0 : y
-            return y
+        mutating func reset(delay: Double) {
+            buffer.update(repeating: 0, count: MicroDetuneKernel.bufferSize)
+            self.delay = delay
+            last = 0; tiltLow = 0; hpX = 0; hpY = 0
+        }
+
+        @inline(__always)
+        mutating func render(at writeIndex: Int, window: Double, step: Double, filters f: Filters) -> Float {
+            // Two taps half a window apart, each faded by sin² so they always sum to 1
+            let p2 = phase + 0.5 - (phase + 0.5).rounded(.down)
+            let g1 = sin(Double.pi * phase), g2 = sin(Double.pi * p2)
+            var y = read(writeIndex, delay + 1 + phase * window) * Float(g1 * g1)
+                  + read(writeIndex, delay + 1 + p2 * window) * Float(g2 * g2)
+            phase += step
+            phase -= phase.rounded(.down)
+
+            // Tone: split at 700 Hz, tilt the halves against each other
+            tiltLow += f.tiltCoeff * (y - tiltLow)
+            y = tiltLow * f.lowGain + (y - tiltLow) * f.highGain
+            // Low Cut
+            let hp = f.hpCoeff * (hpY + y - hpX)
+            hpX = y
+            hpY = hp
+            last = hp
+            return hp
+        }
+
+        /// Linear-interpolated read `delay` samples behind the write position
+        @inline(__always)
+        private func read(_ writeIndex: Int, _ delay: Double) -> Float {
+            let position = Double(writeIndex) - delay + Double(MicroDetuneKernel.bufferSize)
+            let index = Int(position)
+            let frac = Float(position - Double(index))
+            let a = buffer[index & MicroDetuneKernel.mask]
+            let b = buffer[(index + 1) & MicroDetuneKernel.mask]
+            return a + (b - a) * frac
+        }
+
+        mutating func flushDenormals() {
+            if abs(last) < 1e-15 { last = 0 }
+            if abs(tiltLow) < 1e-15 { tiltLow = 0 }
+            if abs(hpY) < 1e-15 { hpY = 0 }
         }
     }
 }

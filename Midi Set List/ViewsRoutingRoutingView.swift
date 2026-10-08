@@ -696,9 +696,13 @@ extension ChannelFXSlot {
             return [key, speed, third]
         case .microDetune:
             let d = microDetune
-            return ["±\(Int(d.detune))¢  \(Int(d.delay)) ms",
-                    "Width \(Int(d.width))%",
-                    "Mix \(Int(d.mix))%"]
+            let bpm = AudioRoutingEngine.shared.songBPM
+            let delays = d.tempoSync && bpm != nil
+                ? "\(d.noteA.label) / \(d.noteB.label)"
+                : "\(Int(d.delays(bpm: nil).a)) / \(Int(d.delays(bpm: nil).b)) ms"
+            return ["+\(Int(d.pitchA)) / \(Int(d.pitchB))¢",
+                    delays,
+                    d.feedback > 0 ? "Mix \(Int(d.mix))% FB \(Int(d.feedback))" : "Mix \(Int(d.mix))%"]
         }
     }
 }
@@ -842,6 +846,8 @@ struct FXSlotEditorSheet: View {
                         (liveUnit as? FeedbackNotchAudioUnit)?.kernel.applyParams(original.feedbackNotch)
                         (liveUnit as? PitchGuideAudioUnit)?.kernel
                             .applyParams(original.pitchGuide.resolved(songKey: AudioRoutingEngine.shared.songKey))
+                        (liveUnit as? MicroDetuneAudioUnit)?.kernel
+                            .applyParams(original.microDetune, bpm: AudioRoutingEngine.shared.songBPM)
                         dismiss()
                     }
                 }
@@ -1278,39 +1284,123 @@ private struct MicroDetuneEditor: View {
     @Binding var params: MicroDetuneParams
     let kernel: MicroDetuneKernel?
 
+    private var songBPM: Int? { AudioRoutingEngine.shared.songBPM }
+
     var body: some View {
         Section {
-            LabeledContent("Detune: ±\(Int(params.detune)) cents") {
-                Slider(value: $params.detune, in: 0.0...50.0, step: 1)
+            Menu {
+                ForEach(MicroDetuneParams.stock) { stock in
+                    Button(stock.name) { params = stock.params }
+                }
+            } label: {
+                LabeledContent("Stock Settings") {
+                    Text(stockName ?? "Custom").foregroundStyle(.secondary)
+                }
             }
-            LabeledContent("Delay: \(Int(params.delay)) ms") {
-                Slider(value: $params.delay, in: 0.0...100.0, step: 1)
+        } footer: {
+            Text("Classic Micro Pitch is the H3000-style widener: A +9 cents, B −9 cents, B slightly late.")
+        }
+
+        Section {
+            LabeledContent("Pitch A: +\(Int(params.pitchA))¢") {
+                Slider(value: $params.pitchA, in: 0.0...50.0, step: 1)
+            }
+            LabeledContent("Pitch B: \(params.pitchB == 0 ? "0" : "−\(Int(-params.pitchB))")¢") {
+                Slider(value: $params.pitchB, in: -50.0...0.0, step: 1)
+            }
+            LabeledContent("Pitch Mix: \(pitchMixLabel)") {
+                Slider(value: $params.pitchMix, in: 0.0...100.0, step: 1)
             }
         } header: {
             Text("Voices")
         } footer: {
-            Text("Two copies of the voice: the left one tuned up and the right one down by Detune, both slightly late (the right voice gets 1.4× the delay). 6–12 cents and 8–20 ms is the classic wide, doubled vocal.")
+            Text("Voice A is shifted up and plays on the left; voice B is shifted down and plays on the right. Pitch Mix balances them (on a mono output they sum 50/50).")
         }
 
         Section {
-            LabeledContent("Width: \(Int(params.width))%") {
-                Slider(value: $params.width, in: 0.0...100.0, step: 1)
+            Toggle("Tempo Sync", isOn: $params.tempoSync)
+            if params.tempoSync {
+                Picker("Delay A", selection: $params.noteA) {
+                    ForEach(NoteDivision.allCases) { Text($0.label).tag($0) }
+                }
+                Picker("Delay B", selection: $params.noteB) {
+                    ForEach(NoteDivision.allCases) { Text($0.label).tag($0) }
+                }
+                let ms = params.delays(bpm: songBPM)
+                LabeledContent("Now") {
+                    Text(songBPM.map { "\($0) BPM: \(Int(ms.a)) / \(Int(ms.b)) ms" }
+                         ?? "No song tempo — using \(Int(params.delayA)) / \(Int(params.delayB)) ms")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                LabeledContent("Delay A: \(Int(params.delayA)) ms") {
+                    Slider(value: Self.delayScale($params.delayA), in: 0...1)
+                }
+                LabeledContent("Delay B: \(Int(params.delayB)) ms") {
+                    Slider(value: Self.delayScale($params.delayB), in: 0...1)
+                }
             }
+            LabeledContent("Feedback: \(Int(params.feedback))%") {
+                Slider(value: $params.feedback, in: 0.0...95.0, step: 1)
+            }
+        } header: {
+            Text("Delay")
+        } footer: {
+            Text("A few ms to ~30 ms thickens and widens; 80 ms and up is a pitched slapback. Feedback sends each voice back through its own shifter, so every repeat climbs (A) or falls (B) further. Tempo Sync follows the song loaded in Perform.")
+        }
+
+        Section {
+            LabeledContent("Tone: \(toneLabel)") {
+                Slider(value: $params.tone, in: -100.0...100.0, step: 1)
+            }
+            LabeledContent("Low Cut: \(params.lowCut <= 20 ? "Off" : "\(Int(params.lowCut)) Hz")") {
+                Slider(value: $params.lowCut, in: 20.0...600.0, step: 5)
+            }
+            LabeledContent("Mod Depth: \(Int(params.modDepth))%") {
+                Slider(value: $params.modDepth, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Mod Rate: \(String(format: "%.1f", params.modRate)) Hz") {
+                Slider(value: $params.modRate, in: 0.1...10.0, step: 0.1)
+            }
+        } header: {
+            Text("Tone & Modulation")
+        } footer: {
+            Text("Tone tilts the voices darker (−) or brighter (+). Low Cut keeps the bass out of them so the low end stays centred. Mod adds chorus: at 100% each voice's shift swings from 0 to twice its setting.")
+        }
+
+        Section {
             LabeledContent("Mix: \(Int(params.mix))%") {
                 Slider(value: $params.mix, in: 0.0...100.0, step: 1)
             }
-            LabeledContent("Feedback: \(Int(params.feedback))%") {
-                Slider(value: $params.feedback, in: 0.0...70.0, step: 1)
-            }
-            LabeledContent("Low Cut: \(Int(params.lowCut)) Hz") {
-                Slider(value: $params.lowCut, in: 20.0...600.0, step: 5)
-            }
-        } header: {
-            Text("Blend")
         } footer: {
-            Text("Mix 50% keeps the dry voice and the wide voices both at full; above that the dry fades out. Low Cut keeps the bass out of the voices so the low end stays centred. Send the channel to a stereo output to hear the width — on a mono output it becomes a thickening double. Put it after pitch correction.")
+            Text("50% keeps the dry voice and the shifted voices both at full; above that the dry fades. Send the channel to a stereo output to hear the width. Put it after pitch correction.")
         }
-        .onChange(of: params) { kernel?.applyParams(params) }
+        .onChange(of: params) { kernel?.applyParams(params, bpm: songBPM) }
+    }
+
+    private var stockName: String? {
+        MicroDetuneParams.stock.first { $0.params == params }?.name
+    }
+
+    private var pitchMixLabel: String {
+        switch params.pitchMix {
+        case ..<1: "A only"
+        case 99...: "B only"
+        case 49.5..<50.5: "Even"
+        default: params.pitchMix < 50 ? "A \(Int(100 - params.pitchMix))" : "B \(Int(params.pitchMix))"
+        }
+    }
+
+    private var toneLabel: String {
+        params.tone == 0 ? "Flat" : params.tone < 0 ? "Darker \(Int(-params.tone))" : "Brighter \(Int(params.tone))"
+    }
+
+    /// Fine control at short times: the slider runs 0…1, the delay is 2000 ms × position²
+    private static func delayScale(_ ms: Binding<Float>) -> Binding<Double> {
+        Binding(
+            get: { (Double(ms.wrappedValue) / Double(MicroDetuneParams.maxDelayMs)).squareRoot() },
+            set: { ms.wrappedValue = (Float($0 * $0) * MicroDetuneParams.maxDelayMs).rounded() }
+        )
     }
 }
 

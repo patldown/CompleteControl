@@ -154,26 +154,136 @@ struct FeedbackNotchParams: Codable, Equatable {
 
 // MARK: - Micro Detune parameters
 
-/// Micro-pitch widener: two slightly detuned, delayed voices panned apart around the dry signal
+/// Micro-pitch dual shifted delay, after Eventide's MicroPitch: voice A shifted up (left),
+/// voice B shifted down (right), each with its own delay and feedback loop.
 struct MicroDetuneParams: Codable, Equatable {
-    var detune: Float = 9           // cents, 0...50; left voice up, right voice down
-    var delay: Float = 12           // ms, 0...100; the right voice gets 1.4× this
-    var width: Float = 100          // %, 0...100; how far apart the voices are panned
-    var mix: Float = 35             // %, 0...100; 50 = dry and wet both full
-    var feedback: Float = 0         // %, 0...70
-    var lowCut: Float = 150         // Hz, 20...600; keeps the low end centred and clean
+    var pitchA: Float = 9           // cents, 0...50; voice A (left) shifted up
+    var pitchB: Float = -9          // cents, -50...0; voice B (right) shifted down
+    var delayA: Float = 0           // ms, 0...2000
+    var delayB: Float = 12          // ms, 0...2000
+    /// Delays follow the loaded song's tempo as note values instead of milliseconds
+    var tempoSync: Bool = false
+    var noteA: NoteDivision = .eighth
+    var noteB: NoteDivision = .dottedEighth
+    var pitchMix: Float = 50        // %, 0...100; 0 = only A, 50 = both full, 100 = only B
+    var mix: Float = 40             // %, 0...100; 50 = dry and wet both full
+    var feedback: Float = 0         // %, 0...95; each voice repeats through its own shifter
+    var tone: Float = 0             // -100 (darker) ... +100 (brighter); 0 = flat
+    var lowCut: Float = 20          // Hz, 20...600; 20 = off
+    var modDepth: Float = 0         // %, 0...100; at 100 each voice's pitch swings 0 to 2× its shift
+    var modRate: Float = 0.5        // Hz, 0.1...10
 
     init() {}
 
+    // Missing keys decode as defaults; the first version's settings carry over
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let old = try decoder.container(keyedBy: FirstVersionKeys.self)
         let d = MicroDetuneParams()
-        detune = try c.decodeIfPresent(Float.self, forKey: .detune) ?? d.detune
-        delay = try c.decodeIfPresent(Float.self, forKey: .delay) ?? d.delay
-        width = try c.decodeIfPresent(Float.self, forKey: .width) ?? d.width
+        let oldDetune = try old.decodeIfPresent(Float.self, forKey: .detune)
+        let oldDelay = try old.decodeIfPresent(Float.self, forKey: .delay)
+        pitchA = try c.decodeIfPresent(Float.self, forKey: .pitchA) ?? oldDetune ?? d.pitchA
+        pitchB = try c.decodeIfPresent(Float.self, forKey: .pitchB) ?? oldDetune.map { -$0 } ?? d.pitchB
+        delayA = try c.decodeIfPresent(Float.self, forKey: .delayA) ?? oldDelay ?? d.delayA
+        delayB = try c.decodeIfPresent(Float.self, forKey: .delayB) ?? oldDelay.map { $0 * 1.4 } ?? d.delayB
+        tempoSync = try c.decodeIfPresent(Bool.self, forKey: .tempoSync) ?? d.tempoSync
+        noteA = (try? c.decodeIfPresent(NoteDivision.self, forKey: .noteA)) ?? d.noteA
+        noteB = (try? c.decodeIfPresent(NoteDivision.self, forKey: .noteB)) ?? d.noteB
+        pitchMix = try c.decodeIfPresent(Float.self, forKey: .pitchMix) ?? d.pitchMix
         mix = try c.decodeIfPresent(Float.self, forKey: .mix) ?? d.mix
         feedback = try c.decodeIfPresent(Float.self, forKey: .feedback) ?? d.feedback
+        tone = try c.decodeIfPresent(Float.self, forKey: .tone) ?? d.tone
         lowCut = try c.decodeIfPresent(Float.self, forKey: .lowCut) ?? d.lowCut
+        modDepth = try c.decodeIfPresent(Float.self, forKey: .modDepth) ?? d.modDepth
+        modRate = try c.decodeIfPresent(Float.self, forKey: .modRate) ?? d.modRate
+    }
+
+    private enum FirstVersionKeys: String, CodingKey { case detune, delay }
+
+    static let maxDelayMs: Float = 2_000
+
+    /// Delay times in ms: the fixed times, or the note values at the song's tempo
+    func delays(bpm: Int?) -> (a: Float, b: Float) {
+        guard tempoSync, let bpm, bpm > 0 else { return (delayA, delayB) }
+        let beat = 60_000 / Float(bpm)
+        return (min(Self.maxDelayMs, noteA.beats * beat), min(Self.maxDelayMs, noteB.beats * beat))
+    }
+}
+
+/// A delay time as a note value, in beats (quarter notes)
+enum NoteDivision: String, Codable, CaseIterable, Identifiable {
+    case thirtySecond, sixteenthTriplet, sixteenth, eighthTriplet, dottedSixteenth
+    case eighth, quarterTriplet, dottedEighth, quarter, dottedQuarter, half
+
+    var id: String { rawValue }
+
+    var beats: Float {
+        switch self {
+        case .thirtySecond:     0.125
+        case .sixteenthTriplet: 1.0 / 6
+        case .sixteenth:        0.25
+        case .eighthTriplet:    1.0 / 3
+        case .dottedSixteenth:  0.375
+        case .eighth:           0.5
+        case .quarterTriplet:   2.0 / 3
+        case .dottedEighth:     0.75
+        case .quarter:          1
+        case .dottedQuarter:    1.5
+        case .half:             2
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .thirtySecond:     "1/32"
+        case .sixteenthTriplet: "1/16T"
+        case .sixteenth:        "1/16"
+        case .eighthTriplet:    "1/8T"
+        case .dottedSixteenth:  "1/16."
+        case .eighth:           "1/8"
+        case .quarterTriplet:   "1/4T"
+        case .dottedEighth:     "1/8."
+        case .quarter:          "1/4"
+        case .dottedQuarter:    "1/4."
+        case .half:             "1/2"
+        }
+    }
+}
+
+extension MicroDetuneParams {
+    struct Stock: Identifiable {
+        let name: String
+        let params: MicroDetuneParams
+        var id: String { name }
+        init(_ name: String, _ params: MicroDetuneParams) { self.name = name; self.params = params }
+    }
+
+    /// Ready-made settings offered in the editor
+    static let stock: [Stock] = [
+        Stock("Classic Micro Pitch", .make(a: 9, b: -9, delayA: 0, delayB: 12, mix: 40)),
+        Stock("Subtle Widen", .make(a: 6, b: -6, delayA: 8, delayB: 12, mix: 30, lowCut: 150)),
+        Stock("Thick Double", .make(a: 12, b: -12, delayA: 18, delayB: 32, mix: 45, lowCut: 120,
+                               modDepth: 15, modRate: 0.4)),
+        Stock("Wide Chorus", .make(a: 7, b: -7, delayA: 10, delayB: 14, mix: 50, tone: 20,
+                              modDepth: 50, modRate: 0.8)),
+        Stock("Pitch Slap", .make(a: 15, b: -15, delayA: 110, delayB: 160, mix: 35, feedback: 20,
+                             tone: -20, lowCut: 150)),
+        Stock("Rising Repeats", .make(a: 25, b: 0, delayA: 375, delayB: 500, mix: 30, feedback: 60,
+                                 pitchMix: 0, lowCut: 200, tempoSync: true,
+                                 noteA: .dottedEighth, noteB: .quarter)),
+    ]
+
+    private static func make(a: Float, b: Float, delayA: Float, delayB: Float, mix: Float,
+                             feedback: Float = 0, pitchMix: Float = 50, tone: Float = 0,
+                             lowCut: Float = 20, modDepth: Float = 0, modRate: Float = 0.5,
+                             tempoSync: Bool = false, noteA: NoteDivision = .eighth,
+                             noteB: NoteDivision = .dottedEighth) -> MicroDetuneParams {
+        var p = MicroDetuneParams()
+        p.pitchA = a; p.pitchB = b; p.delayA = delayA; p.delayB = delayB; p.mix = mix
+        p.feedback = feedback; p.pitchMix = pitchMix; p.tone = tone; p.lowCut = lowCut
+        p.modDepth = modDepth; p.modRate = modRate
+        p.tempoSync = tempoSync; p.noteA = noteA; p.noteB = noteB
+        return p
     }
 }
 

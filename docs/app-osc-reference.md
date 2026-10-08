@@ -180,12 +180,20 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 ### `detune` — Micro Detune
 | Param | Range | Notes |
 |---|---|---|
-| `detune` | 0 to 50 cents | Left voice up, right voice down. 6–12 = classic widening |
-| `delay` | 0 to 100 ms | Right voice gets 1.4× this. 8–20 = tight double |
-| `width` | 0 to 100 % | How far apart the two voices are panned |
+| `pitchA` | 0 to 50 cents | Voice A (left) shifted up. 9 = classic |
+| `pitchB` | -50 to 0 cents | Voice B (right) shifted down. -9 = classic |
+| `delayA` | 0 to 2000 ms | Voice A delay (when not tempo-synced) |
+| `delayB` | 0 to 2000 ms | Voice B delay (when not tempo-synced) |
+| `tempoSync` | toggle | Delays follow the loaded song's tempo as note values |
+| `noteA` | choice | 0 1/32, 1 1/16T, 2 1/16, 3 1/8T, 4 1/16., 5 1/8, 6 1/4T, 7 1/8., 8 1/4, 9 1/4., 10 1/2 |
+| `noteB` | choice | Same as `noteA` |
+| `pitchMix` | 0 to 100 % | 0 = only A, 50 = both, 100 = only B |
 | `mix` | 0 to 100 % | 50 = dry and wet both full; above that the dry fades |
-| `feedback` | 0 to 70 % | Feeds the voices back for a shimmer |
-| `lowCut` | 20 to 600 Hz | Keeps the low end out of the voices |
+| `feedback` | 0 to 95 % | Repeats shift further each time: rising/falling repeats |
+| `tone` | -100 to 100 | − darker, 0 flat, + brighter (voices only) |
+| `lowCut` | 20 to 600 Hz | Keeps the low end out of the voices. 20 = off |
+| `modDepth` | 0 to 100 % | Chorus: at 100 each voice swings from 0 to 2× its shift |
+| `modRate` | 0.1 to 10 Hz | Speed of the chorus |
 
 ---
 

@@ -64,6 +64,8 @@ final class AudioRoutingEngine {
 
     /// Key of the song loaded in Perform; Pitch Guide slots set to follow it use it
     private(set) var songKey: MusicalKey?
+    /// Tempo of the song loaded in Perform; tempo-synced Micro Detune delays use it
+    private(set) var songBPM: Int?
 
     private var engine: AVAudioEngine?
     private var graphs: [UUID: ChannelGraph] = [:]
@@ -444,7 +446,7 @@ final class AudioRoutingEngine {
         case .microDetune:
             let effect = AVAudioUnitEffect(
                 audioComponentDescription: MicroDetuneAudioUnit.componentDescription)
-            (effect.auAudioUnit as? MicroDetuneAudioUnit)?.kernel.applyParams(slot.microDetune)
+            (effect.auAudioUnit as? MicroDetuneAudioUnit)?.kernel.applyParams(slot.microDetune, bpm: songBPM)
             return effect
         }
     }
@@ -509,6 +511,19 @@ final class AudioRoutingEngine {
         }
     }
 
+    /// A song loaded: retime every tempo-synced Micro Detune to its tempo
+    func followSongTempo(_ bpm: Int?) {
+        guard bpm != songBPM else { return }
+        songBPM = bpm
+        for channel in store.channels {
+            guard let graph = graphs[channel.id] else { continue }
+            for (i, slot) in channel.slots.enumerated()
+            where slot.type == .microDetune && slot.microDetune.tempoSync && i < graph.fxNodes.count {
+                applySlotParams(slot, to: graph.fxNodes[i])
+            }
+        }
+    }
+
     func applyVolume(of channel: AudioChannel) {
         graphs[channel.id]?.inputMixer.volume = channel.isMuted ? 0 : channel.volume
     }
@@ -561,7 +576,7 @@ final class AudioRoutingEngine {
                 .kernel.applyParams(slot.pitchGuide.resolved(songKey: songKey))
         case .microDetune:
             ((node as? AVAudioUnitEffect)?.auAudioUnit as? MicroDetuneAudioUnit)?
-                .kernel.applyParams(slot.microDetune)
+                .kernel.applyParams(slot.microDetune, bpm: songBPM)
         case nil:
             break
         }
