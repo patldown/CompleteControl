@@ -828,6 +828,10 @@ extension BuiltInFXType {
         case .harmony:       "Harmony"
         case .piezoBody:     "Body"
         case .tone:          "Tone"
+        case .warmth:        "Warmth"
+        case .air:           "Air"
+        case .punch:         "Punch"
+        case .smartGate:     "Gate"
         }
     }
 }
@@ -889,6 +893,15 @@ extension ChannelFXSlot {
                       : p.amount < 100 ? "Amount \(Int(p.amount))%"
                       : "± \(Int(p.tolerance))¢"
             return [key, speed, third]
+        case .warmth:
+            return warmth.drive == 0 ? ["Off"] : ["Drive \(Int(warmth.drive))%", warmth.character.displayName]
+        case .air:
+            return air.amount == 0 ? ["Off"] : ["Amount \(Int(air.amount))%", air.focus == .air ? "Air" : "Presence"]
+        case .punch:
+            let a = Int(punch.amount)
+            return [a == 0 ? "Off" : a > 0 ? "Attack +\(a)" : "Sustain +\(-a)"]
+        case .smartGate:
+            return ["Sens \(Int(smartGate.sensitivity))%", "Depth \(Int(smartGate.depth)) dB"]
         case .tone:
             guard let instrument = tone.instrument else { return ["Pick instrument", "Does nothing"] }
             return ["\(instrument.icon) \(instrument.shortName)", "Amount \(Int(tone.amount))%"]
@@ -1056,6 +1069,8 @@ struct FXSlotEditorSheet: View {
                                         kernel: live(PiezoBodyAudioUnit.self)?.kernel)
                     case .tone:
                         ToneEditor(params: $slot.tone, kernel: live(ToneAudioUnit.self)?.kernel)
+                    case .warmth, .air, .punch, .smartGate:
+                        OneKnobEditor(slot: $slot, kernel: live(OneKnobAudioUnit.self)?.kernel)
                     }
                 }
             }
@@ -1073,6 +1088,9 @@ struct FXSlotEditorSheet: View {
                         (liveUnit as? PiezoBodyAudioUnit)?.kernel.applyParams(original.piezoBody)
                         (liveUnit as? ToneAudioUnit)?.kernel
                             .applyParams(instrument: original.tone.instrument, amount: original.tone.amount)
+                        if let k = (liveUnit as? OneKnobAudioUnit)?.kernel {
+                            OneKnobEditor.apply(original, to: k)
+                        }
                         (liveUnit as? HarmonyAudioUnit)?.kernel
                             .applyParams(original.harmony.resolved(songKey: AudioRoutingEngine.shared.songKey))
                         dismiss()
@@ -1658,6 +1676,120 @@ private struct ToneEditor: View {
         .onChange(of: params) {
             kernel?.applyParams(instrument: params.instrument, amount: params.amount)
         }
+    }
+}
+
+/// Warmth, Air, Punch and Smart Gate: one main knob each
+private struct OneKnobEditor: View {
+    @Binding var slot: ChannelFXSlot
+    let kernel: OneKnobKernel?
+
+    @MainActor static func apply(_ slot: ChannelFXSlot, to kernel: OneKnobKernel) {
+        switch slot.type {
+        case .warmth:    kernel.applyParams(slot.warmth)
+        case .air:       kernel.applyParams(slot.air)
+        case .punch:     kernel.applyParams(slot.punch)
+        case .smartGate: kernel.applyParams(slot.smartGate)
+        default:         break
+        }
+    }
+
+    var body: some View {
+        Group {
+            switch slot.type {
+            case .warmth: warmth
+            case .air:    air
+            case .punch:  punch
+            default:      gate
+            }
+        }
+        .onChange(of: slot) { if let kernel { Self.apply(slot, to: kernel) } }
+    }
+
+    private var warmth: some View {
+        Section {
+            LabeledContent("Drive: \(Int(slot.warmth.drive))%") {
+                Slider(value: $slot.warmth.drive, in: 0.0...100.0, step: 1)
+            }
+            Picker("Character", selection: $slot.warmth.character) {
+                ForEach(WarmthParams.Character.allCases) { Text($0.displayName).tag($0) }
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Text("Warmth")
+        } footer: {
+            Text("Saturation that thickens vocals, keys and bass: gentle and \"expensive\" at low Drive, gritty when pushed. Quiet parts pass unchanged; loud peaks get rounded. Tape also softens the very top; Tube adds even harmonics for a fuller, sweeter edge. Zero latency.")
+        }
+    }
+
+    private var air: some View {
+        Section {
+            LabeledContent("Amount: \(Int(slot.air.amount))%") {
+                Slider(value: $slot.air.amount, in: 0.0...100.0, step: 1)
+            }
+            Picker("Focus", selection: $slot.air.focus) {
+                ForEach(AirParams.Focus.allCases) { Text($0.displayName).tag($0) }
+            }
+        } header: {
+            Text("Air")
+        } footer: {
+            Text("A harmonic exciter: it makes new upper harmonics from what's already there, so a voice or guitar gets clearer and cuts through without the harshness of just turning up the treble. Presence works from 3 kHz up; Air from 6 kHz up for sparkle. Zero latency.")
+        }
+    }
+
+    private var punch: some View {
+        Section {
+            LabeledContent(Self.punchLabel(slot.punch.amount)) {
+                Slider(value: $slot.punch.amount, in: -100.0...100.0, step: 1)
+            }
+            if let kernel, slot.punch.amount != 0 {
+                TimelineView(.animation(minimumInterval: 0.05)) { _ in
+                    let db = Float(bitPattern: kernel.punchGainBits.load(ordering: .relaxed))
+                    LabeledContent("Right now") {
+                        Text(abs(db) < 0.3 ? "—" : String(format: "%+.1f dB", db))
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Text("Punch")
+        } footer: {
+            Text("Right: more attack — snappier drums, picking that jumps out. Left: softer attack and relatively more sustain — tames ringy toms, spiky strums and boomy hits. Centre is off. Steady sounds keep their level. Zero latency.")
+        }
+    }
+
+    private var gate: some View {
+        Section {
+            LabeledContent("Sensitivity: \(Int(slot.smartGate.sensitivity))%") {
+                Slider(value: $slot.smartGate.sensitivity, in: 0.0...100.0, step: 1)
+            }
+            LabeledContent("Depth: \(Int(slot.smartGate.depth)) dB") {
+                Slider(value: $slot.smartGate.depth, in: 0.0...80.0, step: 1)
+            }
+            if let kernel {
+                TimelineView(.animation(minimumInterval: 0.05)) { _ in
+                    let open = kernel.gateOpenFlag.load(ordering: .relaxed)
+                    let threshold = Float(bitPattern: kernel.gateThresholdBits.load(ordering: .relaxed))
+                    let floor = Float(bitPattern: kernel.floorBits.load(ordering: .relaxed))
+                    LabeledContent("Gate") {
+                        Text(open ? "Open" : "Closed").foregroundStyle(open ? Color.green : Color.orange)
+                    }
+                    LabeledContent("Noise floor / opens at") {
+                        Text(threshold < -110 ? "—" : String(format: "%.0f / %.0f dBFS", floor, threshold))
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Text("Smart Gate")
+        } footer: {
+            Text("Turns the channel down between notes to cut bleed and hiss, setting its own threshold: it learns the noise floor in the gaps and the level you play at, and opens between the two. Raise Sensitivity to gate more; lower it if quiet notes get cut. Depth is how far it turns down when closed. Zero latency.")
+        }
+    }
+
+    private static func punchLabel(_ amount: Float) -> String {
+        let a = Int(amount)
+        return a == 0 ? "Off" : a > 0 ? "More Attack: \(a)" : "More Sustain: \(-a)"
     }
 }
 

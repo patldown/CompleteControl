@@ -15,13 +15,13 @@ import Foundation
 
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
     case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide, microDetune, harmony,
-         piezoBody, tone
+         piezoBody, tone, warmth, air, punch, smartGate
 
     // reverb and delay kept in enum for JSON backward-compat but are no longer available;
     // the load() migration clears any saved slots of these types.
     static var allCases: [BuiltInFXType] {
-        [.tone, .gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide, .harmony,
-         .microDetune, .piezoBody]
+        [.tone, .gain, .eq3Band, .smartGate, .levelRider, .optoComp, .fetComp, .punch, .warmth, .air,
+         .feedbackNotch, .pitchGuide, .harmony, .microDetune, .piezoBody]
     }
 
     var id: String { rawValue }
@@ -41,6 +41,10 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .harmony:    "Harmony (key-aware)"
         case .piezoBody:  "Piezo Body (acoustic pickup)"
         case .tone:       "Tone (instrument)"
+        case .warmth:     "Warmth (tape / tube)"
+        case .air:        "Air (exciter)"
+        case .punch:      "Punch (transient shaper)"
+        case .smartGate:  "Smart Gate"
         }
     }
 
@@ -59,6 +63,10 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .harmony:    "music.quarternote.3"
         case .piezoBody:  "guitars"
         case .tone:       "wand.and.rays"
+        case .warmth:     "flame"
+        case .air:        "wind"
+        case .punch:      "burst"
+        case .smartGate:  "door.left.hand.closed"
         }
     }
 }
@@ -158,6 +166,64 @@ struct FeedbackNotchParams: Codable, Equatable {
     var notches: [FeedbackNotch] = []
     var sensitivity: Float = 50     // 0...100; higher catches ringing sooner
     var maxDepth: Float = -12       // dB, -18...-6; deepest any one notch may go
+}
+
+// MARK: - One-knob effects
+
+struct WarmthParams: Codable, Equatable {
+    enum Character: String, Codable, CaseIterable, Identifiable {
+        case tape, tube
+        var id: String { rawValue }
+        var displayName: String { self == .tape ? "Tape" : "Tube" }
+    }
+    var drive: Float = 40           // %, 0...100
+    var character: Character = .tape
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        drive = try c.decodeIfPresent(Float.self, forKey: .drive) ?? 40
+        character = (try? c.decodeIfPresent(Character.self, forKey: .character)) ?? .tape
+    }
+}
+
+struct AirParams: Codable, Equatable {
+    enum Focus: String, Codable, CaseIterable, Identifiable {
+        case presence, air
+        var id: String { rawValue }
+        var displayName: String { self == .presence ? "Presence (3 kHz up)" : "Air (6 kHz up)" }
+    }
+    var amount: Float = 40          // %, 0...100
+    var focus: Focus = .presence
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? 40
+        focus = (try? c.decodeIfPresent(Focus.self, forKey: .focus)) ?? .presence
+    }
+}
+
+struct PunchParams: Codable, Equatable {
+    var amount: Float = 0           // -100 (softer attack, more sustain) ... +100 (more attack)
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? 0
+    }
+}
+
+struct SmartGateParams: Codable, Equatable {
+    var sensitivity: Float = 50     // %, 0...100; higher gates more
+    var depth: Float = 40           // dB the gate turns down when closed, 0...80
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sensitivity = try c.decodeIfPresent(Float.self, forKey: .sensitivity) ?? 50
+        depth = try c.decodeIfPresent(Float.self, forKey: .depth) ?? 40
+    }
 }
 
 // MARK: - Tone (instrument-aware one-button sound)
@@ -905,6 +971,10 @@ struct ChannelFXSlot: Codable, Equatable {
     var harmony: HarmonyParams = .init()
     var piezoBody: PiezoBodyParams = .init()
     var tone: ToneParams = .init()
+    var warmth: WarmthParams = .init()
+    var air: AirParams = .init()
+    var punch: PunchParams = .init()
+    var smartGate: SmartGateParams = .init()
 
     init() {}
 
@@ -926,6 +996,10 @@ struct ChannelFXSlot: Codable, Equatable {
         harmony = try c.decodeIfPresent(HarmonyParams.self, forKey: .harmony) ?? .init()
         piezoBody = try c.decodeIfPresent(PiezoBodyParams.self, forKey: .piezoBody) ?? .init()
         tone = try c.decodeIfPresent(ToneParams.self, forKey: .tone) ?? .init()
+        warmth = try c.decodeIfPresent(WarmthParams.self, forKey: .warmth) ?? .init()
+        air = try c.decodeIfPresent(AirParams.self, forKey: .air) ?? .init()
+        punch = try c.decodeIfPresent(PunchParams.self, forKey: .punch) ?? .init()
+        smartGate = try c.decodeIfPresent(SmartGateParams.self, forKey: .smartGate) ?? .init()
     }
 }
 

@@ -125,6 +125,12 @@ final class AudioRoutingEngine {
             name: "Pitch Guide",
             version: 1
         )
+        for (description, name) in [(OneKnobAudioUnit.warmthDescription, "Warmth"),
+                                    (OneKnobAudioUnit.airDescription, "Air"),
+                                    (OneKnobAudioUnit.punchDescription, "Punch"),
+                                    (OneKnobAudioUnit.gateDescription, "Smart Gate")] {
+            AUAudioUnit.registerSubclass(OneKnobAudioUnit.self, as: description, name: name, version: 1)
+        }
         AUAudioUnit.registerSubclass(
             ToneAudioUnit.self,
             as: ToneAudioUnit.componentDescription,
@@ -483,6 +489,16 @@ final class AudioRoutingEngine {
             (effect.auAudioUnit as? ToneAudioUnit)?.kernel
                 .applyParams(instrument: slot.tone.instrument, amount: slot.tone.amount)
             return effect
+        case .warmth, .air, .punch, .smartGate:
+            let description: AudioComponentDescription = switch type {
+            case .air:       OneKnobAudioUnit.airDescription
+            case .punch:     OneKnobAudioUnit.punchDescription
+            case .smartGate: OneKnobAudioUnit.gateDescription
+            default:         OneKnobAudioUnit.warmthDescription
+            }
+            let effect = AVAudioUnitEffect(audioComponentDescription: description)
+            applyOneKnob(slot, to: (effect.auAudioUnit as? OneKnobAudioUnit)?.kernel)
+            return effect
         }
     }
 
@@ -623,12 +639,25 @@ final class AudioRoutingEngine {
         case .tone:
             ((node as? AVAudioUnitEffect)?.auAudioUnit as? ToneAudioUnit)?
                 .kernel.applyParams(instrument: slot.tone.instrument, amount: slot.tone.amount)
+        case .warmth, .air, .punch, .smartGate:
+            applyOneKnob(slot, to: ((node as? AVAudioUnitEffect)?.auAudioUnit as? OneKnobAudioUnit)?.kernel)
         case nil:
             break
         }
     }
 
     // MARK: - FX parameter helpers
+
+    private func applyOneKnob(_ slot: ChannelFXSlot, to kernel: OneKnobKernel?) {
+        guard let kernel else { return }
+        switch slot.type {
+        case .warmth:    kernel.applyParams(slot.warmth)
+        case .air:       kernel.applyParams(slot.air)
+        case .punch:     kernel.applyParams(slot.punch)
+        case .smartGate: kernel.applyParams(slot.smartGate)
+        default:         break
+        }
+    }
 
     private func applyEQ(_ p: EQ3BandParams, to eq: AVAudioUnitEQ) {
         let b = eq.bands

@@ -69,6 +69,10 @@ the first (lower slot) is `<fx>` and the second is `<fx>2`, e.g. `pitch` and `pi
 | `harmony` | Harmony (key-aware harmonizer) |
 | `body` | Piezo Body (acoustic pickup enhancer) |
 | `tone` | Tone (one-button sound for the channel's instrument) |
+| `warmth` | Warmth (tape / tube saturation) |
+| `air` | Air (harmonic exciter) |
+| `punch` | Punch (transient shaper) |
+| `gate` | Smart Gate (self-setting noise gate) |
 
 ### Value conventions
 
@@ -182,6 +186,29 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `formant` | -6 to 6 semitones | + smaller/brighter, − bigger/darker |
 | `shiftOnlyWhileSinging` | toggle | Transpose/Formant switch off between phrases |
 | `bleedDuck` | -20 to 0 dB | Turns the mic down between phrases. 0 = off |
+
+### `warmth` — Warmth
+| Param | Range | Notes |
+|---|---|---|
+| `drive` | 0 to 100 % | Gentle thickening at low settings, grit when pushed. 0 = off |
+| `character` | choice | 0 Tape (rounds off the top), 1 Tube (even harmonics) |
+
+### `air` — Air
+| Param | Range | Notes |
+|---|---|---|
+| `amount` | 0 to 100 % | New upper harmonics blended in. 0 = off |
+| `focus` | choice | 0 Presence (3 kHz up), 1 Air (6 kHz up) |
+
+### `punch` — Punch
+| Param | Range | Notes |
+|---|---|---|
+| `amount` | -100 to 100 | + more attack, − softer attack / more sustain, 0 = off |
+
+### `gate` — Smart Gate
+| Param | Range | Notes |
+|---|---|---|
+| `sensitivity` | 0 to 100 % | Higher gates more of the quiet between notes |
+| `depth` | 0 to 80 dB | How far it turns down when closed |
 
 ### `tone` — Tone
 | Param | Range | Notes |

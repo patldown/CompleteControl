@@ -130,6 +130,10 @@ extension BuiltInFXType {
         case .harmony:       "harmony"
         case .piezoBody:     "body"
         case .tone:          "tone"
+        case .warmth:        "warmth"
+        case .air:           "air"
+        case .punch:         "punch"
+        case .smartGate:     "gate"
         }
     }
 
@@ -262,6 +266,30 @@ extension BuiltInFXType {
                    get: { $0.pitchGuide.shiftOnlyWhileSinging }, set: { $0.pitchGuide.shiftOnlyWhileSinging = $1 }),
             num("bleedDuck", "Bleed Duck", -20...0, "dB", "Turns the mic down between phrases. 0 = off.",
                 get: { Double($0.pitchGuide.bleedDuck) }, set: { $0.pitchGuide.bleedDuck = Float($1) }),
+        ]
+        case .warmth: [
+            num("drive", "Drive", 0...100, "%", "Gentle thickening at low settings, grit when pushed. 0 = off.",
+                get: { Double($0.warmth.drive) }, set: { $0.warmth.drive = Float($1) }),
+            choice("character", "Character", WarmthParams.Character.allCases.map(\.displayName),
+                   "Tape rounds off the top; tube adds even harmonics.",
+                   get: { $0.warmth.character == .tube ? 1 : 0 }, set: { $0.warmth.character = $1 == 1 ? .tube : .tape }),
+        ]
+        case .air: [
+            num("amount", "Amount", 0...100, "%", "New upper harmonics blended in. 0 = off.",
+                get: { Double($0.air.amount) }, set: { $0.air.amount = Float($1) }),
+            choice("focus", "Focus", AirParams.Focus.allCases.map(\.displayName), "",
+                   get: { $0.air.focus == .air ? 1 : 0 }, set: { $0.air.focus = $1 == 1 ? .air : .presence }),
+        ]
+        case .punch: [
+            num("amount", "Attack/Sustain", -100...100, "",
+                "+ = more attack, − = softer attack / more sustain, 0 = off.",
+                get: { Double($0.punch.amount) }, set: { $0.punch.amount = Float($1) }),
+        ]
+        case .smartGate: [
+            num("sensitivity", "Sensitivity", 0...100, "%", "Higher gates more of the quiet between notes.",
+                get: { Double($0.smartGate.sensitivity) }, set: { $0.smartGate.sensitivity = Float($1) }),
+            num("depth", "Depth", 0...80, "dB", "How far it turns down when closed.",
+                get: { Double($0.smartGate.depth) }, set: { $0.smartGate.depth = Float($1) }),
         ]
         case .tone: [
             num("amount", "Amount", 0...100, "%", "How much of the instrument's tone profile. 0 = flat.",
