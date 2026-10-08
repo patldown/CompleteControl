@@ -15,13 +15,13 @@ import Foundation
 
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
     case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide, microDetune, harmony,
-         piezoBody
+         piezoBody, tone
 
     // reverb and delay kept in enum for JSON backward-compat but are no longer available;
     // the load() migration clears any saved slots of these types.
     static var allCases: [BuiltInFXType] {
-        [.gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide, .harmony, .microDetune,
-         .piezoBody]
+        [.tone, .gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide, .harmony,
+         .microDetune, .piezoBody]
     }
 
     var id: String { rawValue }
@@ -40,6 +40,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .microDetune: "Micro Detune (widener)"
         case .harmony:    "Harmony (key-aware)"
         case .piezoBody:  "Piezo Body (acoustic pickup)"
+        case .tone:       "Tone (instrument)"
         }
     }
 
@@ -57,6 +58,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .microDetune: "arrow.left.and.right"
         case .harmony:    "music.quarternote.3"
         case .piezoBody:  "guitars"
+        case .tone:       "wand.and.rays"
         }
     }
 }
@@ -156,6 +158,157 @@ struct FeedbackNotchParams: Codable, Equatable {
     var notches: [FeedbackNotch] = []
     var sensitivity: Float = 50     // 0...100; higher catches ringing sooner
     var maxDepth: Float = -12       // dB, -18...-6; deepest any one notch may go
+}
+
+// MARK: - Tone (instrument-aware one-button sound)
+
+/// What's on a channel. Sets the channel's icon, and the profile its Tone effect uses.
+nonisolated enum ToneInstrument: Int, Codable, CaseIterable, Identifiable {
+    case leadVocal = 0, backingVocal, acousticGuitar, electricGuitar, bass, keys, synth, kick, snare, drumKit
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .leadVocal:      "Lead Vocal"
+        case .backingVocal:   "Backing Vocal"
+        case .acousticGuitar: "Acoustic Guitar"
+        case .electricGuitar: "Electric Guitar"
+        case .bass:           "Bass"
+        case .keys:           "Keys / Piano"
+        case .synth:          "Synth"
+        case .kick:           "Kick"
+        case .snare:          "Snare"
+        case .drumKit:        "Drum Kit / Overheads"
+        }
+    }
+
+    var shortName: String {
+        switch self {
+        case .leadVocal:      "Lead"
+        case .backingVocal:   "BGV"
+        case .acousticGuitar: "Acoustic"
+        case .electricGuitar: "Electric"
+        case .bass:           "Bass"
+        case .keys:           "Keys"
+        case .synth:          "Synth"
+        case .kick:           "Kick"
+        case .snare:          "Snare"
+        case .drumKit:        "Kit"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .leadVocal:      "🎤"
+        case .backingVocal:   "🎙️"
+        case .acousticGuitar, .electricGuitar, .bass: "🎸"
+        case .keys:           "🎹"
+        case .synth:          "🎛️"
+        case .kick, .snare, .drumKit: "🥁"
+        }
+    }
+
+    /// What Tone does for it, in words (shown in the editor)
+    var toneDescription: String {
+        switch self {
+        case .leadVocal:      "Cuts rumble and mud, adds presence and air, smooths level and tames sibilance."
+        case .backingVocal:   "Thinner and further back than a lead: more low cut, less presence, firmer level, de-essed."
+        case .acousticGuitar: "Cuts boom and boxiness, adds sparkle, gently evens out strumming."
+        case .electricGuitar: "Cuts mud and fizz, pushes the mids that cut through a band."
+        case .bass:           "Firms the lows, clears mud, adds growl for definition, steadies level."
+        case .keys:           "Clears low-mid clutter and adds a little clarity."
+        case .synth:          "Light clean-up: tidies the low mids and opens the top."
+        case .kick:           "Adds thump and beater click, scoops the cardboard mids, tight compression."
+        case .snare:          "Adds body and crack, cuts the boxy ring."
+        case .drumKit:        "Cuts low thud and boxiness from overheads, adds cymbal shimmer."
+        }
+    }
+
+    /// Full-Amount settings
+    var profile: ToneProfile {
+        typealias B = ToneProfile.Band
+        switch self {
+        case .leadVocal:
+            return ToneProfile(highPass: 90, bands: (B(kind: .peak, freq: 250, q: 1.0, db: -3),
+                                                    B(kind: .peak, freq: 1_000, q: 1.5, db: -1),
+                                                    B(kind: .peak, freq: 3_200, q: 1.0, db: 3),
+                                                    B(kind: .highShelf, freq: 10_000, q: 0.7, db: 2.5)),
+                               compRatio: 3, compThreshold: -22, compAttackMs: 5, compReleaseMs: 120, deEss: true)
+        case .backingVocal:
+            return ToneProfile(highPass: 130, bands: (B(kind: .peak, freq: 250, q: 1.0, db: -4),
+                                                     B(kind: .peak, freq: 1_000, q: 1.5, db: -1),
+                                                     B(kind: .peak, freq: 3_200, q: 1.0, db: 2),
+                                                     B(kind: .highShelf, freq: 10_000, q: 0.7, db: 2)),
+                               compRatio: 4, compThreshold: -24, compAttackMs: 5, compReleaseMs: 120, deEss: true)
+        case .acousticGuitar:
+            return ToneProfile(highPass: 80, bands: (B(kind: .peak, freq: 220, q: 1.2, db: -3),
+                                                    B(kind: .peak, freq: 1_200, q: 1.5, db: -1.5),
+                                                    B(kind: .peak, freq: 5_000, q: 1.0, db: 2.5),
+                                                    B(kind: .highShelf, freq: 12_000, q: 0.7, db: 2)),
+                               compRatio: 2.5, compThreshold: -20, compAttackMs: 10, compReleaseMs: 150, deEss: false)
+        case .electricGuitar:
+            return ToneProfile(highPass: 90, bands: (B(kind: .peak, freq: 300, q: 1.0, db: -2),
+                                                    B(kind: .peak, freq: 800, q: 1.0, db: 1),
+                                                    B(kind: .peak, freq: 2_500, q: 1.2, db: 2),
+                                                    B(kind: .highShelf, freq: 7_000, q: 0.7, db: -3)),
+                               compRatio: 2, compThreshold: -18, compAttackMs: 15, compReleaseMs: 150, deEss: false)
+        case .bass:
+            return ToneProfile(highPass: 35, bands: (B(kind: .lowShelf, freq: 100, q: 0.7, db: 2.5),
+                                                    B(kind: .peak, freq: 250, q: 1.0, db: -3),
+                                                    B(kind: .peak, freq: 800, q: 1.2, db: 2),
+                                                    B(kind: .highShelf, freq: 5_000, q: 0.7, db: -2)),
+                               compRatio: 4, compThreshold: -20, compAttackMs: 10, compReleaseMs: 200, deEss: false)
+        case .keys:
+            return ToneProfile(highPass: 60, bands: (B(kind: .peak, freq: 300, q: 1.0, db: -2),
+                                                    B(kind: .peak, freq: 1_000, q: 1.0, db: 0),
+                                                    B(kind: .peak, freq: 4_000, q: 1.0, db: 1.5),
+                                                    B(kind: .highShelf, freq: 10_000, q: 0.7, db: 1.5)),
+                               compRatio: 2, compThreshold: -18, compAttackMs: 15, compReleaseMs: 200, deEss: false)
+        case .synth:
+            return ToneProfile(highPass: 40, bands: (B(kind: .peak, freq: 250, q: 1.0, db: -1.5),
+                                                    B(kind: .peak, freq: 2_000, q: 1.0, db: 0),
+                                                    B(kind: .peak, freq: 5_000, q: 1.0, db: 1),
+                                                    B(kind: .highShelf, freq: 12_000, q: 0.7, db: 1.5)),
+                               compRatio: 1.5, compThreshold: -16, compAttackMs: 20, compReleaseMs: 200, deEss: false)
+        case .kick:
+            return ToneProfile(highPass: 30, bands: (B(kind: .peak, freq: 60, q: 1.2, db: 3),
+                                                    B(kind: .peak, freq: 350, q: 1.0, db: -5),
+                                                    B(kind: .peak, freq: 4_000, q: 1.2, db: 3),
+                                                    B(kind: .highShelf, freq: 10_000, q: 0.7, db: -2)),
+                               compRatio: 4, compThreshold: -18, compAttackMs: 3, compReleaseMs: 80, deEss: false)
+        case .snare:
+            return ToneProfile(highPass: 80, bands: (B(kind: .peak, freq: 200, q: 1.2, db: 2),
+                                                    B(kind: .peak, freq: 500, q: 1.2, db: -3),
+                                                    B(kind: .peak, freq: 5_000, q: 1.0, db: 2.5),
+                                                    B(kind: .highShelf, freq: 10_000, q: 0.7, db: 1)),
+                               compRatio: 3, compThreshold: -18, compAttackMs: 3, compReleaseMs: 100, deEss: false)
+        case .drumKit:
+            return ToneProfile(highPass: 120, bands: (B(kind: .peak, freq: 400, q: 1.0, db: -2.5),
+                                                     B(kind: .peak, freq: 2_500, q: 1.5, db: -1),
+                                                     B(kind: .peak, freq: 6_000, q: 1.0, db: 0),
+                                                     B(kind: .highShelf, freq: 10_000, q: 0.7, db: 2)),
+                               compRatio: 2, compThreshold: -16, compAttackMs: 5, compReleaseMs: 150, deEss: false)
+        }
+    }
+}
+
+struct ToneParams: Codable, Equatable {
+    /// Use the channel's instrument icon (kept in `instrument`); off = the one picked here
+    var followChannel = true
+    /// The instrument in use; nil = Tone does nothing
+    var instrument: ToneInstrument?
+    var amount: Float = 70          // %, 0...100
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = ToneParams()
+        followChannel = try c.decodeIfPresent(Bool.self, forKey: .followChannel) ?? d.followChannel
+        instrument = try? c.decodeIfPresent(ToneInstrument.self, forKey: .instrument)
+        amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? d.amount
+    }
 }
 
 // MARK: - Piezo Body parameters
@@ -724,6 +877,7 @@ struct ChannelFXSlot: Codable, Equatable {
     var microDetune: MicroDetuneParams = .init()
     var harmony: HarmonyParams = .init()
     var piezoBody: PiezoBodyParams = .init()
+    var tone: ToneParams = .init()
 
     init() {}
 
@@ -744,6 +898,7 @@ struct ChannelFXSlot: Codable, Equatable {
         microDetune = try c.decodeIfPresent(MicroDetuneParams.self, forKey: .microDetune) ?? .init()
         harmony = try c.decodeIfPresent(HarmonyParams.self, forKey: .harmony) ?? .init()
         piezoBody = try c.decodeIfPresent(PiezoBodyParams.self, forKey: .piezoBody) ?? .init()
+        tone = try c.decodeIfPresent(ToneParams.self, forKey: .tone) ?? .init()
     }
 }
 
@@ -785,6 +940,8 @@ struct AudioChannel: Codable, Identifiable, Equatable {
     var macros: [ChannelMacro] = []
     /// 1-based channel on the linked mixer; nil = same as the interface input
     var mixerChannel: Int? = nil
+    /// What's plugged in: the strip's icon, and what Tone shapes it for
+    var instrument: ToneInstrument? = nil
 
     var displayName: String { name.isEmpty ? "Input \(inputIndex + 1)" : name }
 }
@@ -826,6 +983,7 @@ extension AudioChannel {
         slots = try c.decodeIfPresent([ChannelFXSlot].self, forKey: .slots) ?? Array(repeating: ChannelFXSlot(), count: 6)
         macros = try c.decodeIfPresent([ChannelMacro].self, forKey: .macros) ?? []
         mixerChannel = try c.decodeIfPresent(Int.self, forKey: .mixerChannel)
+        instrument = try? c.decodeIfPresent(ToneInstrument.self, forKey: .instrument)
     }
 }
 

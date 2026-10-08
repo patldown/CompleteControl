@@ -68,6 +68,7 @@ the first (lower slot) is `<fx>` and the second is `<fx>2`, e.g. `pitch` and `pi
 | `detune` | Micro Detune (micro-pitch stereo widener) |
 | `harmony` | Harmony (key-aware harmonizer) |
 | `body` | Piezo Body (acoustic pickup enhancer) |
+| `tone` | Tone (one-button sound for the channel's instrument) |
 
 ### Value conventions
 
@@ -181,6 +182,14 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `formant` | -6 to 6 semitones | + smaller/brighter, − bigger/darker |
 | `shiftOnlyWhileSinging` | toggle | Transpose/Formant switch off between phrases |
 | `bleedDuck` | -20 to 0 dB | Turns the mic down between phrases. 0 = off |
+
+### `tone` — Tone
+| Param | Range | Notes |
+|---|---|---|
+| `amount` | 0 to 100 % | How much of the instrument's tone profile. 0 = flat |
+| `instrument` | choice | 0 None, 1 Lead Vocal, 2 Backing Vocal, 3 Acoustic Guitar, 4 Electric Guitar, 5 Bass, 6 Keys / Piano, 7 Synth, 8 Kick, 9 Snare, 10 Drum Kit / Overheads — stops following the channel's icon |
+
+Turn Tone on and off with `/app/<channel>/tone/bypass` (1 = off, 0 = on), like any effect.
 
 ### `body` — Piezo Body
 | Param | Range | Notes |

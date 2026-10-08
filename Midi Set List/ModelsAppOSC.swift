@@ -129,6 +129,7 @@ extension BuiltInFXType {
         case .microDetune:   "detune"
         case .harmony:       "harmony"
         case .piezoBody:     "body"
+        case .tone:          "tone"
         }
     }
 
@@ -261,6 +262,14 @@ extension BuiltInFXType {
                    get: { $0.pitchGuide.shiftOnlyWhileSinging }, set: { $0.pitchGuide.shiftOnlyWhileSinging = $1 }),
             num("bleedDuck", "Bleed Duck", -20...0, "dB", "Turns the mic down between phrases. 0 = off.",
                 get: { Double($0.pitchGuide.bleedDuck) }, set: { $0.pitchGuide.bleedDuck = Float($1) }),
+        ]
+        case .tone: [
+            num("amount", "Amount", 0...100, "%", "How much of the instrument's tone profile. 0 = flat.",
+                get: { Double($0.tone.amount) }, set: { $0.tone.amount = Float($1) }),
+            choice("instrument", "Instrument", ["None"] + ToneInstrument.allCases.map(\.displayName),
+                   "Picks the profile and stops following the channel's icon. 0 = none (Tone does nothing).",
+                   get: { ($0.tone.instrument?.rawValue ?? -1) + 1 },
+                   set: { $0.tone.instrument = ToneInstrument(rawValue: $1 - 1); $0.tone.followChannel = false }),
         ]
         case .piezoBody: [
             num("amount", "Amount", 0...100, "%", "Body back in, quack and spikiness out. 0 = flat.",

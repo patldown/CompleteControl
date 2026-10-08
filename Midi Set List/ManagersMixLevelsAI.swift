@@ -60,7 +60,7 @@ enum MixLevelsAI {
         Bass sits with the kick.
         • Follow the description: if it says something is "in your face" or "driving", \
         bring it forward; "subtle", "under", "pad" means further back.
-        • Use the channel's name, and its effects if listed, to tell what it is. If a name \
+        • Use the channel's instrument (in brackets) if given, else its name and effects, to tell what it is. If a name \
         says nothing (e.g. "Input 5"), put it at -10 dB.
 
         Return one level per channel, using each channel's name exactly as listed.
@@ -81,6 +81,7 @@ enum MixLevelsAI {
                 return type.shortName
             }
             var line = "- \(channel.displayName)"
+            if let instrument = channel.instrument { line += " [\(instrument.displayName)]" }
             if channel.isStereoLinked { line += " (stereo)" }
             if !fx.isEmpty { line += " — effects: \(fx.joined(separator: ", "))" }
             lines.append(line)

@@ -126,6 +126,12 @@ final class AudioRoutingEngine {
             version: 1
         )
         AUAudioUnit.registerSubclass(
+            ToneAudioUnit.self,
+            as: ToneAudioUnit.componentDescription,
+            name: "Tone",
+            version: 1
+        )
+        AUAudioUnit.registerSubclass(
             PiezoBodyAudioUnit.self,
             as: PiezoBodyAudioUnit.componentDescription,
             name: "Piezo Body",
@@ -471,6 +477,12 @@ final class AudioRoutingEngine {
                 audioComponentDescription: PiezoBodyAudioUnit.componentDescription)
             (effect.auAudioUnit as? PiezoBodyAudioUnit)?.kernel.applyParams(slot.piezoBody)
             return effect
+        case .tone:
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: ToneAudioUnit.componentDescription)
+            (effect.auAudioUnit as? ToneAudioUnit)?.kernel
+                .applyParams(instrument: slot.tone.instrument, amount: slot.tone.amount)
+            return effect
         }
     }
 
@@ -608,6 +620,9 @@ final class AudioRoutingEngine {
         case .piezoBody:
             ((node as? AVAudioUnitEffect)?.auAudioUnit as? PiezoBodyAudioUnit)?
                 .kernel.applyParams(slot.piezoBody)
+        case .tone:
+            ((node as? AVAudioUnitEffect)?.auAudioUnit as? ToneAudioUnit)?
+                .kernel.applyParams(instrument: slot.tone.instrument, amount: slot.tone.amount)
         case nil:
             break
         }
