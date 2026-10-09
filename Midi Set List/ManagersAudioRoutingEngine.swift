@@ -155,6 +155,12 @@ final class AudioRoutingEngine {
             name: "Micro Detune",
             version: 1
         )
+        AUAudioUnit.registerSubclass(
+            MakeRoomAudioUnit.self,
+            as: MakeRoomAudioUnit.componentDescription,
+            name: "Make Room",
+            version: 1
+        )
 
         // iOS stops the engine when the hardware configuration changes (interface
         // re-plugged, sample rate) — bring it straight back rather than going silent
@@ -206,6 +212,7 @@ final class AudioRoutingEngine {
             else { throw RoutingError.noOutput }
 
             buildGraph(in: eng, stereo: stereo, hardwareIn: hardwareIn, hardwareOut: hardwareOut)
+            linkMakeRoom()
             eng.prepare()
             try eng.start()
             engine = eng
@@ -355,6 +362,7 @@ final class AudioRoutingEngine {
             guard let channel = store.channels.first(where: { $0.id == id }) else { return }
             buildChannel(channel, in: eng, startSilent: true)
             connectInputs(in: eng)
+            linkMakeRoom()
             if !eng.isRunning { try? eng.start() }
             if let mixer = graphs[id]?.inputMixer {
                 fade(mixer, to: channel.isMuted ? 0 : channel.volume) { [weak self] in
@@ -469,6 +477,9 @@ final class AudioRoutingEngine {
             (effect.auAudioUnit as? ToneAudioUnit)?.kernel
                 .applyParams(instrument: slot.tone.instrument, amount: slot.tone.amount)
             return effect
+        case .makeRoom:
+            // Linked to its key channels by linkMakeRoom once the graph is built
+            return AVAudioUnitEffect(audioComponentDescription: MakeRoomAudioUnit.componentDescription)
         case .warmth, .air, .punch, .smartGate:
             let description: AudioComponentDescription = switch type {
             case .air:       OneKnobAudioUnit.airDescription
@@ -507,6 +518,52 @@ final class AudioRoutingEngine {
         for (i, slot) in macro.slots.enumerated() where i < graph.fxNodes.count {
             applySlot(slot, channelID: channelID, slotIndex: i)
         }
+        // Make Room choices, or a key channel's Tone, may have changed
+        linkMakeRoom()
+    }
+
+    // MARK: - Make Room links
+
+    /// Points every Make Room at its key channels: each key channel's input picker measures
+    /// into its own KeyBandTable row (pickers no Make Room listens to stay idle), and each
+    /// Make Room gets those rows plus the bands that matter to each key (from its Tone).
+    /// Cheap; run after anything that could change who listens to whom.
+    func linkMakeRoom() {
+        let channels = store.channels
+        let present = Set(channels.map(\.id))
+        var rows: [UUID: Int] = [:]
+        for channel in channels {
+            for slot in channel.slots where slot.type == .makeRoom && !slot.isBypassed {
+                for key in slot.makeRoom.keyChannels
+                where key != channel.id && present.contains(key) && rows[key] == nil
+                    && rows.count < KeyBandTable.maxKeys {
+                    rows[key] = rows.count
+                }
+            }
+        }
+        for (id, graph) in graphs {
+            let row = rows[id] ?? -1
+            let analyzer = (graph.picker.auAudioUnit as? InputPickerAudioUnit)?.analyzer
+            if analyzer?.keySlot.load(ordering: .relaxed) != row {
+                if row >= 0 { KeyBandTable.clear(key: row) }
+                analyzer?.keySlot.store(row, ordering: .relaxed)
+            }
+        }
+        for channel in channels {
+            guard let graph = graphs[channel.id] else { continue }
+            for (i, slot) in channel.slots.enumerated()
+            where slot.type == .makeRoom && i < graph.fxNodes.count {
+                guard let kernel = ((graph.fxNodes[i] as? AVAudioUnitEffect)?.auAudioUnit
+                                    as? MakeRoomAudioUnit)?.kernel else { continue }
+                let keys = slot.makeRoom.keyChannels.compactMap { key -> (slot: Int, weights: [Float])? in
+                    guard key != channel.id, let row = rows[key],
+                          let keyChannel = channels.first(where: { $0.id == key }) else { return nil }
+                    return (row, MakeRoomParams.bandWeights(for: keyChannel.toneInstrument))
+                }
+                kernel.apply(maxCutDB: slot.makeRoom.amount.maxCutDB,
+                             keys: Array(keys.prefix(MakeRoomKernel.maxKeys)))
+            }
+        }
     }
 
     /// Applies one slot's settings to the running graph (OSC control, live edits). Bypass
@@ -519,6 +576,8 @@ final class AudioRoutingEngine {
             return
         }
         applySlotParams(slot, to: node)
+        // Make Room reads other channels; a Tone sets what its own channel needs room in
+        if slot.type == .makeRoom || slot.type == .tone { linkMakeRoom() }
     }
 
     /// The running in-house AU in a channel's slot, for live editing, ring-out and meters.
@@ -621,6 +680,8 @@ final class AudioRoutingEngine {
                 .kernel.applyParams(instrument: slot.tone.instrument, amount: slot.tone.amount)
         case .warmth, .air, .punch, .smartGate:
             applyOneKnob(slot, to: ((node as? AVAudioUnitEffect)?.auAudioUnit as? OneKnobAudioUnit)?.kernel)
+        case .makeRoom:
+            break   // needs the other channels: linkMakeRoom
         case nil:
             break
         }

@@ -250,7 +250,15 @@ struct ChannelStripView: View {
             FXSlotEditorSheet(
                 slot: channel.slots[target.slotIndex],
                 liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: target.slotIndex),
-                channelHasPitchGuide: channel.slots.hasPitchGuide
+                channelHasPitchGuide: channel.slots.hasPitchGuide,
+                makeRoomFor: store.channels.filter { $0.id != channelID }.map { other in
+                    MakeRoomCandidate(
+                        id: other.id, name: other.displayName, instrument: other.toneInstrument,
+                        makesRoomForThis: other.slots.contains {
+                            $0.type == .makeRoom && $0.makeRoom.keyChannels.contains(channelID)
+                        })
+                },
+                ownInstrument: channel.toneInstrument
             ) { updatedSlot in
                 let typeChanged = updatedSlot.type != channel.slots[target.slotIndex].type
                 var c = channel
@@ -927,6 +935,7 @@ extension BuiltInFXType {
         case .air:           "Air"
         case .punch:         "Punch"
         case .smartGate:     "Gate"
+        case .makeRoom:      "Room"
         }
     }
 }
@@ -1009,6 +1018,12 @@ extension ChannelFXSlot {
         case .smartGate:
             return ["Sens \(Int(smartGate.sensitivity))%", "Depth \(Int(smartGate.depth)) dB"]
                 + (smartGate.bleedDuck ? ["Singing only"] : [])
+        case .makeRoom:
+            let names = makeRoom.keyChannels.compactMap { id in
+                AudioRoutingStore.shared.channels.first { $0.id == id }?.displayName
+            }
+            guard !names.isEmpty else { return ["Pick who", "to make room for"] }
+            return ["For " + names.joined(separator: ", "), makeRoom.amount.name]
         case .tone:
             guard let instrument = tone.instrument else { return ["Pick instrument", "Does nothing"] }
             return ["\(instrument.icon) \(instrument.shortName)", "Amount \(Int(tone.amount))%"]
@@ -1120,14 +1135,21 @@ struct FXSlotEditorSheet: View {
     let liveUnit: AUAudioUnit?
     /// Harmony can take its key and detection from it
     let channelHasPitchGuide: Bool
+    /// The other channels, for Make Room to choose from
+    let makeRoomFor: [MakeRoomCandidate]
+    /// This channel's Tone instrument, for Make Room's hint
+    let ownInstrument: ToneInstrument?
     let onSave: (ChannelFXSlot) -> Void
 
     init(slot: ChannelFXSlot, liveUnit: AUAudioUnit? = nil, channelHasPitchGuide: Bool = false,
+         makeRoomFor: [MakeRoomCandidate] = [], ownInstrument: ToneInstrument? = nil,
          onSave: @escaping (ChannelFXSlot) -> Void) {
         _slot = State(initialValue: slot)
         original = slot
         self.liveUnit = liveUnit
         self.channelHasPitchGuide = channelHasPitchGuide
+        self.makeRoomFor = makeRoomFor
+        self.ownInstrument = ownInstrument
         self.onSave = onSave
     }
 
@@ -1192,6 +1214,10 @@ struct FXSlotEditorSheet: View {
                         ToneEditor(params: $slot.tone, kernel: live(ToneAudioUnit.self)?.kernel)
                     case .warmth, .air, .punch, .smartGate:
                         OneKnobEditor(slot: $slot, kernel: live(OneKnobAudioUnit.self)?.kernel)
+                    case .makeRoom:
+                        MakeRoomEditor(params: $slot.makeRoom, candidates: makeRoomFor,
+                                       ownInstrument: ownInstrument,
+                                       kernel: live(MakeRoomAudioUnit.self)?.kernel)
                     }
                 }
             }
@@ -1597,6 +1623,105 @@ private struct FeedbackNotchEditor: View {
         // Deleting or clearing notches takes effect immediately. Ring-out stops by itself
         // when the sheet closes: the analyzer is released and its timer invalidates.
         .onChange(of: params) { kernel?.applyParams(params) }
+    }
+}
+
+/// Another channel Make Room could step aside for
+struct MakeRoomCandidate: Identifiable {
+    let id: UUID
+    let name: String
+    let instrument: ToneInstrument?
+    /// It already makes room for the channel being edited
+    let makesRoomForThis: Bool
+}
+
+private struct MakeRoomEditor: View {
+    @Binding var params: MakeRoomParams
+    let candidates: [MakeRoomCandidate]
+    let ownInstrument: ToneInstrument?
+    let kernel: MakeRoomKernel?
+
+    private static let vocals: Set<ToneInstrument> = [.leadVocal, .backingVocal]
+
+    var body: some View {
+        Section {
+            if candidates.isEmpty {
+                Text("Add another channel first, such as the singer's.").foregroundStyle(.secondary)
+            }
+            ForEach(candidates) { other in
+                Toggle(isOn: Binding(
+                    get: { params.keyChannels.contains(other.id) },
+                    set: { on in
+                        if on {
+                            if !params.keyChannels.contains(other.id) { params.keyChannels.append(other.id) }
+                        } else {
+                            params.keyChannels.removeAll { $0 == other.id }
+                        }
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(other.name.isEmpty ? "Unnamed channel" : other.name)
+                        if let instrument = other.instrument {
+                            Text("\(instrument.icon) \(instrument.displayName)")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .disabled(!params.keyChannels.contains(other.id)
+                          && params.keyChannels.count >= MakeRoomKernel.maxKeys)
+            }
+        } header: {
+            Text("Make Room For")
+        } footer: {
+            Text(hint)
+        }
+
+        Section {
+            DescribedChoice("Amount", params.amount.sound, selection: $params.amount) { $0.name }
+            if let kernel {
+                TimelineView(.animation(minimumInterval: 0.05)) { _ in
+                    MakeRoomMeter(kernel: kernel, maxCut: params.amount.maxCutDB)
+                }
+            }
+        } footer: {
+            Text("Only dips where the chosen channels are playing and this channel covers them, and only while they play. With several chosen, it follows whoever is in each band; dips never add up. Zero latency. A Tone on the chosen channel tells it which bands matter most.")
+        }
+    }
+
+    private var hint: String {
+        let chosen = candidates.filter { params.keyChannels.contains($0.id) }
+        if chosen.contains(where: \.makesRoomForThis) {
+            return "A chosen channel already makes room for this one. Both will step aside where you overlap; usually only one should."
+        }
+        if let own = ownInstrument, Self.vocals.contains(own),
+           chosen.contains(where: { c in c.instrument.map { Self.vocals.contains($0) } ?? false }) {
+            return "Made for instruments stepping aside for the singers. Between two lead vocals, panning and each one's Tone usually blend better."
+        }
+        return "Pick the channels that need to be heard, usually the singers. This channel steps aside for them."
+    }
+}
+
+/// How far Make Room is dipping each band right now
+private struct MakeRoomMeter: View {
+    let kernel: MakeRoomKernel
+    let maxCut: Float
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 4) {
+            ForEach(0..<MakeRoomBands.count, id: \.self) { b in
+                let depth = CGFloat(min(1, kernel.cutDB(band: b) / max(0.5, maxCut)))
+                VStack(spacing: 2) {
+                    ZStack(alignment: .top) {
+                        Capsule().fill(Color.secondary.opacity(0.15))
+                        Capsule().fill(Color.accentColor).frame(height: 40 * depth)
+                    }
+                    .frame(width: 10, height: 40)
+                    Text(MakeRoomBands.labels[b]).font(.system(size: 8)).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .accessibilityLabel("Make Room dips per band")
     }
 }
 

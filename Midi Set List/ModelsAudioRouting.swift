@@ -15,12 +15,12 @@ import Foundation
 
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
     case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide, microDetune, harmony,
-         piezoBody, tone, warmth, air, punch, smartGate
+         piezoBody, tone, warmth, air, punch, smartGate, makeRoom
 
     // reverb and delay kept in enum for JSON backward-compat but are no longer available;
     // the load() migration clears any saved slots of these types.
     static var allCases: [BuiltInFXType] {
-        [.tone, .gain, .eq3Band, .smartGate, .levelRider, .optoComp, .fetComp, .punch, .warmth, .air,
+        [.tone, .gain, .eq3Band, .makeRoom, .smartGate, .levelRider, .optoComp, .fetComp, .punch, .warmth, .air,
          .feedbackNotch, .pitchGuide, .harmony, .microDetune, .piezoBody]
     }
 
@@ -45,6 +45,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .air:        "Air (exciter)"
         case .punch:      "Punch (transient shaper)"
         case .smartGate:  "Smart Gate"
+        case .makeRoom:   "Make Room (unmask)"
         }
     }
 
@@ -67,6 +68,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .air:        "wind"
         case .punch:      "burst"
         case .smartGate:  "door.left.hand.closed"
+        case .makeRoom:   "rectangle.split.2x1"
         }
     }
 }
@@ -399,6 +401,62 @@ struct SmartGateParams: Codable, Equatable {
         sensitivity = try c.decodeIfPresent(Float.self, forKey: .sensitivity) ?? 50
         depth = try c.decodeIfPresent(Float.self, forKey: .depth) ?? 40
         bleedDuck = try c.decodeIfPresent(Bool.self, forKey: .bleedDuck) ?? false
+    }
+}
+
+// MARK: - Make Room (sidechain unmasking)
+
+/// Steps this channel aside, gently and only while they play, in the bands where the
+/// chosen channels (usually the singers) need to be heard
+struct MakeRoomParams: Codable, Equatable {
+    /// The channels to make room for
+    var keyChannels: [UUID] = []
+    var amount: Amount = .subtle
+
+    enum Amount: String, Codable, CaseIterable, Identifiable {
+        case subtle, clear
+        var id: Self { self }
+        var name: String { self == .subtle ? "Subtle" : "Clear" }
+        var sound: String {
+            self == .subtle
+                ? "A gentle step aside. You'll hear the singer more than the change."
+                : "A clear gap for the singer in a busy mix."
+        }
+        /// Deepest dip in any band, dB
+        var maxCutDB: Float { self == .subtle ? 2 : 4 }
+    }
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        keyChannels = try c.decodeIfPresent([UUID].self, forKey: .keyChannels) ?? []
+        amount = (try? c.decodeIfPresent(Amount.self, forKey: .amount)) ?? .subtle
+    }
+
+    /// How much each Make Room band (125 Hz … 9 kHz) matters to a key, from its Tone
+    /// instrument; nil = no Tone, so a general voice-and-instrument middle
+    static func bandWeights(for instrument: ToneInstrument?) -> [Float] {
+        //                     125  250  500  800  1.2k 1.8k 2.7k  4k   6k   9k
+        guard let instrument else { return [0.2, 0.5, 0.7, 0.8, 0.8, 0.8, 0.8, 0.7, 0.5, 0.3] }
+        switch instrument {
+        case .leadVocal:      [0.0, 0.2, 0.5, 0.8, 1.0, 1.0, 1.0, 1.0, 0.7, 0.4]
+        case .backingVocal:   [0.0, 0.2, 0.4, 0.7, 0.8, 0.8, 0.8, 0.7, 0.5, 0.3]
+        case .acousticGuitar: [0.2, 0.6, 0.8, 0.8, 0.7, 0.7, 0.8, 0.6, 0.4, 0.2]
+        case .electricGuitar: [0.1, 0.5, 0.8, 1.0, 1.0, 0.8, 0.6, 0.4, 0.2, 0.1]
+        case .bass:           [1.0, 0.8, 0.5, 0.4, 0.3, 0.1, 0.0, 0.0, 0.0, 0.0]
+        case .keys:           [0.3, 0.6, 0.8, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]
+        case .synth:          [0.4, 0.6, 0.7, 0.7, 0.7, 0.6, 0.5, 0.5, 0.4, 0.3]
+        case .kick:           [1.0, 0.6, 0.2, 0.0, 0.0, 0.0, 0.3, 0.4, 0.0, 0.0]
+        case .snare:          [0.0, 0.6, 0.5, 0.3, 0.2, 0.3, 0.5, 0.6, 0.5, 0.3]
+        case .drumKit:        [0.8, 0.5, 0.3, 0.2, 0.2, 0.3, 0.4, 0.5, 0.5, 0.4]
+        }
+    }
+}
+
+extension AudioChannel {
+    /// The instrument its first active Tone is set to, if any
+    var toneInstrument: ToneInstrument? {
+        slots.first { $0.type == .tone && !$0.isBypassed && $0.tone.instrument != nil }?.tone.instrument
     }
 }
 
@@ -1361,6 +1419,7 @@ struct ChannelFXSlot: Codable, Equatable {
     var air: AirParams = .init()
     var punch: PunchParams = .init()
     var smartGate: SmartGateParams = .init()
+    var makeRoom: MakeRoomParams = .init()
 
     init() {}
 
@@ -1386,6 +1445,7 @@ struct ChannelFXSlot: Codable, Equatable {
         air = try c.decodeIfPresent(AirParams.self, forKey: .air) ?? .init()
         punch = try c.decodeIfPresent(PunchParams.self, forKey: .punch) ?? .init()
         smartGate = try c.decodeIfPresent(SmartGateParams.self, forKey: .smartGate) ?? .init()
+        makeRoom = try c.decodeIfPresent(MakeRoomParams.self, forKey: .makeRoom) ?? .init()
     }
 }
 

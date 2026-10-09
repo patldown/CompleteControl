@@ -73,6 +73,7 @@ the first (lower slot) is `<fx>` and the second is `<fx>2`, e.g. `pitch` and `pi
 | `air` | Air (harmonic exciter) |
 | `punch` | Punch (transient shaper) |
 | `gate` | Smart Gate (self-setting noise gate) |
+| `room` | Make Room (steps aside for chosen channels, e.g. the singers) |
 
 ### Value conventions
 
@@ -209,6 +210,11 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `sensitivity` | 0 to 100 % | Higher gates more of the quiet between notes |
 | `depth` | 0 to 80 dB | How far it turns down when closed |
 | `bleedDuck` | toggle | Opens For: 1 = Singing (loud bleed between phrases stays down), 0 = Any Sound |
+
+### `room` — Make Room
+| Param | Range | Notes |
+|---|---|---|
+| `amount` | choice | 0 Subtle (up to 2 dB), 1 Clear (up to 4 dB). Which channels to make room for is set in the app |
 
 ### `tone` — Tone
 | Param | Range | Notes |
