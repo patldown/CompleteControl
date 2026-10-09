@@ -209,6 +209,10 @@ extension BuiltInFXType {
                 get: { Double($0.optoComp.gain) }, set: { $0.optoComp.gain = Float($1) }),
             toggle("limit", "Limit Mode", "0 = Compress (~3:1), 1 = Limit (~10:1).",
                    get: { $0.optoComp.limitMode }, set: { $0.optoComp.limitMode = $1 }),
+            toggle("sidechain", "Sidechain", "Compress when the chosen channels play (picked in the app).",
+                   get: { $0.sidechain.enabled }, set: { $0.sidechain.enabled = $1 }),
+            toggle("sidechainPost", "Sidechain Post", "1 = hear them after their effects and fader, 0 = as they come in.",
+                   get: { $0.sidechain.post }, set: { $0.sidechain.post = $1 }),
         ]
         case .fetComp: [
             num("input", "Input", 0...48, "dB", "Drives into the fixed threshold: more = more compression.",
@@ -222,6 +226,10 @@ extension BuiltInFXType {
                 get: { Double($0.fetComp.attack) }, set: { $0.fetComp.attack = Float($1) }),
             num("release", "Release", 1...7, "", "7 = fastest (50 ms), 1 = slowest (1.1 s).", whole: true,
                 get: { Double($0.fetComp.release) }, set: { $0.fetComp.release = Float($1) }),
+            toggle("sidechain", "Sidechain", "Compress when the chosen channels play (picked in the app).",
+                   get: { $0.sidechain.enabled }, set: { $0.sidechain.enabled = $1 }),
+            toggle("sidechainPost", "Sidechain Post", "1 = hear them after their effects and fader, 0 = as they come in.",
+                   get: { $0.sidechain.post }, set: { $0.sidechain.post = $1 }),
         ]
         case .feedbackNotch: [
             num("sensitivity", "Sensitivity", 0...100, "", "Ring-out detection sensitivity.",

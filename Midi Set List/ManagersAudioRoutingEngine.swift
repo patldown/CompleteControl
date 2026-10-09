@@ -286,6 +286,7 @@ final class AudioRoutingEngine {
            let free = (0..<OutputPackerAudioUnit.maxChannels).first(where: { !packerBus.values.contains($0) }) {
             packerBus[channel.id] = free
         }
+        (picker.auAudioUnit as? InputPickerAudioUnit)?.levelRow.store(packerBus[channel.id] ?? -1, ordering: .relaxed)
         var graph = ChannelGraph(picker: picker, inputMixer: inputMixer, fxNodes: [])
         buildChain(for: channel, into: &graph, in: eng)
         graphs[channel.id] = graph
@@ -518,7 +519,7 @@ final class AudioRoutingEngine {
         for (i, slot) in macro.slots.enumerated() where i < graph.fxNodes.count {
             applySlot(slot, channelID: channelID, slotIndex: i)
         }
-        // Make Room choices, or a key channel's Tone, may have changed
+        // Make Room or sidechain choices, or a key channel's Tone, may have changed
         linkMakeRoom()
     }
 
@@ -570,6 +571,25 @@ final class AudioRoutingEngine {
                              keys: Array(keys.prefix(MakeRoomKernel.maxKeys)))
             }
         }
+        linkSidechains()
+    }
+
+    /// Points each compressor with a sidechain at its key channels' rows in
+    /// ChannelLevelTable (their packer busses); compressors without one follow themselves
+    private func linkSidechains() {
+        for channel in store.channels {
+            guard let graph = graphs[channel.id] else { continue }
+            for (i, slot) in channel.slots.enumerated()
+            where (slot.type == .optoComp || slot.type == .fetComp) && i < graph.fxNodes.count {
+                guard let kernel = ((graph.fxNodes[i] as? AVAudioUnitEffect)?.auAudioUnit
+                                    as? VintageCompressorAudioUnit)?.kernel else { continue }
+                let rows = slot.sidechain.enabled
+                    ? slot.sidechain.keyChannels.filter { $0 != channel.id }.compactMap { packerBus[$0] }
+                    : []
+                kernel.applySidechain(rows: Array(rows.prefix(VintageCompressorKernel.maxKeys)),
+                                      post: slot.sidechain.post)
+            }
+        }
     }
 
     /// Applies one slot's settings to the running graph (OSC control, live edits). Bypass
@@ -582,8 +602,8 @@ final class AudioRoutingEngine {
             return
         }
         applySlotParams(slot, to: node)
-        // Make Room reads other channels; a Tone sets what its own channel needs room in
-        if slot.type == .makeRoom || slot.type == .tone { linkMakeRoom() }
+        // Make Room and sidechains read other channels; a Tone sets what its channel needs room in
+        if let type = slot.type, [.makeRoom, .tone, .optoComp, .fetComp].contains(type) { linkMakeRoom() }
     }
 
     /// The running in-house AU in a channel's slot, for live editing, ring-out and meters.

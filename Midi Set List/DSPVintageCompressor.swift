@@ -10,6 +10,12 @@
 //    • FET (1176 style) — peak detector, fixed threshold driven by the Input knob,
 //      20–800 µs attack, 50 ms–1.1 s release, 4/8/12/20:1 and "all buttons" mode.
 //
+//  Sidechain (optional): the detector follows other channels instead of this one, so this
+//  channel is turned down when they play. Their peak levels come from ChannelLevelTable
+//  (measured before or after their effects), once per buffer and possibly one buffer old:
+//  no added latency, but the key is seen a few ms late. With several keys the loudest
+//  drives it. No keys found = it follows its own signal as usual.
+//
 //  Strict real-time contract: no allocations, locks, or Swift runtime calls in process().
 //  Parameters travel main→audio via atomics, same as LevelRiderKernel.
 //
@@ -34,6 +40,11 @@ nonisolated final class VintageCompressorKernel: @unchecked Sendable {
     let dBits = Atomic<UInt32>(Float(4).bitPattern)
     let eBits = Atomic<UInt32>(Float(4).bitPattern)
 
+    // Sidechain: ChannelLevelTable rows (-1 = unused); aligned words, written on the main thread
+    static let maxKeys = 4
+    private let keyRows = UnsafeMutablePointer<Int>.allocate(capacity: maxKeys)
+    private let keyPost = Atomic<Bool>(false)
+
     // MARK: - Meters (audio thread → main thread)
     let gainReductionBits = Atomic<UInt32>(Float(0).bitPattern)   // dB, ≥ 0
 
@@ -51,7 +62,16 @@ nonisolated final class VintageCompressorKernel: @unchecked Sendable {
 
     init(model: VintageCompressorModel) {
         self.model = model
+        keyRows.initialize(repeating: -1, count: Self.maxKeys)
         setSampleRate(48_000)
+    }
+
+    deinit { keyRows.deallocate() }
+
+    /// Sidechain keys as ChannelLevelTable rows (empty = off), read before or after their effects
+    @MainActor func applySidechain(rows: [Int], post: Bool) {
+        keyPost.store(post, ordering: .relaxed)
+        for k in 0..<Self.maxKeys { keyRows[k] = k < rows.count ? rows[k] : -1 }
     }
 
     // MARK: - Main thread API
@@ -126,14 +146,27 @@ nonisolated final class VintageCompressorKernel: @unchecked Sendable {
         let channelCount = ptr.count
         guard channelCount > 0 else { return }
 
+        // Sidechain: the loudest key's peak this buffer, through the same Input drive
+        var keyed = false, keyPeakDB: Float = -120
+        let post = keyPost.load(ordering: .relaxed)
+        for k in 0..<Self.maxKeys where keyRows[k] >= 0 {
+            keyed = true
+            keyPeakDB = max(keyPeakDB, ChannelLevelTable.level(row: keyRows[k], post: post))
+        }
+        let keyPeak = keyPeakDB > -119 ? pow(10, Double(keyPeakDB) / 20) * preGain : 0
+
         var maxGR: Double = 0
         for i in 0..<frameCount {
-            // Stereo-linked detector: loudest channel drives both
+            // Stereo-linked detector: loudest channel drives both (or the sidechain keys)
             var peak: Double = 0
-            for ch in 0..<channelCount {
-                guard let d = ptr[ch].mData else { continue }
-                let x = abs(Double(d.assumingMemoryBound(to: Float.self)[i])) * preGain
-                if x > peak { peak = x }
+            if keyed {
+                peak = keyPeak
+            } else {
+                for ch in 0..<channelCount {
+                    guard let d = ptr[ch].mData else { continue }
+                    let x = abs(Double(d.assumingMemoryBound(to: Float.self)[i])) * preGain
+                    if x > peak { peak = x }
+                }
             }
 
             let levelDB: Double

@@ -284,6 +284,23 @@ struct FETCompParams: Codable, Equatable {
     }
 }
 
+/// A compressor following other channels instead of its own: this channel is turned down
+/// when they play (kick → bass, vocals → backing track). Off by default; under Custom Values.
+struct SidechainParams: Codable, Equatable {
+    var enabled = false
+    var keyChannels: [UUID] = []
+    /// Read the keys after their effects and fader (true) or as they come in (false)
+    var post = false
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        keyChannels = try c.decodeIfPresent([UUID].self, forKey: .keyChannels) ?? []
+        post = try c.decodeIfPresent(Bool.self, forKey: .post) ?? false
+    }
+}
+
 /// The Compressor's Amount choice. Each sets its own make-up gain so the level stays
 /// roughly where it was (for a voice around -18 dBFS).
 enum CompressionAmount: CaseIterable, Identifiable {
@@ -1425,6 +1442,8 @@ struct ChannelFXSlot: Codable, Equatable {
     var punch: PunchParams = .init()
     var smartGate: SmartGateParams = .init()
     var makeRoom: MakeRoomParams = .init()
+    /// Compressor (either character) sidechain
+    var sidechain: SidechainParams = .init()
 
     init() {}
 
@@ -1451,6 +1470,7 @@ struct ChannelFXSlot: Codable, Equatable {
         punch = try c.decodeIfPresent(PunchParams.self, forKey: .punch) ?? .init()
         smartGate = try c.decodeIfPresent(SmartGateParams.self, forKey: .smartGate) ?? .init()
         makeRoom = try c.decodeIfPresent(MakeRoomParams.self, forKey: .makeRoom) ?? .init()
+        sidechain = try c.decodeIfPresent(SidechainParams.self, forKey: .sidechain) ?? .init()
     }
 }
 

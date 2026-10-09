@@ -942,6 +942,15 @@ extension BuiltInFXType {
 }
 
 extension ChannelFXSlot {
+    /// "Keyed: Kick" when a compressor's sidechain is on
+    fileprivate var sidechainSummary: String? {
+        guard sidechain.enabled else { return nil }
+        let names = sidechain.keyChannels.compactMap { id in
+            AudioRoutingStore.shared.channels.first { $0.id == id }?.displayName
+        }
+        return names.isEmpty ? "Keyed: pick who" : "Keyed: " + names.joined(separator: ", ")
+    }
+
     /// Up to three short lines of the settings that matter most, for a glance check
     var summary: [String] {
         func db(_ v: Float) -> String { v == 0 ? "0" : String(format: "%+.1f", v) }
@@ -975,11 +984,17 @@ extension ChannelFXSlot {
                     "+\(Int(levelRider.maxBoost)) / \(Int(levelRider.maxCut)) dB",
                     "Gate \(Int(levelRider.gateThreshold))"]
         case .optoComp:
+            if let keyed = sidechainSummary {
+                return ["Smooth", keyed, optoComp.amount?.name ?? "PR \(Int(optoComp.peakReduction))"]
+            }
             if !optoComp.custom, let amount = optoComp.amount { return ["Smooth", amount.name] }
             return [optoComp.limitMode ? "Limit" : "Compress",
                     "PR \(Int(optoComp.peakReduction))",
                     "Gain +\(Int(optoComp.gain))"]
         case .fetComp:
+            if let keyed = sidechainSummary {
+                return ["Punchy", keyed, fetComp.amount?.name ?? "In \(Int(fetComp.input))"]
+            }
             if !fetComp.custom, let amount = fetComp.amount { return ["Punchy", amount.name] }
             return [fetComp.ratio == .allButtons ? "All buttons" : "\(fetComp.ratio.label):1",
                     "In \(Int(fetComp.input)) Out \(db(fetComp.output.rounded()))",
@@ -1136,7 +1151,7 @@ struct FXSlotEditorSheet: View {
     let liveUnit: AUAudioUnit?
     /// Harmony can take its key and detection from it
     let channelHasPitchGuide: Bool
-    /// The other channels, for Make Room to choose from
+    /// The other channels, for Make Room and the compressor's sidechain to choose from
     let makeRoomFor: [MakeRoomCandidate]
     /// This channel's Tone instrument, for Make Room's hint
     let ownInstrument: ToneInstrument?
@@ -1207,7 +1222,7 @@ struct FXSlotEditorSheet: View {
                     case .levelRider:
                         LevelRiderEditor(params: $slot.levelRider,
                                          kernel: live(LevelRiderAudioUnit.self)?.kernel)
-                    case .optoComp, .fetComp: CompressorEditor(slot: $slot)
+                    case .optoComp, .fetComp: CompressorEditor(slot: $slot, channels: makeRoomFor)
                     case .feedbackNotch:
                         FeedbackNotchEditor(params: $slot.feedbackNotch,
                                             kernel: live(FeedbackNotchAudioUnit.self)?.kernel)
@@ -1451,6 +1466,8 @@ extension LevelRiderEditor {
 /// One Compressor with two characters: Smooth runs the opto engine, Punchy the FET one
 private struct CompressorEditor: View {
     @Binding var slot: ChannelFXSlot
+    /// The other channels, for the sidechain
+    let channels: [MakeRoomCandidate]
 
     enum Character: CaseIterable, Identifiable {
         case smooth, punchy
@@ -1469,9 +1486,11 @@ private struct CompressorEditor: View {
         character == .smooth ? slot.optoComp.amount : slot.fetComp.amount
     }
 
+    /// A sidechain lives under Custom Values, so one that's on keeps them showing
     private var showsCustom: Bool {
-        character == .smooth ? slot.optoComp.custom || slot.optoComp.amount == nil
-                             : slot.fetComp.custom || slot.fetComp.amount == nil
+        slot.sidechain.enabled
+            || (character == .smooth ? slot.optoComp.custom || slot.optoComp.amount == nil
+                                     : slot.fetComp.custom || slot.fetComp.amount == nil)
     }
 
     var body: some View {
@@ -1505,6 +1524,7 @@ private struct CompressorEditor: View {
             Toggle("Custom Values", isOn: Binding(
                 get: { showsCustom },
                 set: { on in
+                    if !on { slot.sidechain.enabled = false }
                     if character == .smooth {
                         if on { slot.optoComp.custom = true } else { slot.optoComp.snapToAmount() }
                     } else {
@@ -1516,9 +1536,59 @@ private struct CompressorEditor: View {
             Text("Compressor")
         } footer: {
             Text(showsCustom
-                 ? "Turning Custom Values off moves to the nearest Amount."
+                 ? "Turning Custom Values off moves to the nearest Amount and turns the sidechain off."
                  : "Each Amount sets its own make-up gain, so the level stays about the same. Custom Values shows the knobs.")
         }
+
+        if showsCustom { sidechainSection }
+    }
+
+    @ViewBuilder
+    private var sidechainSection: some View {
+        Section {
+            Toggle("Sidechain", isOn: $slot.sidechain.enabled)
+            if slot.sidechain.enabled {
+                Picker("Listen", selection: $slot.sidechain.post) {
+                    Text("Pre").tag(false)
+                    Text("Post").tag(true)
+                }
+                .pickerStyle(.segmented)
+                if channels.isEmpty {
+                    Text("Add another channel first.").foregroundStyle(.secondary)
+                }
+                ForEach(channels) { other in
+                    Toggle(other.name.isEmpty ? "Unnamed channel" : other.name, isOn: Binding(
+                        get: { slot.sidechain.keyChannels.contains(other.id) },
+                        set: { on in
+                            if on {
+                                if !slot.sidechain.keyChannels.contains(other.id) {
+                                    slot.sidechain.keyChannels.append(other.id)
+                                }
+                            } else {
+                                slot.sidechain.keyChannels.removeAll { $0 == other.id }
+                            }
+                        }
+                    ))
+                    .disabled(!slot.sidechain.keyChannels.contains(other.id)
+                              && slot.sidechain.keyChannels.count >= VintageCompressorKernel.maxKeys)
+                }
+            }
+        } header: {
+            Text("Sidechain")
+        } footer: {
+            Text(sidechainFooter)
+        }
+    }
+
+    private var sidechainFooter: String {
+        guard slot.sidechain.enabled else {
+            return "Compress this channel when other channels play instead of when it does: kick → bass, vocals → backing track, talkback → band."
+        }
+        let listen = slot.sidechain.post
+            ? "Post: after their effects and fader, so their fader changes how hard this ducks."
+            : "Pre: as they come in, so their fader doesn't change how hard this ducks."
+        let none = slot.sidechain.keyChannels.isEmpty ? " Pick at least one channel; until then it follows its own signal." : ""
+        return listen + " With several, the loudest drives it. It sees them a few milliseconds late (one audio buffer), so the very front of a kick may get through." + none
     }
 }
 

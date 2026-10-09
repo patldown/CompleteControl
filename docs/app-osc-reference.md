@@ -152,6 +152,8 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `peakReduction` | 0 to 100 | More = more compression |
 | `gain` | 0 to 40 dB | Makeup |
 | `limit` | toggle | 0 Compress (~3:1), 1 Limit (~10:1) |
+| `sidechain` | toggle | Compress when the chosen channels play (picked in the app) |
+| `sidechainPost` | toggle | 1 = hear them after their effects and fader, 0 = as they come in |
 
 ### `fet` — Compressor – Punchy (1176 style)
 | Param | Range | Notes |
@@ -161,6 +163,8 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `ratio` | choice | 0 = 4:1, 1 = 8:1, 2 = 12:1, 3 = 20:1, 4 = All buttons |
 | `attack` | 1 to 7 (whole) | 7 fastest (20 µs), 1 slowest (800 µs) |
 | `release` | 1 to 7 (whole) | 7 fastest (50 ms), 1 slowest (1.1 s) |
+| `sidechain` | toggle | Compress when the chosen channels play (picked in the app) |
+| `sidechainPost` | toggle | 1 = hear them after their effects and fader, 0 = as they come in |
 
 ### `notch` — Feedback Notch
 | Param | Range | Notes |

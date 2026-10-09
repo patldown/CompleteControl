@@ -8,6 +8,7 @@
 
 import Testing
 import Foundation
+import AVFoundation
 @testable import Midi_Set_List
 
 @Suite("Level Rider style")
@@ -134,5 +135,61 @@ struct HarmonyFollowsPitchGuideTests {
         #expect(h.feel == .natural)
         h.feel = .loose
         #expect(h.humanize == 65)
+    }
+}
+
+@Suite("Compressor sidechain")
+@MainActor
+struct CompressorSidechainTests {
+
+    private func run(_ k: VintageCompressorKernel, level: Float) throws -> Float {
+        let frames = 9_600
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)))
+        buffer.frameLength = AVAudioFrameCount(frames)
+        for ch in 0..<2 {
+            let d = buffer.floatChannelData![ch]
+            for i in 0..<frames { d[i] = level * Float(sin(2 * Double.pi * 220 * Double(i) / 48_000)) }
+        }
+        k.process(buffer.mutableAudioBufferList, frameCount: frames)
+        return Float(bitPattern: k.gainReductionBits.load(ordering: .relaxed))
+    }
+
+    @Test func followsTheKeyNotItself() throws {
+        let row = ChannelLevelTable.count - 1
+        let k = VintageCompressorKernel(model: .opto)
+        k.setSampleRate(48_000)
+        k.applyParams(OptoCompParams())          // Medium
+        k.applySidechain(rows: [row], post: false)
+
+        // Loud here, key silent: no compression
+        ChannelLevelTable.pre[row] = -120
+        #expect(try run(k, level: 0.5) < 0.1)
+
+        // Quiet here, key loud: this channel is turned down
+        ChannelLevelTable.pre[row] = -6
+        #expect(try run(k, level: 0.05) > 3)
+
+        // Post reads the other table
+        k.applySidechain(rows: [row], post: true)
+        ChannelLevelTable.post[row] = -120
+        // (the opto's slow stage holds some reduction for a couple of seconds, like the hardware)
+        for _ in 0..<25 { _ = try run(k, level: 0.05) }
+        #expect(try run(k, level: 0.05) < 0.5)
+
+        ChannelLevelTable.pre[row] = -120
+    }
+
+    @Test func noKeysMeansItsOwnSignal() throws {
+        let k = VintageCompressorKernel(model: .opto)
+        k.setSampleRate(48_000)
+        k.applyParams(OptoCompParams())
+        k.applySidechain(rows: [], post: false)
+        #expect(try run(k, level: 0.5) > 3)
+    }
+
+    @Test func oldSlotsHaveNoSidechain() throws {
+        let slot = try JSONDecoder().decode(ChannelFXSlot.self, from: Data(#"{"type": "optoComp"}"#.utf8))
+        #expect(!slot.sidechain.enabled && slot.sidechain.keyChannels.isEmpty && !slot.sidechain.post)
     }
 }
