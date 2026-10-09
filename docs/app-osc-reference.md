@@ -208,7 +208,7 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 |---|---|---|
 | `sensitivity` | 0 to 100 % | Higher gates more of the quiet between notes |
 | `depth` | 0 to 80 dB | How far it turns down when closed |
-| `bleedDuck` | toggle | Only opens for singing, so loud bleed between phrases is turned down too |
+| `bleedDuck` | toggle | Opens For: 1 = Singing (loud bleed between phrases stays down), 0 = Any Sound |
 
 ### `tone` — Tone
 | Param | Range | Notes |

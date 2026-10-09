@@ -217,7 +217,8 @@ struct PunchParams: Codable, Equatable {
 struct SmartGateParams: Codable, Equatable {
     var sensitivity: Float = 50     // %, 0...100; higher gates more
     var depth: Float = 40           // dB the gate turns down when closed, 0...80
-    /// Only open for singing, so loud unpitched bleed between phrases is turned down too
+    /// "Opens For: Singing": only open for singing, so loud bleed between phrases stays down.
+    /// Named for the Pitch Guide setting it replaced.
     var bleedDuck: Bool = false
 
     init() {}
@@ -898,7 +899,7 @@ struct PitchGuideParams: Codable, Equatable {
     /// Transpose and Formant switch off between phrases, so bleed in the gaps isn't shifted
     var shiftOnlyWhileSinging: Bool = true
     /// How far to turn the mic down between phrases; 0 = off. Superseded by Smart Gate's
-    /// Bleed Duck: loading moves it there (see `movingBleedDuckToSmartGate`). Still honoured
+    /// Bleed Duck: loading moves it there (see `moveBleedDuckToSmartGate`). Still honoured
     /// when it can't move (no free slot), and shown in the editor only then.
     var bleedDuck: Float = 0            // dB, -20...0
     /// Balance between processed and dry signal; 100 = fully processed, 0 = bypass
@@ -1011,7 +1012,7 @@ struct ChannelFXSlot: Codable, Equatable {
 // MARK: - Bleed Duck migration
 
 extension Array where Element == ChannelFXSlot {
-    /// Bleed Duck used to be a Pitch Guide setting; it's now Smart Gate's Bleed Duck mode.
+    /// Bleed Duck used to be a Pitch Guide setting; it's now Smart Gate's "Opens For: Singing".
     /// Moves each Pitch Guide's duck to a Smart Gate: the channel's existing one if it has
     /// one, otherwise a new one right after the Pitch Guide, where the duck acted (effects
     /// shift along into a free slot, before or after). A duck with no free slot to move

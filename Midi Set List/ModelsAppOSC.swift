@@ -288,7 +288,7 @@ extension BuiltInFXType {
                 get: { Double($0.smartGate.sensitivity) }, set: { $0.smartGate.sensitivity = Float($1) }),
             num("depth", "Depth", 0...80, "dB", "How far it turns down when closed.",
                 get: { Double($0.smartGate.depth) }, set: { $0.smartGate.depth = Float($1) }),
-            toggle("bleedDuck", "Bleed Duck", "Only opens for singing, so loud bleed between phrases is turned down too.",
+            toggle("bleedDuck", "Opens For Singing", "1 = only opens for singing, so loud bleed between phrases stays down. 0 = any sound.",
                    get: { $0.smartGate.bleedDuck }, set: { $0.smartGate.bleedDuck = $1 }),
         ]
         case .tone: [
