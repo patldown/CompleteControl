@@ -75,6 +75,7 @@ struct Midi_Set_ListApp: App {
                     // Restore OSC connections from last session
                     let oscRequest = NSFetchRequest<OSCTarget>(entityName: "OSCTarget")
                     let targets = (try? persistence.viewContext.fetch(oscRequest)) ?? []
+                    oscManager.targetsProvider = { (try? persistence.viewContext.fetch(oscRequest)) ?? [] }
                     oscManager.restoreConnections(from: targets)
 
                     migrateToPerSetListSongs(context: persistence.viewContext)

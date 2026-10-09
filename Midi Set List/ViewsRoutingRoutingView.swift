@@ -190,6 +190,7 @@ struct ChannelStripView: View {
     @State private var showingMacroSave = false
     @State private var newMacroName = ""
     @State private var confirmingRemove = false
+    @State private var stripExpanded = false
     /// Shared by every strip so they flip together and stay lined up side by side
     @AppStorage("routingFXExpanded") private var fxExpanded = false
 
@@ -214,8 +215,10 @@ struct ChannelStripView: View {
             stripFooter
             Divider()
             macroSection
+            stripFader
         }
-        .frame(width: 185)
+        .frame(width: stripExpanded ? 270 : 185)
+        .animation(.snappy, value: stripExpanded)
         .frame(maxHeight: .infinity, alignment: .top)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
@@ -284,6 +287,15 @@ struct ChannelStripView: View {
                 .onChange(of: nameFocused) { _, focused in
                     if focused { nameBeforeEdit = channel.name } else { finishRename() }
                 }
+
+                Button {
+                    withAnimation(.snappy) { stripExpanded.toggle() }
+                } label: {
+                    Image(systemName: stripExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(stripExpanded ? "Collapse strip" : "Expand strip")
 
                 Button(role: .destructive) {
                     confirmingRemove = true
@@ -486,6 +498,32 @@ struct ChannelStripView: View {
         .padding(10)
     }
 
+    // MARK: Fader (pinned to bottom)
+
+    @ViewBuilder
+    private var stripFader: some View {
+        let link = MixerLink.shared
+        if link.settings.showFader {
+            let s = link.settings
+            let db = link.faderDB[channel.id]
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Fader").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(db.map { MixerLinkSettings.faderLabel($0, floor: s.faderFloorDB) } ?? "—")
+                        .font(.caption.monospacedDigit())
+                }
+                Slider(value: Binding(
+                    get: { Double(s.faderFloat(db ?? s.faderFloorDB)) },
+                    set: { link.setFader(s.faderDB(Float($0)), for: channel) }
+                ), in: 0...1)
+                .controlSize(.small)
+            }
+            .padding(10)
+        }
+    }
+
     /// Name editing ended: point /app/ macros and song commands at the new name
     private func finishRename() {
         defer { nameBeforeEdit = nil }
@@ -529,10 +567,9 @@ struct MixerLinkControls: View {
 
     var body: some View {
         let s = link.settings
-        if s.showGain || s.showFader {
+        if s.showGain {
             VStack(alignment: .leading, spacing: 6) {
-                if s.showGain { gainRow(s) }
-                if s.showFader { faderRow(s) }
+                gainRow(s)
                 if let state = link.autoGain[channel.id] { autoGainStatus(state) }
             }
             .padding(.top, 2)
@@ -581,23 +618,22 @@ struct MixerLinkControls: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Auto Gain")
-        }
-    }
-
-    private func faderRow(_ s: MixerLinkSettings) -> some View {
-        let db = link.faderDB[channel.id]
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Fader").font(.caption2).foregroundStyle(.secondary)
-                Spacer()
-                Text(db.map { MixerLinkSettings.faderLabel($0, floor: s.faderFloorDB) } ?? "—")
-                    .font(.caption.monospacedDigit())
+            .contextMenu {
+                Section("Target: \(Int(link.settings.autoGainTargetDB)) dBFS") {
+                    ForEach(MixerLinkSettings.autoGainPresets) { preset in
+                        Button {
+                            link.settings.autoGainTargetDB = preset.targetDB
+                            Task { await link.runAutoGain(for: channel.id) }
+                        } label: {
+                            Label(
+                                "\(preset.name) (\(Int(preset.targetDB)) dBFS)",
+                                systemImage: link.settings.autoGainTargetDB == preset.targetDB
+                                    ? "checkmark.circle.fill" : "waveform"
+                            )
+                        }
+                    }
+                }
             }
-            Slider(value: Binding(
-                get: { Double(s.faderFloat(db ?? s.faderFloorDB)) },
-                set: { link.setFader(s.faderDB(Float($0)), for: channel) }
-            ), in: 0...1)
-            .controlSize(.small)
         }
     }
 

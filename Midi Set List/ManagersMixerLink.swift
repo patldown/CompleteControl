@@ -48,7 +48,7 @@ struct MixerLinkSettings: Codable, Equatable {
 
     /// Auto Gain listens for this long and sets the loudest part to `autoGainTargetDB`
     var autoGainSeconds: Double = 6
-    var autoGainTargetDB: Float = -12
+    var autoGainTargetDB: Float = -18
 
     init() {}
 
@@ -176,6 +176,23 @@ extension MixerLinkSettings {
     static func faderLabel(_ db: Float, floor: Float) -> String {
         db <= floor + 0.05 ? "−∞" : String(format: "%+.1f dB", db)
     }
+}
+
+// MARK: - Auto Gain Presets
+
+struct AutoGainPreset: Identifiable {
+    let name: String
+    let targetDB: Float
+    let description: String
+    var id: String { name }
+}
+
+extension MixerLinkSettings {
+    static let autoGainPresets: [AutoGainPreset] = [
+        AutoGainPreset(name: "Vocals",      targetDB: -18, description: "Lead/backing vocals — headroom for dynamics and mix bus processing"),
+        AutoGainPreset(name: "Instrument",  targetDB: -12, description: "Acoustic guitar, keys, horns — punchy but clean"),
+        AutoGainPreset(name: "Percussion",  targetDB: -6,  description: "Kick, snare, loud sources — hot gain for transient punch"),
+    ]
 }
 
 // MARK: - Link

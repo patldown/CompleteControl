@@ -20,10 +20,14 @@ class OSCManager {
     private var listeners:   [UUID: NWListener]   = [:]
     private var keepaliveTimers: [UUID: DispatchSourceTimer] = [:]
     private let oscQueue = DispatchQueue(label: "com.midisetlist.osc", qos: .userInteractive)
+    private let pathMonitor = NWPathMonitor()
 
     /// UUIDs of targets the user has connected to — persisted so they auto-reconnect on launch.
     private var desiredTargetIDs: Set<UUID> = []
     private let desiredTargetIDsKey = "osc.desiredTargetIDs"
+
+    /// Called by the app to provide the current OSC target list for auto-reconnect on network change.
+    var targetsProvider: (() -> [OSCTarget])?
 
     // MARK: - Persistence helpers
 
@@ -39,6 +43,18 @@ class OSCManager {
         for target in targets where desiredTargetIDs.contains(target.id) {
             connect(to: target)
         }
+        // Start monitoring the network path so we can reconnect when WiFi comes back
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                guard let self, let targets = self.targetsProvider?() else { return }
+                for target in targets where self.desiredTargetIDs.contains(target.id)
+                                        && !self.connectedTargets.contains(target.id) {
+                    self.connect(to: target)
+                }
+            }
+        }
+        pathMonitor.start(queue: oscQueue)
     }
 
     // MARK: - Connection Management
@@ -84,6 +100,11 @@ class OSCManager {
 
         startKeepalive(for: target)
         startListener(for: target)
+
+        // Pull current fader/gain values from the mixer after connection settles
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            MixerLink.shared.requestCurrentValues()
+        }
     }
 
     func disconnect(from target: OSCTarget) {
