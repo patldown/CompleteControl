@@ -11,7 +11,6 @@ import AVFoundation
 import CoreData
 import SwiftUI
 import Synchronization
-import UniformTypeIdentifiers
 
 // MARK: - Top-level tab view
 
@@ -194,7 +193,8 @@ struct ChannelStripView: View {
     @State private var newMacroName = ""
     @State private var confirmingRemove = false
     @State private var showingWizard = false
-    @State private var draggingFXIndex: Int?
+    /// FX row a drag is hovering over, highlighted as the drop spot
+    @State private var fxDropTarget: Int?
     /// Shared by every strip so they flip together and stay lined up side by side
     @AppStorage("routingFXExpanded") private var fxExpanded = false
 
@@ -393,16 +393,20 @@ struct ChannelStripView: View {
                     } onBypassToggle: {
                         toggleBypass(i)
                     }
-                    .opacity(draggingFXIndex == i ? 0.4 : 1.0)
-                    .onDrag {
-                        draggingFXIndex = i
-                        return NSItemProvider(object: "\(i)" as NSString)
-                    }
-                    .onDrop(of: [UTType.text], isTargeted: nil) { _ in
-                        defer { draggingFXIndex = nil }
-                        guard let src = draggingFXIndex, src != i else { return false }
+                    .background(fxDropTarget == i ? Color.accentColor.opacity(0.15) : .clear)
+                    // The payload carries the source row, so no state is left behind
+                    // when a drag is cancelled. The channel ID keeps drops on other
+                    // strips from moving this strip's effects.
+                    .draggable("\(channelID.uuidString):\(i)")
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let parts = items.first?.split(separator: ":"), parts.count == 2,
+                              String(parts[0]) == channelID.uuidString,
+                              let src = Int(parts[1]), (0..<6).contains(src), src != i
+                        else { return false }
                         moveFXSlot(from: src, to: i)
                         return true
+                    } isTargeted: { targeted in
+                        if targeted { fxDropTarget = i } else if fxDropTarget == i { fxDropTarget = nil }
                     }
                     .contextMenu {
                         if channel.slots[i].type != nil {
