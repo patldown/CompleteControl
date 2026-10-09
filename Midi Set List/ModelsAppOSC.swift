@@ -329,6 +329,9 @@ extension BuiltInFXType {
                 get: { Double($0.harmony.pickiness) }, set: { $0.harmony.pickiness = Float($1) }),
             num("gate", "Gate", -70...(-20), "dBFS", "Quieter input (bleed) gets no harmonies.",
                 get: { Double($0.harmony.gateThreshold) }, set: { $0.harmony.gateThreshold = Float($1) }),
+            toggle("usePitchGuide", "Use Pitch Guide's Settings",
+                   "Key, voice range, pickiness and gate come from the channel's Pitch Guide (when it has one).",
+                   get: { $0.harmony.usePitchGuide }, set: { $0.harmony.usePitchGuide = $1 }),
         ]
         case .microDetune: [
             num("pitchA", "Pitch A", 0...50, "cents", "Voice A (left) shifted up. 9 = classic.",

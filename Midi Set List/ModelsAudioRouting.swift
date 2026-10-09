@@ -33,8 +33,8 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .reverb:     "Reverb"
         case .delay:      "Delay"
         case .levelRider: "Level Rider"
-        case .optoComp:   "Opto Comp (LA-2A style)"
-        case .fetComp:    "FET Comp (1176 style)"
+        case .optoComp:   "Compressor – Smooth (LA-2A style)"
+        case .fetComp:    "Compressor – Punchy (1176 style)"
         case .feedbackNotch: "Feedback Notch"
         case .pitchGuide: "Pitch Guide"
         case .microDetune: "Micro Detune (widener)"
@@ -106,21 +106,125 @@ struct DelayParams: Codable, Equatable {
 struct LevelRiderParams: Codable, Equatable {
     var inputTrim: Float = 0        // dB, -12...+12; applied before the detector
     var targetLevel: Float = -18    // dBFS, -30...-6
+    // Defaults are the Steady style
     var maxCut: Float = -9          // dB, -18...0
     var maxBoost: Float = 4         // dB, 0...+9
     var cutSpeed: Float = 80        // ms, 20...300  (how fast to cut)
     var boostSpeed: Float = 600     // ms, 200...2000 (how fast to boost)
     var gateThreshold: Float = -50  // dBFS, -60...-20; below this, gain freezes
     var outputTrim: Float = 0       // dB, -12...+12; applied after rider
+    /// Show every slider instead of the Style choice
+    var custom: Bool = false
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = LevelRiderParams()
+        inputTrim = try c.decodeIfPresent(Float.self, forKey: .inputTrim) ?? d.inputTrim
+        targetLevel = try c.decodeIfPresent(Float.self, forKey: .targetLevel) ?? d.targetLevel
+        maxCut = try c.decodeIfPresent(Float.self, forKey: .maxCut) ?? d.maxCut
+        maxBoost = try c.decodeIfPresent(Float.self, forKey: .maxBoost) ?? d.maxBoost
+        cutSpeed = try c.decodeIfPresent(Float.self, forKey: .cutSpeed) ?? d.cutSpeed
+        boostSpeed = try c.decodeIfPresent(Float.self, forKey: .boostSpeed) ?? d.boostSpeed
+        gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
+        outputTrim = try c.decodeIfPresent(Float.self, forKey: .outputTrim) ?? d.outputTrim
+        // Saved before the styles: hand-set values stay exact, shown as sliders
+        custom = try c.decodeIfPresent(Bool.self, forKey: .custom) ?? !matchesStyle
+    }
+
+    /// How hard it rides the level
+    enum Style: CaseIterable, Identifiable {
+        case gentle, steady, firm
+        var id: Self { self }
+
+        var name: String {
+            switch self { case .gentle: "Gentle"; case .steady: "Steady"; case .firm: "Firm" }
+        }
+
+        var sound: String {
+            switch self {
+            case .gentle: "Evens out big jumps only. You'll barely notice it."
+            case .steady: "Keeps the voice at an even level, line to line."
+            case .firm:   "Always right up front. Quiet words come up fast."
+            }
+        }
+
+        var maxCut: Float { switch self { case .gentle: -6; case .steady: -9; case .firm: -12 } }
+        var maxBoost: Float { switch self { case .gentle: 3; case .steady: 4; case .firm: 6 } }
+        var cutSpeed: Float { switch self { case .gentle: 150; case .steady: 80; case .firm: 40 } }
+        var boostSpeed: Float { switch self { case .gentle: 1200; case .steady: 600; case .firm: 400 } }
+    }
+
+    /// The style these values match, or nil
+    var style: Style? {
+        get {
+            Style.allCases.first {
+                $0.maxCut == maxCut && $0.maxBoost == maxBoost
+                    && $0.cutSpeed == cutSpeed && $0.boostSpeed == boostSpeed
+            }
+        }
+        set {
+            guard let newValue else { return }
+            maxCut = newValue.maxCut; maxBoost = newValue.maxBoost
+            cutSpeed = newValue.cutSpeed; boostSpeed = newValue.boostSpeed
+        }
+    }
+
+    /// The style describes everything not shown beside it (Target and Gate are shown)
+    var matchesStyle: Bool { style != nil && inputTrim == 0 && outputTrim == 0 }
+
+    /// Moves to the nearest style, trims back to 0 (leaving Custom)
+    mutating func snapToStyle() {
+        let nearest = Style.allCases.min {
+            abs($0.cutSpeed - cutSpeed) / 110 + abs($0.maxCut - maxCut) / 6
+                < abs($1.cutSpeed - cutSpeed) / 110 + abs($1.maxCut - maxCut) / 6
+        }
+        style = nearest
+        inputTrim = 0; outputTrim = 0
+        custom = false
+    }
 }
 
 // MARK: - Compressor parameters
 
 /// LA-2A style: two knobs and a Compress/Limit switch.
 struct OptoCompParams: Codable, Equatable {
-    var peakReduction: Float = 40   // 0...100; higher = more compression
-    var gain: Float = 6             // dB makeup, 0...40
+    // Defaults are Medium
+    var peakReduction: Float = 68   // 0...100; higher = more compression
+    var gain: Float = 5             // dB makeup, 0...40
     var limitMode: Bool = false     // false = Compress (~3:1), true = Limit (~10:1)
+    /// Show the knobs instead of the Amount choice
+    var custom: Bool = false
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        peakReduction = try c.decodeIfPresent(Float.self, forKey: .peakReduction) ?? 40
+        gain = try c.decodeIfPresent(Float.self, forKey: .gain) ?? 6
+        limitMode = try c.decodeIfPresent(Bool.self, forKey: .limitMode) ?? false
+        // Saved before the choices: keep the exact values, shown as knobs unless they match one
+        custom = try c.decodeIfPresent(Bool.self, forKey: .custom) ?? (amount == nil)
+    }
+
+    var amount: CompressionAmount? {
+        get {
+            CompressionAmount.allCases.first {
+                let o = $0.opto
+                return o.peakReduction == peakReduction && o.gain == gain && o.limit == limitMode
+            }
+        }
+        set {
+            guard let o = newValue?.opto else { return }
+            peakReduction = o.peakReduction; gain = o.gain; limitMode = o.limit
+        }
+    }
+
+    mutating func snapToAmount() {
+        amount = CompressionAmount.allCases.min {
+            abs($0.opto.peakReduction - peakReduction) < abs($1.opto.peakReduction - peakReduction)
+        }
+        custom = false
+    }
 }
 
 /// 1176 style: Input drives into a fixed threshold, Output sets level.
@@ -138,11 +242,79 @@ struct FETCompParams: Codable, Equatable {
             }
         }
     }
+    // Defaults are Medium
     var input: Float = 6            // dB, 0...48
-    var output: Float = 0           // dB, -24...+12
-    var ratio: Ratio = .r4
+    var output: Float = 2           // dB, -24...+12
+    var ratio: Ratio = .r8
     var attack: Float = 3           // 1 (slow, 800 µs) ... 7 (fast, 20 µs)
     var release: Float = 5          // 1 (slow, 1.1 s) ... 7 (fast, 50 ms)
+    /// Show the knobs instead of the Amount choice
+    var custom: Bool = false
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        input = try c.decodeIfPresent(Float.self, forKey: .input) ?? 6
+        output = try c.decodeIfPresent(Float.self, forKey: .output) ?? 0
+        ratio = (try? c.decodeIfPresent(Ratio.self, forKey: .ratio)) ?? .r4
+        attack = try c.decodeIfPresent(Float.self, forKey: .attack) ?? 3
+        release = try c.decodeIfPresent(Float.self, forKey: .release) ?? 5
+        custom = try c.decodeIfPresent(Bool.self, forKey: .custom) ?? (amount == nil)
+    }
+
+    var amount: CompressionAmount? {
+        get {
+            CompressionAmount.allCases.first {
+                let f = $0.fet
+                return f.input == input && f.output == output && f.ratio == ratio
+                    && f.attack == attack && f.release == release
+            }
+        }
+        set {
+            guard let f = newValue?.fet else { return }
+            input = f.input; output = f.output; ratio = f.ratio; attack = f.attack; release = f.release
+        }
+    }
+
+    mutating func snapToAmount() {
+        amount = CompressionAmount.allCases.min { abs($0.fet.input - input) < abs($1.fet.input - input) }
+        custom = false
+    }
+}
+
+/// The Compressor's Amount choice. Each sets its own make-up gain so the level stays
+/// roughly where it was (for a voice around -18 dBFS).
+enum CompressionAmount: CaseIterable, Identifiable {
+    case light, medium, heavy
+    var id: Self { self }
+
+    var name: String {
+        switch self { case .light: "Light"; case .medium: "Medium"; case .heavy: "Heavy" }
+    }
+
+    var sound: String {
+        switch self {
+        case .light:  "Just takes the edge off the loudest moments."
+        case .medium: "Holds it together: a solid, even sound."
+        case .heavy:  "Squashed and in your face. Every word the same level."
+        }
+    }
+
+    var opto: (peakReduction: Float, gain: Float, limit: Bool) {
+        switch self {
+        case .light:  (56, 3, false)
+        case .medium: (68, 5, false)
+        case .heavy:  (83, 8, true)
+        }
+    }
+
+    var fet: (input: Float, output: Float, ratio: FETCompParams.Ratio, attack: Float, release: Float) {
+        switch self {
+        case .light:  (0, 3, .r4, 3, 5)
+        case .medium: (6, 2, .r8, 3, 5)
+        case .heavy:  (12, 1, .r12, 4, 6)
+        }
+    }
 }
 
 // MARK: - Feedback Notch parameters
@@ -571,6 +743,9 @@ struct HarmonyParams: Codable, Equatable {
     var pickiness: Float = 50       // %, 0...100
     var gateThreshold: Float = -45  // dBFS, -70...-20
     var voiceRange: VoiceRange = .mid
+    /// Take key and detection (the fields in `syncKeyAndDetection`) from the channel's
+    /// Pitch Guide, so they're set once. Only applies when the channel has one.
+    var usePitchGuide = true
 
     init() {}
 
@@ -592,12 +767,47 @@ struct HarmonyParams: Codable, Equatable {
         pickiness = try c.decodeIfPresent(Float.self, forKey: .pickiness) ?? d.pickiness
         gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
         voiceRange = (try? c.decodeIfPresent(VoiceRange.self, forKey: .voiceRange)) ?? d.voiceRange
+        // Saved before the link: only link if key and detection were never changed, so a
+        // hand-set Harmony keeps its own
+        usePitchGuide = try c.decodeIfPresent(Bool.self, forKey: .usePitchGuide)
+            ?? (songKeyDrive == d.songKeyDrive && pickiness == d.pickiness
+                && gateThreshold == d.gateThreshold && voiceRange == d.voiceRange)
     }
 
     private enum FirstVersionKeys: String, CodingKey { case passLead }
 
     /// Lead Level at or below this is off
     static let leadOff: Float = -60
+
+    /// Copies key and detection from a Pitch Guide; true if anything changed
+    mutating func syncKeyAndDetection(from p: PitchGuideParams) -> Bool {
+        let before = self
+        songKeyDrive = p.songKeyDrive; key = p.key; scale = p.scale
+        voiceRange = p.voiceRange; pickiness = p.pickiness; gateThreshold = p.gateThreshold
+        return self != before
+    }
+
+    /// How much the voices drift from each other, like real singers
+    enum Feel: CaseIterable, Identifiable {
+        case tight, natural, loose
+        var id: Self { self }
+        var name: String {
+            switch self { case .tight: "Tight"; case .natural: "Natural"; case .loose: "Loose" }
+        }
+        var sound: String {
+            switch self {
+            case .tight:   "Locked to the singer, like a studio double."
+            case .natural: "Like real backing singers."
+            case .loose:   "A loose group: each voice drifts and lags a little."
+            }
+        }
+        var humanize: Float { switch self { case .tight: 10; case .natural: 30; case .loose: 65 } }
+    }
+
+    var feel: Feel? {
+        get { Feel.allCases.first { $0.humanize == humanize } }
+        set { if let newValue { humanize = newValue.humanize } }
+    }
 
     var leadGain: Float { leadLevel <= Self.leadOff ? 0 : powf(10, leadLevel / 20) }
 
@@ -1177,6 +1387,24 @@ struct ChannelFXSlot: Codable, Equatable {
         punch = try c.decodeIfPresent(PunchParams.self, forKey: .punch) ?? .init()
         smartGate = try c.decodeIfPresent(SmartGateParams.self, forKey: .smartGate) ?? .init()
     }
+}
+
+// MARK: - Harmony follows Pitch Guide
+
+extension Array where Element == ChannelFXSlot {
+    /// Each Harmony set to use the Pitch Guide's settings gets the channel's first Pitch
+    /// Guide's key and detection. True if anything changed.
+    @discardableResult
+    mutating func syncHarmonyWithPitchGuide() -> Bool {
+        guard let guide = first(where: { $0.type == .pitchGuide })?.pitchGuide else { return false }
+        var changed = false
+        for i in indices where self[i].type == .harmony && self[i].harmony.usePitchGuide {
+            if self[i].harmony.syncKeyAndDetection(from: guide) { changed = true }
+        }
+        return changed
+    }
+
+    var hasPitchGuide: Bool { contains { $0.type == .pitchGuide } }
 }
 
 // MARK: - Bleed Duck migration

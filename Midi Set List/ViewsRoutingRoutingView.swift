@@ -249,11 +249,15 @@ struct ChannelStripView: View {
         .sheet(item: $fxEditTarget) { target in
             FXSlotEditorSheet(
                 slot: channel.slots[target.slotIndex],
-                liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: target.slotIndex)
+                liveUnit: engine.liveAudioUnit(channelID: channelID, slotIndex: target.slotIndex),
+                channelHasPitchGuide: channel.slots.hasPitchGuide
             ) { updatedSlot in
                 let typeChanged = updatedSlot.type != channel.slots[target.slotIndex].type
                 var c = channel
                 c.slots[target.slotIndex] = updatedSlot
+                // A Harmony using the Pitch Guide's settings follows it (store.update does the
+                // same; done here too so the engine below gets the synced slots)
+                c.slots.syncHarmonyWithPitchGuide()
                 store.update(c)
                 guard engine.isRunning else { return }
                 if typeChanged {
@@ -911,8 +915,8 @@ extension BuiltInFXType {
         case .reverb:        "Reverb"
         case .delay:         "Delay"
         case .levelRider:    "Rider"
-        case .optoComp:      "Opto"
-        case .fetComp:       "FET"
+        case .optoComp:      "Comp"
+        case .fetComp:       "Comp"
         case .feedbackNotch: "Notch"
         case .pitchGuide:    "Pitch"
         case .microDetune:   "Detune"
@@ -954,14 +958,19 @@ extension ChannelFXSlot {
             return ["\(Int((delay.delayTime * 1000).rounded())) ms", "FB \(Int(delay.feedback))%",
                     "Wet \(Int(delay.wetDryMix))%"]
         case .levelRider:
+            if !levelRider.custom, levelRider.matchesStyle, let style = levelRider.style {
+                return [style.name, "Level \(Int(levelRider.targetLevel))", "Gate \(Int(levelRider.gateThreshold))"]
+            }
             return ["Target \(Int(levelRider.targetLevel))",
                     "+\(Int(levelRider.maxBoost)) / \(Int(levelRider.maxCut)) dB",
                     "Gate \(Int(levelRider.gateThreshold))"]
         case .optoComp:
+            if !optoComp.custom, let amount = optoComp.amount { return ["Smooth", amount.name] }
             return [optoComp.limitMode ? "Limit" : "Compress",
                     "PR \(Int(optoComp.peakReduction))",
                     "Gain +\(Int(optoComp.gain))"]
         case .fetComp:
+            if !fetComp.custom, let amount = fetComp.amount { return ["Punchy", amount.name] }
             return [fetComp.ratio == .allButtons ? "All buttons" : "\(fetComp.ratio.label):1",
                     "In \(Int(fetComp.input)) Out \(db(fetComp.output.rounded()))",
                     "Atk \(Int(fetComp.attack)) Rel \(Int(fetComp.release))"]
@@ -1109,14 +1118,28 @@ struct FXSlotEditorSheet: View {
     private let original: ChannelFXSlot
     /// The slot's running AU (Feedback Notch ring-out, Pitch Guide live tuning and meter)
     let liveUnit: AUAudioUnit?
+    /// Harmony can take its key and detection from it
+    let channelHasPitchGuide: Bool
     let onSave: (ChannelFXSlot) -> Void
 
-    init(slot: ChannelFXSlot, liveUnit: AUAudioUnit? = nil,
+    init(slot: ChannelFXSlot, liveUnit: AUAudioUnit? = nil, channelHasPitchGuide: Bool = false,
          onSave: @escaping (ChannelFXSlot) -> Void) {
         _slot = State(initialValue: slot)
         original = slot
         self.liveUnit = liveUnit
+        self.channelHasPitchGuide = channelHasPitchGuide
         self.onSave = onSave
+    }
+
+    /// One "Compressor" in the list; its Character picks the Smooth (opto) or Punchy (FET) engine
+    private var typeSelection: Binding<BuiltInFXType?> {
+        Binding(
+            get: { slot.type == .fetComp ? .optoComp : slot.type },
+            set: { new in
+                if new == .optoComp, slot.type == .fetComp { return }
+                slot.type = new
+            }
+        )
     }
 
     /// Only hand the live unit to an editor of the same type it was built for
@@ -1128,10 +1151,11 @@ struct FXSlotEditorSheet: View {
         NavigationStack {
             Form {
                 Section("Effect") {
-                    Picker("Type", selection: $slot.type) {
+                    Picker("Type", selection: typeSelection) {
                         Text("None").tag(Optional<BuiltInFXType>.none)
-                        ForEach(BuiltInFXType.allCases) { type in
-                            Label(type.displayName, systemImage: type.systemImage)
+                        ForEach(BuiltInFXType.allCases.filter { $0 != .fetComp }) { type in
+                            Label(type == .optoComp ? "Compressor" : type.displayName,
+                                  systemImage: type == .optoComp ? "gauge.with.dots.needle.33percent" : type.systemImage)
                                 .tag(Optional(type))
                         }
                     }
@@ -1148,8 +1172,7 @@ struct FXSlotEditorSheet: View {
                     case .levelRider:
                         LevelRiderEditor(params: $slot.levelRider,
                                          kernel: live(LevelRiderAudioUnit.self)?.kernel)
-                    case .optoComp:   OptoCompEditor(params: $slot.optoComp)
-                    case .fetComp:    FETCompEditor(params: $slot.fetComp)
+                    case .optoComp, .fetComp: CompressorEditor(slot: $slot)
                     case .feedbackNotch:
                         FeedbackNotchEditor(params: $slot.feedbackNotch,
                                             kernel: live(FeedbackNotchAudioUnit.self)?.kernel)
@@ -1160,7 +1183,7 @@ struct FXSlotEditorSheet: View {
                         MicroDetuneEditor(params: $slot.microDetune,
                                           kernel: live(MicroDetuneAudioUnit.self)?.kernel)
                     case .harmony:
-                        HarmonyEditor(params: $slot.harmony,
+                        HarmonyEditor(params: $slot.harmony, linked: channelHasPitchGuide,
                                       kernel: live(HarmonyAudioUnit.self)?.kernel)
                     case .piezoBody:
                         PiezoBodyEditor(params: $slot.piezoBody,
@@ -1289,53 +1312,84 @@ private struct LevelRiderEditor: View {
     @Binding var params: LevelRiderParams
     let kernel: LevelRiderKernel?
 
+    /// Sliders when asked for, or when the values match no style (e.g. set over OSC)
+    private var showsCustom: Bool { params.custom || !params.matchesStyle }
+
     var body: some View {
         if let kernel {
             LearnVoiceSection(
                 readLevel: { Float(bitPattern: kernel.levelDBBits.load(ordering: .relaxed)) },
                 describe: { levels in
                     let s = Self.settings(for: levels)
-                    return "Apply sets Target \(Int(s.target)) dBFS, Max Boost +\(Int(s.maxBoost)) dB, Max Cut \(Int(s.maxCut)) dB and Gate \(Int(s.gate)) dBFS. Tap Done to keep them."
+                    return showsCustom
+                        ? "Apply sets Target \(Int(s.target)) dBFS, Max Boost +\(Int(s.maxBoost)) dB, Max Cut \(Int(s.maxCut)) dB and Gate \(Int(s.gate)) dBFS. Tap Done to keep them."
+                        : "Apply sets Level to \(Int(s.target)) dBFS and Gate to \(Int(s.gate)) dBFS. Tap Done to keep them."
                 },
                 apply: { levels in
                     let s = Self.settings(for: levels)
                     params.targetLevel = s.target
-                    params.maxBoost = s.maxBoost
-                    params.maxCut = s.maxCut
                     params.gateThreshold = s.gate
+                    // Boost and cut ranges belong to the Style unless Custom
+                    if showsCustom {
+                        params.maxBoost = s.maxBoost
+                        params.maxCut = s.maxCut
+                    }
                 }
             )
         }
-        Section("Input") {
-            LabeledContent("Trim: \(String(format: "%+.1f", params.inputTrim)) dB") {
-                Slider(value: $params.inputTrim, in: -12.0...12.0)
+        if showsCustom {
+            Section("Input") {
+                LabeledContent("Trim: \(String(format: "%+.1f", params.inputTrim)) dB") {
+                    Slider(value: $params.inputTrim, in: -12.0...12.0)
+                }
             }
         }
-        Section("Level Rider") {
-            LabeledContent("Target: \(Int(params.targetLevel)) dBFS") {
+        Section {
+            LabeledContent("\(showsCustom ? "Target" : "Level"): \(Int(params.targetLevel)) dBFS") {
                 Slider(value: $params.targetLevel, in: -30.0...(-6.0))
             }
-            LabeledContent("Max Cut: \(Int(params.maxCut)) dB") {
-                Slider(value: $params.maxCut, in: -18.0...0.0)
+            if showsCustom {
+                LabeledContent("Max Cut: \(Int(params.maxCut)) dB") {
+                    Slider(value: $params.maxCut, in: -18.0...0.0)
+                }
+                LabeledContent("Max Boost: +\(Int(params.maxBoost)) dB") {
+                    Slider(value: $params.maxBoost, in: 0.0...9.0)
+                }
+                LabeledContent("Cut Speed: \(Int(params.cutSpeed)) ms") {
+                    Slider(value: $params.cutSpeed, in: 20.0...300.0)
+                }
+                LabeledContent("Boost Speed: \(Int(params.boostSpeed)) ms") {
+                    Slider(value: $params.boostSpeed, in: 200.0...2000.0)
+                }
+            } else {
+                let style = params.style ?? .steady
+                DescribedChoice("Style", style.sound, selection: Binding(
+                    get: { style }, set: { params.style = $0 }
+                )) { $0.name }
             }
-            LabeledContent("Max Boost: +\(Int(params.maxBoost)) dB") {
-                Slider(value: $params.maxBoost, in: 0.0...9.0)
-            }
-            LabeledContent("Cut Speed: \(Int(params.cutSpeed)) ms") {
-                Slider(value: $params.cutSpeed, in: 20.0...300.0)
-            }
-            LabeledContent("Boost Speed: \(Int(params.boostSpeed)) ms") {
-                Slider(value: $params.boostSpeed, in: 200.0...2000.0)
-            }
+            Toggle("Custom Values", isOn: Binding(
+                get: { showsCustom },
+                set: { on in
+                    if on { params.custom = true } else { params.snapToStyle() }
+                }
+            ))
+        } header: {
+            Text("Level Rider")
+        } footer: {
+            Text(showsCustom
+                 ? "Turning Custom Values off moves to the nearest Style and sets both Trims to 0."
+                 : "Level is where it holds the voice; Learn Voice sets it for you. Custom Values shows the range and speeds behind each Style.")
         }
         Section("Noise Gate") {
             LabeledContent("Threshold: \(Int(params.gateThreshold)) dBFS") {
                 Slider(value: $params.gateThreshold, in: -60.0...(-20.0))
             }
         }
-        Section("Output") {
-            LabeledContent("Trim: \(String(format: "%+.1f", params.outputTrim)) dB") {
-                Slider(value: $params.outputTrim, in: -12.0...12.0)
+        if showsCustom {
+            Section("Output") {
+                LabeledContent("Trim: \(String(format: "%+.1f", params.outputTrim)) dB") {
+                    Slider(value: $params.outputTrim, in: -12.0...12.0)
+                }
             }
         }
     }
@@ -1352,10 +1406,84 @@ extension LevelRiderEditor {
     }
 }
 
-private struct OptoCompEditor: View {
-    @Binding var params: OptoCompParams
+/// One Compressor with two characters: Smooth runs the opto engine, Punchy the FET one
+private struct CompressorEditor: View {
+    @Binding var slot: ChannelFXSlot
+
+    enum Character: CaseIterable, Identifiable {
+        case smooth, punchy
+        var id: Self { self }
+        var name: String { self == .smooth ? "Smooth" : "Punchy" }
+        var sound: String {
+            self == .smooth
+                ? "Gentle and even, like an LA-2A. Great on vocals and bass."
+                : "Fast and grabby, like an 1176. Great on drums, guitar and aggressive vocals."
+        }
+    }
+
+    private var character: Character { slot.type == .fetComp ? .punchy : .smooth }
+
+    private var amount: CompressionAmount? {
+        character == .smooth ? slot.optoComp.amount : slot.fetComp.amount
+    }
+
+    private var showsCustom: Bool {
+        character == .smooth ? slot.optoComp.custom || slot.optoComp.amount == nil
+                             : slot.fetComp.custom || slot.fetComp.amount == nil
+    }
+
     var body: some View {
         Section {
+            DescribedChoice("Character", character.sound, selection: Binding(
+                get: { character },
+                set: { new in
+                    guard new != character else { return }
+                    // Carry the Amount across; knob settings don't translate, so Custom starts at Medium
+                    let carried: CompressionAmount = showsCustom ? .medium : (amount ?? .medium)
+                    slot.type = new == .smooth ? .optoComp : .fetComp
+                    if new == .smooth {
+                        slot.optoComp.amount = carried; slot.optoComp.custom = false
+                    } else {
+                        slot.fetComp.amount = carried; slot.fetComp.custom = false
+                    }
+                }
+            )) { $0.name }
+            if showsCustom {
+                if character == .smooth { OptoCompKnobs(params: $slot.optoComp) }
+                else { FETCompKnobs(params: $slot.fetComp) }
+            } else {
+                let current = amount ?? .medium
+                DescribedChoice("Amount", current.sound, selection: Binding(
+                    get: { current },
+                    set: { new in
+                        if character == .smooth { slot.optoComp.amount = new } else { slot.fetComp.amount = new }
+                    }
+                )) { $0.name }
+            }
+            Toggle("Custom Values", isOn: Binding(
+                get: { showsCustom },
+                set: { on in
+                    if character == .smooth {
+                        if on { slot.optoComp.custom = true } else { slot.optoComp.snapToAmount() }
+                    } else {
+                        if on { slot.fetComp.custom = true } else { slot.fetComp.snapToAmount() }
+                    }
+                }
+            ))
+        } header: {
+            Text("Compressor")
+        } footer: {
+            Text(showsCustom
+                 ? "Turning Custom Values off moves to the nearest Amount."
+                 : "Each Amount sets its own make-up gain, so the level stays about the same. Custom Values shows the knobs.")
+        }
+    }
+}
+
+private struct OptoCompKnobs: View {
+    @Binding var params: OptoCompParams
+    var body: some View {
+        Group {
             Picker("Mode", selection: $params.limitMode) {
                 Text("Compress").tag(false)
                 Text("Limit").tag(true)
@@ -1367,18 +1495,16 @@ private struct OptoCompEditor: View {
             LabeledContent("Gain: +\(Int(params.gain)) dB") {
                 Slider(value: $params.gain, in: 0.0...40.0)
             }
-        } header: {
-            Text("Opto Compressor")
-        } footer: {
-            Text("Smooth, slow-releasing leveling. Turn up Peak Reduction for more squeeze, then Gain to make up level.")
+            Text("Turn up Peak Reduction for more squeeze, then Gain to make up level.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }
 
-private struct FETCompEditor: View {
+private struct FETCompKnobs: View {
     @Binding var params: FETCompParams
     var body: some View {
-        Section {
+        Group {
             Picker("Ratio", selection: $params.ratio) {
                 ForEach(FETCompParams.Ratio.allCases) { Text($0.label).tag($0) }
             }
@@ -1395,10 +1521,8 @@ private struct FETCompEditor: View {
             LabeledContent("Release: \(Int(params.release))") {
                 Slider(value: $params.release, in: 1.0...7.0, step: 1)
             }
-        } header: {
-            Text("FET Compressor")
-        } footer: {
-            Text("Fast and punchy. More Input = more compression; use Output to match level. Attack and Release: 7 is fastest. \"All\" is the aggressive all-buttons-in sound.")
+            Text("More Input = more compression; use Output to match level. Attack and Release: 7 is fastest. \"All\" is the aggressive all-buttons-in sound.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -1473,6 +1597,28 @@ private struct FeedbackNotchEditor: View {
         // Deleting or clearing notches takes effect immediately. Ring-out stops by itself
         // when the sheet closes: the analyzer is released and its timer invalidates.
         .onChange(of: params) { kernel?.applyParams(params) }
+    }
+}
+
+/// A choice described by how it sounds, with that description under it
+private struct DescribedChoice<T: Hashable & CaseIterable & Identifiable>: View
+where T.AllCases: RandomAccessCollection {
+    let title: String
+    let sound: String
+    @Binding var selection: T
+    let name: (T) -> String
+
+    init(_ title: String, _ sound: String, selection: Binding<T>, name: @escaping (T) -> String) {
+        self.title = title; self.sound = sound; _selection = selection; self.name = name
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker(title, selection: $selection) {
+                ForEach(T.allCases) { Text(name($0)).tag($0) }
+            }
+            Text(sound).font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -1575,18 +1721,18 @@ private struct PitchGuideEditor: View {
                 }
             } else {
                 let speed = params.tuneSpeed ?? .naturalTight
-                choice("Speed", speed.sound, selection: Binding(
+                DescribedChoice("Speed", speed.sound, selection: Binding(
                     get: { speed }, set: { params.tuneSpeed = $0 }
-                )) { Text($0.name) }
+                )) { $0.name }
                 if speed != .off && speed != .exact {
                     let flex = params.tuneFlex ?? .aLittle
-                    choice("Flex", flex.sound, selection: Binding(
+                    DescribedChoice("Flex", flex.sound, selection: Binding(
                         get: { flex }, set: { params.tuneFlex = $0 }
-                    )) { Text($0.name) }
+                    )) { $0.name }
                     let pull = params.tuneAmount ?? .allTheWay
-                    choice("Amount", pull.sound, selection: Binding(
+                    DescribedChoice("Amount", pull.sound, selection: Binding(
                         get: { pull }, set: { params.tuneAmount = $0 }
-                    )) { Text($0.name) }
+                    )) { $0.name }
                 }
             }
             Toggle("Custom Values", isOn: Binding(
@@ -1631,19 +1777,6 @@ private struct PitchGuideEditor: View {
 
     /// Sliders when asked for, or when the values match no choice (e.g. set over OSC)
     private var showsCustom: Bool { params.customCorrection || !params.matchesChoices }
-
-    /// A descriptive choice with what it sounds like underneath
-    private func choice<T: Hashable & CaseIterable & Identifiable>(
-        _ title: String, _ sound: String, selection: Binding<T>,
-        label: @escaping (T) -> Text
-    ) -> some View where T.AllCases: RandomAccessCollection {
-        VStack(alignment: .leading, spacing: 4) {
-            Picker(title, selection: selection) {
-                ForEach(T.allCases) { label($0).tag($0) }
-            }
-            Text(sound).font(.caption).foregroundStyle(.secondary)
-        }
-    }
 
     private static func formantLabel(_ semis: Float) -> String {
         semis == 0 ? "0" : String(format: "%+.1f st", semis)
@@ -2043,7 +2176,12 @@ private struct PiezoBodyEditor: View {
 
 private struct HarmonyEditor: View {
     @Binding var params: HarmonyParams
+    /// The channel has a Pitch Guide to take key and detection from
+    let linked: Bool
     let kernel: HarmonyKernel?
+
+    /// Key and detection come from the Pitch Guide, so they're hidden here
+    private var followsGuide: Bool { linked && params.usePitchGuide }
 
     var body: some View {
         Section {
@@ -2061,7 +2199,7 @@ private struct HarmonyEditor: View {
             Text("Harmonizes the first input of the channel. Put it after Pitch Guide, so the harmonies follow the corrected note, and before reverb and delay.")
         }
 
-        if let kernel {
+        if let kernel, !followsGuide {
             LearnVoiceSection(
                 readLevel: { Float(bitPattern: kernel.inputLevelBits.load(ordering: .relaxed)) },
                 describe: { levels in
@@ -2096,51 +2234,78 @@ private struct HarmonyEditor: View {
         voiceSection("Voice 3", voice: $params.voice3)
 
         Section {
-            Toggle("Follow Song Key", isOn: $params.songKeyDrive)
-            if params.songKeyDrive {
-                LabeledContent("Now") {
-                    Text(songKeyLabel).foregroundStyle(.secondary)
+            if linked {
+                Toggle("Use Pitch Guide's Settings", isOn: $params.usePitchGuide)
+            }
+            if followsGuide {
+                LabeledContent("Key") {
+                    Text(params.songKeyDrive ? songKeyLabel : "\(PitchGuideParams.noteNames[params.key % 12]) \(params.scale.displayName)")
+                        .foregroundStyle(.secondary)
                 }
-            }
-            Picker(params.songKeyDrive ? "Fallback Key" : "Key", selection: $params.key) {
-                ForEach(0..<12, id: \.self) { Text(PitchGuideParams.noteNames[$0]).tag($0) }
-            }
-            Picker(params.songKeyDrive ? "Fallback Scale" : "Scale", selection: $params.scale) {
-                ForEach(PitchScale.allCases) { Text($0.displayName).tag($0) }
+            } else {
+                Toggle("Follow Song Key", isOn: $params.songKeyDrive)
+                if params.songKeyDrive {
+                    LabeledContent("Now") {
+                        Text(songKeyLabel).foregroundStyle(.secondary)
+                    }
+                }
+                Picker(params.songKeyDrive ? "Fallback Key" : "Key", selection: $params.key) {
+                    ForEach(0..<12, id: \.self) { Text(PitchGuideParams.noteNames[$0]).tag($0) }
+                }
+                Picker(params.songKeyDrive ? "Fallback Scale" : "Scale", selection: $params.scale) {
+                    ForEach(PitchScale.allCases) { Text($0.displayName).tag($0) }
+                }
             }
         } header: {
             Text("Key")
         } footer: {
-            Text("Intervals are counted in the key's scale: a 3rd above is a major or minor 3rd, whichever is in the key. Pentatonic, blues and chromatic scales use the nearest interval that fits.")
+            Text((followsGuide
+                  ? "Key, voice range and detection come from this channel's Pitch Guide, so you set them once. "
+                  : "")
+                 + "Intervals are counted in the key's scale: a 3rd above is a major or minor 3rd, whichever is in the key. Pentatonic, blues and chromatic scales use the nearest interval that fits.")
         }
 
         Section {
             LabeledContent("Lead Level: \(params.leadGain == 0 ? "Off" : String(format: "%+.0f dB", params.leadLevel))") {
                 Slider(value: $params.leadLevel, in: HarmonyParams.leadOff...6, step: 1)
             }
-            LabeledContent("Humanize: \(Int(params.humanize))%") {
-                Slider(value: $params.humanize, in: 0.0...100.0, step: 1)
+            if let feel = params.feel {
+                DescribedChoice("Feel", feel.sound, selection: Binding(
+                    get: { feel }, set: { params.feel = $0 }
+                )) { $0.name }
+            } else {
+                // Set by hand before the Feel choices (or over OSC): keep it exact
+                LabeledContent("Humanize: \(Int(params.humanize))%") {
+                    Slider(value: $params.humanize, in: 0.0...100.0, step: 1)
+                }
+                Button("Use Feel Choices") {
+                    params.feel = HarmonyParams.Feel.allCases.min {
+                        abs($0.humanize - params.humanize) < abs($1.humanize - params.humanize)
+                    }
+                }
             }
         } header: {
             Text("Blend")
         } footer: {
-            Text("Gender (in each voice) moves the voice's resonances without moving its pitch: − sounds bigger and deeper (try −2 to −4 on an octave below), + smaller and brighter. Lead Level is the singer's own voice in this channel; all the way down is off, for harmonies only (e.g. on their own output). Humanize puts each voice a few cents off and a little late (up to 20–32 ms), drifting slowly, so they sound like singers rather than a copy.")
+            Text("Gender (in each voice) moves the voice's resonances without moving its pitch: − sounds bigger and deeper (try −2 to −4 on an octave below), + smaller and brighter. Lead Level is the singer's own voice in this channel; all the way down is off, for harmonies only (e.g. on their own output).")
         }
 
         Section {
-            Picker("Voice Range", selection: $params.voiceRange) {
-                ForEach(VoiceRange.allCases) { Text($0.displayName).tag($0) }
-            }
-            LabeledContent("Pickiness: \(Int(params.pickiness))%") {
-                Slider(value: $params.pickiness, in: 0.0...100.0, step: 1)
-            }
-            LabeledContent("Gate: \(Int(params.gateThreshold)) dBFS") {
-                Slider(value: $params.gateThreshold, in: -70.0...(-20.0), step: 1)
+            if !followsGuide {
+                Picker("Voice Range", selection: $params.voiceRange) {
+                    ForEach(VoiceRange.allCases) { Text($0.displayName).tag($0) }
+                }
+                LabeledContent("Pickiness: \(Int(params.pickiness))%") {
+                    Slider(value: $params.pickiness, in: 0.0...100.0, step: 1)
+                }
+                LabeledContent("Gate: \(Int(params.gateThreshold)) dBFS") {
+                    Slider(value: $params.gateThreshold, in: -70.0...(-20.0), step: 1)
+                }
             }
         } header: {
-            Text("Detection")
+            if !followsGuide { Text("Detection") }
         } footer: {
-            Text("Harmonies only sing on clear, steady sung notes; they fade out on breaths, consonants and between phrases. Raise the Gate until bleed no longer shows up in the Live meter.")
+            Text("Harmonies only sing on clear, steady sung notes; they fade out on breaths, consonants and between phrases." + (followsGuide ? "" : " Raise the Gate until bleed no longer shows up in the Live meter."))
         }
         .onChange(of: params) {
             kernel?.applyParams(params.resolved(songKey: AudioRoutingEngine.shared.songKey))

@@ -61,8 +61,8 @@ the first (lower slot) is `<fx>` and the second is `<fx>2`, e.g. `pitch` and `pi
 | `reverb` | Reverb |
 | `delay` | Delay |
 | `rider` | Level Rider |
-| `opto` | Opto Comp (LA-2A style) |
-| `fet` | FET Comp (1176 style) |
+| `opto` | Compressor – Smooth (LA-2A style) |
+| `fet` | Compressor – Punchy (1176 style) |
 | `notch` | Feedback Notch |
 | `pitch` | Pitch Guide (pitch correction, transpose, formant) |
 | `detune` | Micro Detune (micro-pitch stereo widener) |
@@ -145,14 +145,14 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `gate` | -60 to -20 dBFS | Below this it holds still |
 | `outputTrim` | -12 to 12 dB | |
 
-### `opto` — Opto Comp (LA-2A style)
+### `opto` — Compressor – Smooth (LA-2A style)
 | Param | Range | Notes |
 |---|---|---|
 | `peakReduction` | 0 to 100 | More = more compression |
 | `gain` | 0 to 40 dB | Makeup |
 | `limit` | toggle | 0 Compress (~3:1), 1 Limit (~10:1) |
 
-### `fet` — FET Comp (1176 style)
+### `fet` — Compressor – Punchy (1176 style)
 | Param | Range | Notes |
 |---|---|---|
 | `input` | 0 to 48 dB | Drives into the fixed threshold: more = more compression |
@@ -242,6 +242,7 @@ Turn Tone on and off with `/app/<channel>/tone/bypass` (1 = off, 0 = on), like a
 | `scale` | choice | Same as `pitch` |
 | `pickiness` | 0 to 100 % | Higher = only clear, steady notes get harmonies |
 | `gate` | -70 to -20 dBFS | Quieter input (bleed) gets no harmonies |
+| `usePitchGuide` | toggle | Key, voice range, pickiness and gate come from the channel's Pitch Guide (when it has one); the four above are then overwritten by it |
 
 ### `detune` — Micro Detune
 | Param | Range | Notes |
