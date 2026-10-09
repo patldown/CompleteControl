@@ -1157,13 +1157,13 @@ struct FXSlotEditorSheet: View {
     /// Make Room listens to other channels through their Tone, so it needs one to exist
     private var canMakeRoom: Bool { makeRoomFor.contains(where: \.hasTone) }
 
-    /// The effect list: one Compressor, and Make Room only when it has something to hear
-    /// (kept while this slot already is one, so it can still be edited or removed)
+    /// The effect list, with one Compressor
     private var addableTypes: [BuiltInFXType] {
-        BuiltInFXType.allCases.filter {
-            $0 != .fetComp && ($0 != .makeRoom || canMakeRoom || original.type == .makeRoom)
-        }
+        BuiltInFXType.allCases.filter { $0 != .fetComp }
     }
+
+    /// Make Room with nothing to listen to can't be kept: only Cancel (or another type)
+    private var canConfirm: Bool { slot.type != .makeRoom || canMakeRoom }
 
     /// One "Compressor" in the list; its Character picks the Smooth (opto) or Punchy (FET) engine
     private var typeSelection: Binding<BuiltInFXType?> {
@@ -1196,10 +1196,7 @@ struct FXSlotEditorSheet: View {
                     if slot.type != nil {
                         Toggle("Bypassed", isOn: $slot.isBypassed)
                     }
-                    if slot.type == nil && !canMakeRoom {
-                        Text("Make Room appears here once another channel has a Tone: it listens through it.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+
                 }
                 if let type = slot.type, !slot.isBypassed {
                     switch type {
@@ -1259,7 +1256,10 @@ struct FXSlotEditorSheet: View {
                         dismiss()
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { onSave(slot); dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(original.type == nil && slot.type != nil ? "Add" : "Done") { onSave(slot); dismiss() }
+                        .disabled(!canConfirm)
+                }
             }
         }
     }
@@ -1662,6 +1662,20 @@ private struct MakeRoomEditor: View {
     private static let vocals: Set<ToneInstrument> = [.leadVocal, .backingVocal]
 
     var body: some View {
+        if !candidates.contains(where: \.hasTone) {
+            Section {
+                Label {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("No channel has a Tone yet").font(.headline)
+                        Text("Make Room listens to the singers through their Tone. Add a Tone to the channels this one should make room for (set to None if you don't want it to change their sound), then add Make Room.")
+                            .font(.callout)
+                    }
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
+            }
+            .listRowBackground(Color.orange.opacity(0.15))
+        }
         Section {
             if candidates.isEmpty {
                 Text("Add another channel first, such as the singer's.").foregroundStyle(.secondary)
