@@ -191,6 +191,7 @@ struct ChannelStripView: View {
     @State private var newMacroName = ""
     @State private var confirmingRemove = false
     @State private var stripExpanded = false
+    @State private var showingWizard = false
     /// Shared by every strip so they flip together and stay lined up side by side
     @AppStorage("routingFXExpanded") private var fxExpanded = false
 
@@ -263,6 +264,9 @@ struct ChannelStripView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingWizard) {
+            ChannelWizardSheet(channelID: channelID)
+        }
         .alert("Save Preset", isPresented: $showingMacroSave) {
             TextField("Name", text: $newMacroName)
             Button("Save") { saveMacro() }
@@ -287,6 +291,8 @@ struct ChannelStripView: View {
                 .onChange(of: nameFocused) { _, focused in
                     if focused { nameBeforeEdit = channel.name } else { finishRename() }
                 }
+
+                ChannelWizardButton(channel: channel, isPresented: $showingWizard)
 
                 Button {
                     withAnimation(.snappy) { stripExpanded.toggle() }
