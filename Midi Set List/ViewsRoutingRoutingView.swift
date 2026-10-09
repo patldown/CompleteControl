@@ -979,6 +979,12 @@ extension ChannelFXSlot {
             } else {
                 key = "\(p.keyName) \(p.scale.shortName)"
             }
+            if !p.customCorrection, p.matchesChoices, let tune = p.tuneSpeed {
+                let third: String? = p.transpose != 0 ? String(format: "%+d st", p.transpose)
+                          : tune == .off || tune == .exact ? nil
+                          : p.tuneFlex?.name
+                return [key, tune.name] + (third.map { [$0] } ?? [])
+            }
             let speed = p.retuneSpeed < 1 ? "Instant" : "Speed \(Int(p.retuneSpeed)) ms"
             let third = p.transpose != 0 ? String(format: "%+d st", p.transpose)
                       : p.amount < 100 ? "Amount \(Int(p.amount))%"
@@ -1554,22 +1560,49 @@ private struct PitchGuideEditor: View {
         }
 
         Section {
-            LabeledContent("Retune Speed: \(params.retuneSpeed < 1 ? "Instant" : "\(Int(params.retuneSpeed)) ms")") {
-                Slider(value: $params.retuneSpeed, in: 0.0...400.0, step: 1)
+            if showsCustom {
+                LabeledContent("Retune Speed: \(params.retuneSpeed < 1 ? "Instant" : "\(Int(params.retuneSpeed)) ms")") {
+                    Slider(value: $params.retuneSpeed, in: 0.0...400.0, step: 1)
+                }
+                LabeledContent("Amount: \(Int(params.amount))%") {
+                    Slider(value: $params.amount, in: 0.0...100.0, step: 1)
+                }
+                LabeledContent("Humanize: \(Int(params.humanize))%") {
+                    Slider(value: $params.humanize, in: 0.0...100.0, step: 1)
+                }
+                LabeledContent("Tolerance: ±\(Int(params.tolerance)) cents") {
+                    Slider(value: $params.tolerance, in: 0.0...50.0, step: 1)
+                }
+            } else {
+                let speed = params.tuneSpeed ?? .naturalTight
+                choice("Speed", speed.sound, selection: Binding(
+                    get: { speed }, set: { params.tuneSpeed = $0 }
+                )) { Text($0.name) }
+                if speed != .off && speed != .exact {
+                    let flex = params.tuneFlex ?? .aLittle
+                    choice("Flex", flex.sound, selection: Binding(
+                        get: { flex }, set: { params.tuneFlex = $0 }
+                    )) { Text($0.name) }
+                    let pull = params.tuneAmount ?? .allTheWay
+                    choice("Amount", pull.sound, selection: Binding(
+                        get: { pull }, set: { params.tuneAmount = $0 }
+                    )) { Text($0.name) }
+                }
             }
-            LabeledContent("Amount: \(Int(params.amount))%") {
-                Slider(value: $params.amount, in: 0.0...100.0, step: 1)
-            }
-            LabeledContent("Humanize: \(Int(params.humanize))%") {
-                Slider(value: $params.humanize, in: 0.0...100.0, step: 1)
-            }
-            LabeledContent("Tolerance: ±\(Int(params.tolerance)) cents") {
-                Slider(value: $params.tolerance, in: 0.0...50.0, step: 1)
-            }
+            Toggle("Custom Values", isOn: Binding(
+                get: { showsCustom },
+                set: { on in
+                    if on { params.customCorrection = true } else { params.snapToChoices() }
+                }
+            ))
         } header: {
             Text("Correction")
         } footer: {
-            Text("Retune Speed: how long the glide takes to land on the note, on the same scale as Auto-Tune's knob (Auto-Tune 15 ≈ 15 ms). 0 is the robotic effect, 10–25 tight pop, 50–150 natural. Tolerance: notes within this many cents are left alone; past it, correction kicks in. Amount: how far toward the note it pulls. Humanize: loosens the retune on long held notes.")
+            Text(showsCustom
+                 ? "Retune Speed: how long the glide takes to land on the note, on the same scale as Auto-Tune's knob (Auto-Tune 15 ≈ 15 ms). 0 is the robotic effect, 10–25 tight pop, 50–150 natural. Tolerance: notes within this many cents are left alone; past it, correction kicks in. Amount: how far toward the note it pulls. Humanize: loosens the retune on long held notes. Turning Custom Values off moves each to the nearest choice."
+                 : params.tuneSpeed == .exact
+                 ? "Exact pins every note all the way, so Flex and Amount are set for you."
+                 : "Pick the sound you want. Custom Values shows the exact settings behind each choice.")
         }
 
         Section {
@@ -1593,6 +1626,22 @@ private struct PitchGuideEditor: View {
         }
         .onChange(of: params) {
             kernel?.applyParams(params.resolved(songKey: AudioRoutingEngine.shared.songKey))
+        }
+    }
+
+    /// Sliders when asked for, or when the values match no choice (e.g. set over OSC)
+    private var showsCustom: Bool { params.customCorrection || !params.matchesChoices }
+
+    /// A descriptive choice with what it sounds like underneath
+    private func choice<T: Hashable & CaseIterable & Identifiable>(
+        _ title: String, _ sound: String, selection: Binding<T>,
+        label: @escaping (T) -> Text
+    ) -> some View where T.AllCases: RandomAccessCollection {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker(title, selection: selection) {
+                ForEach(T.allCases) { label($0).tag($0) }
+            }
+            Text(sound).font(.caption).foregroundStyle(.secondary)
         }
     }
 

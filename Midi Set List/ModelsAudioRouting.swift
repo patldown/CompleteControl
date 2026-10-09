@@ -880,10 +880,13 @@ extension PitchScale {
 struct PitchGuideParams: Codable, Equatable {
     var key: Int = 0                    // 0=C … 11=B
     var scale: PitchScale = .major
-    var retuneSpeed: Float = 50         // ms to land on the note, 0...400; 0 = instant (robotic)
+    // Defaults are Natural – Tight, A Little, All the Way
+    var retuneSpeed: Float = 60         // ms to land on the note, 0...400; 0 = instant (robotic)
     var tolerance: Float = 10           // cents, 0...50; deviations this small are left alone
     var amount: Float = 100             // %, 0...100; how much of the error is removed
-    var humanize: Float = 0             // %, 0...100; slows retune on held notes
+    var humanize: Float = 20            // %, 0...100; slows retune on held notes
+    /// Show the four correction sliders instead of the Speed / Flex / Amount choices
+    var customCorrection: Bool = false
     var pickiness: Float = 50           // %, 0...100; higher = only clear, steady notes
     var gateThreshold: Float = -45      // dBFS, -70...-20; quieter input (bleed) is ignored
     var voiceRange: VoiceRange = .mid
@@ -925,6 +928,15 @@ struct PitchGuideParams: Codable, Equatable {
         tolerance = try min(50, c.decodeIfPresent(Float.self, forKey: .tolerance) ?? d.tolerance)
         amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? d.amount
         humanize = try c.decodeIfPresent(Float.self, forKey: .humanize) ?? d.humanize
+        if let custom = try c.decodeIfPresent(Bool.self, forKey: .customCorrection) {
+            customCorrection = custom
+        } else if retuneSpeed == 50 && tolerance == 10 && amount == 100 && humanize == 0 {
+            // Saved before the choices, on the old defaults: move to the nearest choices
+            snapToChoices()
+        } else {
+            // Hand-set before the choices: keep the exact values, shown as sliders
+            customCorrection = !matchesChoices
+        }
         pickiness = try c.decodeIfPresent(Float.self, forKey: .pickiness) ?? d.pickiness
         gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
         voiceRange = (try? c.decodeIfPresent(VoiceRange.self, forKey: .voiceRange)) ?? d.voiceRange
@@ -951,6 +963,164 @@ struct PitchGuideParams: Codable, Equatable {
     /// key they sing in; Transpose then moves the corrected voice (sung in D, +2 → heard in E).
     var allowedPitchClassMask: UInt32 {
         scale.intervals.reduce(0) { $0 | (1 << UInt32((key + $1) % 12)) }
+    }
+}
+
+// MARK: - Pitch Guide: correction by description
+
+/// How fast the voice lands on the note
+enum TuneSpeed: CaseIterable, Identifiable {
+    case off, naturalLoose, naturalTight, hard, exact
+    var id: Self { self }
+
+    var name: String {
+        switch self {
+        case .off:          "Off"
+        case .naturalLoose: "Natural – Loose"
+        case .naturalTight: "Natural – Tight"
+        case .hard:         "Hard"
+        case .exact:        "Exact"
+        }
+    }
+
+    var sound: String {
+        switch self {
+        case .off:          "The voice as sung. No tuning."
+        case .naturalLoose: "A good singer on a good night. Tuning you won't notice."
+        case .naturalTight: "A polished studio vocal."
+        case .hard:         "Modern pop: clearly tuned, still musical."
+        case .exact:        "The robot effect. Jumps straight to each note."
+        }
+    }
+
+    /// Retune Speed, ms; nil for Off
+    var retuneMs: Float? {
+        switch self {
+        case .off:          nil
+        case .naturalLoose: 150
+        case .naturalTight: 60
+        case .hard:         20
+        case .exact:        0
+        }
+    }
+}
+
+/// How much of the singer's own movement (drift, vibrato, scoops) is kept
+enum TuneFlex: CaseIterable, Identifiable {
+    case locked, aLittle, expressive, free
+    var id: Self { self }
+
+    var name: String {
+        switch self {
+        case .locked:     "Locked"
+        case .aLittle:    "A Little"
+        case .expressive: "Expressive"
+        case .free:       "Free"
+        }
+    }
+
+    var sound: String {
+        switch self {
+        case .locked:     "Every note pinned. No wobble."
+        case .aLittle:    "Small drift cleaned up; phrasing kept."
+        case .expressive: "Vibrato, scoops and bends come through."
+        case .free:       "Only clearly wrong notes are fixed."
+        }
+    }
+
+    var tolerance: Float {
+        switch self { case .locked: 0; case .aLittle: 10; case .expressive: 25; case .free: 40 }
+    }
+
+    var humanize: Float {
+        switch self { case .locked: 0; case .aLittle: 20; case .expressive: 50; case .free: 80 }
+    }
+}
+
+/// How far toward the note the voice is pulled
+enum TuneAmount: CaseIterable, Identifiable {
+    case nudge, mostly, allTheWay
+    var id: Self { self }
+
+    var name: String {
+        switch self { case .nudge: "Nudge"; case .mostly: "Mostly"; case .allTheWay: "All the Way" }
+    }
+
+    var sound: String {
+        switch self {
+        case .nudge:     "Still clearly the singer, just safer."
+        case .mostly:    "In tune, with a little character left."
+        case .allTheWay: "Right on the note."
+        }
+    }
+
+    var amount: Float {
+        switch self { case .nudge: 40; case .mostly: 75; case .allTheWay: 100 }
+    }
+}
+
+extension PitchGuideParams {
+    /// The Speed choice these values match, or nil when they match none
+    var tuneSpeed: TuneSpeed? {
+        get {
+            if amount == 0 { return .off }
+            return TuneSpeed.allCases.first { $0.retuneMs == retuneSpeed }
+        }
+        set {
+            guard let newValue else { return }
+            switch newValue {
+            case .off:
+                amount = 0
+            case .exact:
+                // The robot sound needs every note pinned, all the way
+                retuneSpeed = 0
+                tuneFlex = .locked
+                tuneAmount = .allTheWay
+            default:
+                retuneSpeed = newValue.retuneMs ?? retuneSpeed
+                if amount == 0 { amount = TuneAmount.allTheWay.amount }
+            }
+        }
+    }
+
+    var tuneFlex: TuneFlex? {
+        get { TuneFlex.allCases.first { $0.tolerance == tolerance && $0.humanize == humanize } }
+        set {
+            guard let newValue else { return }
+            tolerance = newValue.tolerance
+            humanize = newValue.humanize
+        }
+    }
+
+    var tuneAmount: TuneAmount? {
+        get { TuneAmount.allCases.first { $0.amount == amount } }
+        set { if let newValue { amount = newValue.amount } }
+    }
+
+    /// Whether the choices describe these values exactly (Flex and Amount don't matter when Off)
+    var matchesChoices: Bool {
+        switch tuneSpeed {
+        case .none:      false
+        case .some(.off): true
+        case .some:      tuneFlex != nil && tuneAmount != nil
+        }
+    }
+
+    /// Moves each value to the nearest choice (leaving Custom)
+    mutating func snapToChoices() {
+        if amount > 0 {
+            let speeds = TuneSpeed.allCases.filter { $0 != .off }
+            let speed = speeds.min { abs(($0.retuneMs ?? 0) - retuneSpeed) < abs(($1.retuneMs ?? 0) - retuneSpeed) }
+            let flex = TuneFlex.allCases.min {
+                abs($0.tolerance - tolerance) / 40 + abs($0.humanize - humanize) / 80
+                    < abs($1.tolerance - tolerance) / 40 + abs($1.humanize - humanize) / 80
+            }
+            let pull = TuneAmount.allCases.min { abs($0.amount - amount) < abs($1.amount - amount) }
+            tuneFlex = flex
+            tuneAmount = pull
+            tuneSpeed = speed
+        }
+        customCorrection = false
     }
 }
 
