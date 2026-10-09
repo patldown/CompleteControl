@@ -63,6 +63,8 @@ struct QuickCommandsView: View {
                         }
                     }
 
+                    mixPresetsSection
+
                     Section("BeatBuddy") {
                         QuickCommandButton(
                             title: "Select Folder",
@@ -148,6 +150,62 @@ struct QuickCommandsView: View {
         addedCommands.insert(id)
         handleAdded(commandName: commandName)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { addedCommands.remove(id) }
+    }
+
+    // MARK: Mix presets — recalled live by /app/ commands
+
+    @ViewBuilder
+    private var mixPresetsSection: some View {
+        let mixes = MixPresetStore.shared.presets
+        let channels = AudioRoutingStore.shared.channels.filter { !$0.macros.isEmpty }
+        if !mixes.isEmpty || !channels.isEmpty {
+            Section {
+                ForEach(mixes) { preset in
+                    QuickCommandButton(
+                        title: preset.name,
+                        icon: "square.stack.3d.up",
+                        description: "Whole mix: \(preset.summary)",
+                        wasAdded: addedCommands.contains(preset.oscAddress)
+                    ) { addAppCommand(preset.oscAddress, note: "Mix: \(preset.name)") }
+                    DisclosureGroup("\(preset.name) — one channel") {
+                        ForEach(preset.channels) { part in
+                            let address = preset.oscAddress(for: part)
+                            QuickCommandButton(
+                                title: part.channelName,
+                                icon: "slider.vertical.3",
+                                description: "Only this channel's part of \(preset.name)",
+                                wasAdded: addedCommands.contains(address)
+                            ) { addAppCommand(address, note: "Mix: \(preset.name) / \(part.channelName)") }
+                        }
+                    }
+                }
+                ForEach(Array(AudioRoutingStore.shared.channels.enumerated()), id: \.element.id) { index, channel in
+                    ForEach(channel.macros) { macro in
+                        let address = "\(AppOSC.prefix)\(AppOSC.channelSegment(channel, index: index))/preset/\(macro.name)"
+                        QuickCommandButton(
+                            title: "\(channel.displayName): \(macro.name)",
+                            icon: "slider.horizontal.3",
+                            description: "Channel preset",
+                            wasAdded: addedCommands.contains(address)
+                        ) { addAppCommand(address, note: "\(channel.displayName) preset: \(macro.name)") }
+                    }
+                }
+            } header: {
+                Text("Mix Presets")
+            } footer: {
+                Text("Recalls the preset when this snapshot is sent: only the effects, faders and volumes it keeps change, live. Nothing reloads.")
+            }
+        }
+    }
+
+    private func addAppCommand(_ address: String, note: String) {
+        let cmd = MIDICommand(commandType: .oscMessage, channel: nil, value1: 0,
+                              delayMilliseconds: 0, notes: note, context: viewContext)
+        cmd.oscAddress = address
+        cmd.oscFloatArg = 1
+        song.addCommand(cmd, toSnapshot: snapshotIndex)
+        try? viewContext.save()
+        showSuccess(for: note, id: address)
     }
 
     private func addBeatBuddyFolder() {

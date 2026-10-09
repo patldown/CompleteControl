@@ -95,6 +95,24 @@ private func choice(_ key: String, _ name: String, _ options: [String], _ detail
                get: { Double(get($0)) }, set: { set(&$0, Int($1)) })
 }
 
+/// One harmony voice's parameters: voice1, interval1, level1, pan1, gender1, …
+private func harmonyVoiceParams(_ n: Int, _ voice: WritableKeyPath<HarmonyParams, HarmonyVoice>) -> [AppFXParam] {
+    let slotVoice = (\ChannelFXSlot.harmony).appending(path: voice)
+    return [
+        toggle("voice\(n)", "Voice \(n)", "On, or off to mute it (its settings are kept).",
+               get: { $0[keyPath: slotVoice].enabled }, set: { $0[keyPath: slotVoice].enabled = $1 }),
+        choice("interval\(n)", "Voice \(n) Interval", HarmonyInterval.allCases.map(\.label), "In the song's key.",
+               get: { $0[keyPath: slotVoice].interval.rawValue },
+               set: { $0[keyPath: slotVoice].interval = HarmonyInterval(rawValue: $1) ?? .thirdAbove }),
+        num("level\(n)", "Voice \(n) Level", -24...6, "dB", "",
+            get: { Double($0[keyPath: slotVoice].level) }, set: { $0[keyPath: slotVoice].level = Float($1) }),
+        num("pan\(n)", "Voice \(n) Pan", -100...100, "", "-100 = left, 100 = right.",
+            get: { Double($0[keyPath: slotVoice].pan) }, set: { $0[keyPath: slotVoice].pan = Float($1) }),
+        num("gender\(n)", "Voice \(n) Gender", -6...6, "semitones", "+ smaller/brighter, − bigger/deeper. Pitch stays.",
+            get: { Double($0[keyPath: slotVoice].gender) }, set: { $0[keyPath: slotVoice].gender = Float($1) }),
+    ]
+}
+
 extension BuiltInFXType {
     /// Short name used in /app/ addresses
     var oscName: String {
@@ -108,6 +126,14 @@ extension BuiltInFXType {
         case .fetComp:       "fet"
         case .feedbackNotch: "notch"
         case .pitchGuide:    "pitch"
+        case .microDetune:   "detune"
+        case .harmony:       "harmony"
+        case .piezoBody:     "body"
+        case .tone:          "tone"
+        case .warmth:        "warmth"
+        case .air:           "air"
+        case .punch:         "punch"
+        case .smartGate:     "gate"
         }
     }
 
@@ -206,7 +232,7 @@ extension BuiltInFXType {
                        get: { _ in 0 }, set: { slot, _ in slot.feedbackNotch.notches.removeAll() }),
         ]
         case .pitchGuide: [
-            num("retuneSpeed", "Retune Speed", 0...400, "ms", "0 = instant (robotic), 30–80 = natural.",
+            num("retuneSpeed", "Retune Speed", 0...400, "ms", "Time to land on the note, like Auto-Tune. 0 = instant (robotic), 10–25 = tight, 50–150 = natural.",
                 get: { Double($0.pitchGuide.retuneSpeed) }, set: { $0.pitchGuide.retuneSpeed = Float($1) }),
             num("amount", "Amount", 0...100, "%", "How far toward the note it pulls. 0 = transpose only.",
                 get: { Double($0.pitchGuide.amount) }, set: { $0.pitchGuide.amount = Float($1) }),
@@ -241,6 +267,101 @@ extension BuiltInFXType {
             num("bleedDuck", "Bleed Duck", -20...0, "dB", "Turns the mic down between phrases. 0 = off.",
                 get: { Double($0.pitchGuide.bleedDuck) }, set: { $0.pitchGuide.bleedDuck = Float($1) }),
         ]
+        case .warmth: [
+            num("drive", "Drive", 0...100, "%", "Gentle thickening at low settings, grit when pushed. 0 = off.",
+                get: { Double($0.warmth.drive) }, set: { $0.warmth.drive = Float($1) }),
+            choice("character", "Character", WarmthParams.Character.allCases.map(\.displayName),
+                   "Tape rounds off the top; tube adds even harmonics.",
+                   get: { $0.warmth.character == .tube ? 1 : 0 }, set: { $0.warmth.character = $1 == 1 ? .tube : .tape }),
+        ]
+        case .air: [
+            num("amount", "Amount", 0...100, "%", "New upper harmonics blended in. 0 = off.",
+                get: { Double($0.air.amount) }, set: { $0.air.amount = Float($1) }),
+            choice("focus", "Focus", AirParams.Focus.allCases.map(\.displayName), "",
+                   get: { $0.air.focus == .air ? 1 : 0 }, set: { $0.air.focus = $1 == 1 ? .air : .presence }),
+        ]
+        case .punch: [
+            num("amount", "Attack/Sustain", -100...100, "",
+                "+ = more attack, − = softer attack / more sustain, 0 = off.",
+                get: { Double($0.punch.amount) }, set: { $0.punch.amount = Float($1) }),
+        ]
+        case .smartGate: [
+            num("sensitivity", "Sensitivity", 0...100, "%", "Higher gates more of the quiet between notes.",
+                get: { Double($0.smartGate.sensitivity) }, set: { $0.smartGate.sensitivity = Float($1) }),
+            num("depth", "Depth", 0...80, "dB", "How far it turns down when closed.",
+                get: { Double($0.smartGate.depth) }, set: { $0.smartGate.depth = Float($1) }),
+        ]
+        case .tone: [
+            num("amount", "Amount", 0...100, "%", "How much of the instrument's tone profile. 0 = flat.",
+                get: { Double($0.tone.amount) }, set: { $0.tone.amount = Float($1) }),
+            choice("instrument", "Instrument", ["None"] + ToneInstrument.allCases.map(\.displayName),
+                   "The profile. 0 = none (Tone does nothing).",
+                   get: { ($0.tone.instrument?.rawValue ?? -1) + 1 },
+                   set: { $0.tone.instrument = ToneInstrument(rawValue: $1 - 1) }),
+        ]
+        case .piezoBody: [
+            num("amount", "Amount", 0...100, "%", "Body back in, quack and spikiness out. 0 = flat.",
+                get: { Double($0.piezoBody.amount) }, set: { $0.piezoBody.amount = Float($1) }),
+            choice("size", "Body Size", GuitarBodySize.allCases.map(\.displayName), "Where the body resonances sit.",
+                   get: { GuitarBodySize.allCases.firstIndex(of: $0.piezoBody.bodySize) ?? 1 },
+                   set: { $0.piezoBody.bodySize = GuitarBodySize.allCases[$1] }),
+            toggle("phase", "Phase Invert", "Flip polarity; try it when the low end feeds back.",
+                   get: { $0.piezoBody.phaseInvert }, set: { $0.piezoBody.phaseInvert = $1 }),
+            toggle("mute", "Mute", "Silence the guitar (e.g. to tune).",
+                   get: { $0.piezoBody.mute }, set: { $0.piezoBody.mute = $1 }),
+            num("level", "Level", -12...6, "dB", "Output level.",
+                get: { Double($0.piezoBody.level) }, set: { $0.piezoBody.level = Float($1) }),
+        ]
+        case .harmony:
+            harmonyVoiceParams(1, \.voice1) + harmonyVoiceParams(2, \.voice2) + harmonyVoiceParams(3, \.voice3) + [
+            num("leadLevel", "Lead Level", -60...6, "dB", "The singer's own voice. -60 = off (harmonies only).",
+                get: { Double($0.harmony.leadLevel) }, set: { $0.harmony.leadLevel = Float($1) }),
+            num("humanize", "Humanize", 0...100, "%", "Small detune, drift and delay so the voices sound like singers.",
+                get: { Double($0.harmony.humanize) }, set: { $0.harmony.humanize = Float($1) }),
+            toggle("followSongKey", "Follow Song Key", "Harmonize in the key of the song loaded in Perform.",
+                   get: { $0.harmony.songKeyDrive }, set: { $0.harmony.songKeyDrive = $1 }),
+            choice("key", "Key", PitchGuideParams.noteNames, "Fallback when following the song key.",
+                   get: { $0.harmony.key }, set: { $0.harmony.key = $1 }),
+            choice("scale", "Scale", PitchScale.allCases.map(\.displayName), "",
+                   get: { PitchScale.allCases.firstIndex(of: $0.harmony.scale) ?? 0 },
+                   set: { $0.harmony.scale = PitchScale.allCases[$1] }),
+            num("pickiness", "Pickiness", 0...100, "%", "Higher = only clear, steady notes get harmonies.",
+                get: { Double($0.harmony.pickiness) }, set: { $0.harmony.pickiness = Float($1) }),
+            num("gate", "Gate", -70...(-20), "dBFS", "Quieter input (bleed) gets no harmonies.",
+                get: { Double($0.harmony.gateThreshold) }, set: { $0.harmony.gateThreshold = Float($1) }),
+        ]
+        case .microDetune: [
+            num("pitchA", "Pitch A", 0...50, "cents", "Voice A (left) shifted up. 9 = classic.",
+                get: { Double($0.microDetune.pitchA) }, set: { $0.microDetune.pitchA = Float($1) }),
+            num("pitchB", "Pitch B", -50...0, "cents", "Voice B (right) shifted down. -9 = classic.",
+                get: { Double($0.microDetune.pitchB) }, set: { $0.microDetune.pitchB = Float($1) }),
+            num("delayA", "Delay A", 0...2_000, "ms", "Voice A delay (when not tempo-synced). The shifter adds ~25 ms on top.",
+                get: { Double($0.microDetune.delayA) }, set: { $0.microDetune.delayA = Float($1) }),
+            num("delayB", "Delay B", 0...2_000, "ms", "Voice B delay (when not tempo-synced). The shifter adds ~25 ms on top.",
+                get: { Double($0.microDetune.delayB) }, set: { $0.microDetune.delayB = Float($1) }),
+            toggle("tempoSync", "Tempo Sync", "Delays follow the loaded song's tempo as note values.",
+                   get: { $0.microDetune.tempoSync }, set: { $0.microDetune.tempoSync = $1 }),
+            choice("noteA", "Note A", NoteDivision.allCases.map(\.label), "Voice A delay when tempo-synced.",
+                   get: { NoteDivision.allCases.firstIndex(of: $0.microDetune.noteA) ?? 0 },
+                   set: { $0.microDetune.noteA = NoteDivision.allCases[$1] }),
+            choice("noteB", "Note B", NoteDivision.allCases.map(\.label), "Voice B delay when tempo-synced.",
+                   get: { NoteDivision.allCases.firstIndex(of: $0.microDetune.noteB) ?? 0 },
+                   set: { $0.microDetune.noteB = NoteDivision.allCases[$1] }),
+            num("pitchMix", "Pitch Mix", 0...100, "%", "0 = only A, 50 = both, 100 = only B.",
+                get: { Double($0.microDetune.pitchMix) }, set: { $0.microDetune.pitchMix = Float($1) }),
+            num("mix", "Mix", 0...100, "%", "50 = dry and wet both full; above that the dry fades.",
+                get: { Double($0.microDetune.mix) }, set: { $0.microDetune.mix = Float($1) }),
+            num("feedback", "Feedback", 0...95, "%", "Repeats shift further each time: rising/falling repeats.",
+                get: { Double($0.microDetune.feedback) }, set: { $0.microDetune.feedback = Float($1) }),
+            num("tone", "Tone", -100...100, "", "- darker, 0 flat, + brighter (voices only).",
+                get: { Double($0.microDetune.tone) }, set: { $0.microDetune.tone = Float($1) }),
+            num("lowCut", "Low Cut", 20...600, "Hz", "Keeps the low end out of the voices. 20 = off.",
+                get: { Double($0.microDetune.lowCut) }, set: { $0.microDetune.lowCut = Float($1) }),
+            num("modDepth", "Mod Depth", 0...100, "%", "Chorus: at 100 each voice swings from 0 to 2× its shift.",
+                get: { Double($0.microDetune.modDepth) }, set: { $0.microDetune.modDepth = Float($1) }),
+            num("modRate", "Mod Rate", 0.1...10, "Hz", "Speed of the chorus.",
+                get: { Double($0.microDetune.modRate) }, set: { $0.microDetune.modRate = Float($1) }),
+        ]
         }
     }
 }
@@ -267,7 +388,7 @@ enum AppOSC {
     /// Names a channel can't take: they'd be read as a position (ch2) or the engine address
     static func isReservedName(_ name: String) -> Bool {
         let n = normalize(name)
-        if n == "engine" { return true }
+        if n == "engine" || n == "mix" { return true }
         return n.hasPrefix("ch") && n.count > 2 && n.dropFirst(2).allSatisfy(\.isNumber)
     }
 
@@ -313,6 +434,8 @@ extension AppOSC {
         - `/app/<channel>/<fx>/bypass` 1 = bypassed, 0 = active
         - `/app/<channel>/<fx>/<param>` see tables below
         - `/app/engine/run` 1 = start the routing engine, 0 = stop
+        - `/app/mix/<preset>` recall a mix preset (any value); `/app/mix/<preset>/<channel>` just that channel's part
+        - `/app/<channel>/preset/<name>` recall one of the channel's own presets
 
         `<channel>` is the routing channel's name (case, spaces, `-` and `_` ignored) or `ch1`, \
         `ch2`… by position. `<fx>` is the effect's short name; a second instance of the same \

@@ -29,6 +29,9 @@ messages, so any macro, song command or AI assistant can change any effect setti
 | `/app/<channel>/<fx>/bypass` | 1 = bypassed, 0 = active | Bypass one effect |
 | `/app/<channel>/<fx>/<param>` | see §3 | Set one effect parameter |
 | `/app/engine/run` | 1 = start, 0 = stop | Start/stop the routing engine |
+| `/app/mix/<preset>` | any | Recall a mix preset: its ticked effects, faders and volumes, live (nothing reloads) |
+| `/app/mix/<preset>/<channel>` | any | Recall just that channel's part of the mix preset |
+| `/app/<channel>/preset/<name>` | any | Recall one of the channel's own presets, live |
 
 ### `<channel>` — which routing channel
 
@@ -62,6 +65,14 @@ the first (lower slot) is `<fx>` and the second is `<fx>2`, e.g. `pitch` and `pi
 | `fet` | FET Comp (1176 style) |
 | `notch` | Feedback Notch |
 | `pitch` | Pitch Guide (pitch correction, transpose, formant) |
+| `detune` | Micro Detune (micro-pitch stereo widener) |
+| `harmony` | Harmony (key-aware harmonizer) |
+| `body` | Piezo Body (acoustic pickup enhancer) |
+| `tone` | Tone (one-button sound for the channel's instrument) |
+| `warmth` | Warmth (tape / tube saturation) |
+| `air` | Air (harmonic exciter) |
+| `punch` | Punch (transient shaper) |
+| `gate` | Smart Gate (self-setting noise gate) |
 
 ### Value conventions
 
@@ -160,7 +171,7 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 ### `pitch` — Pitch Guide
 | Param | Range | Notes |
 |---|---|---|
-| `retuneSpeed` | 0 to 400 ms | 0 = instant/robotic, 30–80 natural |
+| `retuneSpeed` | 0 to 400 ms | Time to land on the note, same scale as Auto-Tune. 0 = instant/robotic, 10–25 tight, 50–150 natural |
 | `amount` | 0 to 100 % | How far toward the note. 0 = transpose only |
 | `humanize` | 0 to 100 % | Loosens retune on long held notes |
 | `tolerance` | 0 to 50 cents | Notes this close are left alone |
@@ -176,6 +187,80 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `shiftOnlyWhileSinging` | toggle | Transpose/Formant switch off between phrases |
 | `bleedDuck` | -20 to 0 dB | Turns the mic down between phrases. 0 = off |
 
+### `warmth` — Warmth
+| Param | Range | Notes |
+|---|---|---|
+| `drive` | 0 to 100 % | Gentle thickening at low settings, grit when pushed. 0 = off |
+| `character` | choice | 0 Tape (rounds off the top), 1 Tube (even harmonics) |
+
+### `air` — Air
+| Param | Range | Notes |
+|---|---|---|
+| `amount` | 0 to 100 % | New upper harmonics blended in. 0 = off |
+| `focus` | choice | 0 Presence (3 kHz up), 1 Air (6 kHz up) |
+
+### `punch` — Punch
+| Param | Range | Notes |
+|---|---|---|
+| `amount` | -100 to 100 | + more attack, − softer attack / more sustain, 0 = off |
+
+### `gate` — Smart Gate
+| Param | Range | Notes |
+|---|---|---|
+| `sensitivity` | 0 to 100 % | Higher gates more of the quiet between notes |
+| `depth` | 0 to 80 dB | How far it turns down when closed |
+
+### `tone` — Tone
+| Param | Range | Notes |
+|---|---|---|
+| `amount` | 0 to 100 % | How much of the instrument's tone profile. 0 = flat |
+| `instrument` | choice | 0 None, 1 Lead Vocal, 2 Backing Vocal, 3 Acoustic Guitar, 4 Electric Guitar, 5 Bass, 6 Keys / Piano, 7 Synth, 8 Kick, 9 Snare, 10 Drum Kit / Overheads |
+
+Turn Tone on and off with `/app/<channel>/tone/bypass` (1 = off, 0 = on), like any effect.
+
+### `body` — Piezo Body
+| Param | Range | Notes |
+|---|---|---|
+| `amount` | 0 to 100 % | Body back in, quack and spikiness out. 0 = flat |
+| `size` | choice | 0 Parlor, 1 Dreadnought, 2 Jumbo — where the body resonances sit |
+| `phase` | toggle | Flip polarity; try it when the low end feeds back |
+| `mute` | toggle | Silence the guitar (e.g. to tune) |
+| `level` | -12 to 6 dB | Output level |
+
+### `harmony` — Harmony
+| Param | Range | Notes |
+|---|---|---|
+| `voice1` / `voice2` / `voice3` | toggle | 1 = on, 0 = muted (settings kept) |
+| `interval1` / `2` / `3` | choice | 0 Octave Below, 1 6th Below, 2 5th Below, 3 4th Below, 4 3rd Below, 5 3rd Above, 6 4th Above, 7 5th Above, 8 6th Above, 9 Octave Above — in the song's key |
+| `level1` / `2` / `3` | -24 to 6 dB | |
+| `pan1` / `2` / `3` | -100 to 100 | -100 = left, 100 = right |
+| `gender1` / `2` / `3` | -6 to 6 semitones | + smaller/brighter, − bigger/deeper; pitch stays |
+| `leadLevel` | -60 to 6 dB | The singer's own voice. -60 = off (harmonies only) |
+| `humanize` | 0 to 100 % | Small detune, drift and delay so the voices sound like singers |
+| `followSongKey` | toggle | Harmonize in the key of the song loaded in Perform |
+| `key` | choice | Same as `pitch` — fallback when following the song key |
+| `scale` | choice | Same as `pitch` |
+| `pickiness` | 0 to 100 % | Higher = only clear, steady notes get harmonies |
+| `gate` | -70 to -20 dBFS | Quieter input (bleed) gets no harmonies |
+
+### `detune` — Micro Detune
+| Param | Range | Notes |
+|---|---|---|
+| `pitchA` | 0 to 50 cents | Voice A (left) shifted up. 9 = classic |
+| `pitchB` | -50 to 0 cents | Voice B (right) shifted down. -9 = classic |
+| `delayA` | 0 to 2000 ms | Voice A delay (when not tempo-synced). The shifter adds ~25 ms on top |
+| `delayB` | 0 to 2000 ms | Voice B delay (when not tempo-synced). The shifter adds ~25 ms on top |
+| `tempoSync` | toggle | Delays follow the loaded song's tempo as note values |
+| `noteA` | choice | 0 1/32, 1 1/16T, 2 1/16, 3 1/8T, 4 1/16., 5 1/8, 6 1/4T, 7 1/8., 8 1/4, 9 1/4., 10 1/2 |
+| `noteB` | choice | Same as `noteA` |
+| `pitchMix` | 0 to 100 % | 0 = only A, 50 = both, 100 = only B |
+| `mix` | 0 to 100 % | 50 = dry and wet both full; above that the dry fades |
+| `feedback` | 0 to 95 % | Repeats shift further each time: rising/falling repeats |
+| `tone` | -100 to 100 | − darker, 0 flat, + brighter (voices only) |
+| `lowCut` | 20 to 600 Hz | Keeps the low end out of the voices. 20 = off |
+| `modDepth` | 0 to 100 % | Chorus: at 100 each voice swings from 0 to 2× its shift |
+| `modRate` | 0.1 to 10 Hz | Speed of the chorus |
+
 ---
 
 ## 4. Examples
@@ -183,7 +268,7 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | Goal | Address | Value |
 |---|---|---|
 | Tight tuning on the lead vocal | `/app/Lead Vox/pitch/retuneSpeed` | 15 |
-| Natural tuning on the lead vocal | `/app/Lead Vox/pitch/retuneSpeed` | 60 |
+| Natural tuning on the lead vocal | `/app/Lead Vox/pitch/retuneSpeed` | 120 |
 | Transpose BGV up a whole step | `/app/BGV/pitch/transpose` | 2 |
 | Octave-down doubler on the 2nd Pitch Guide | `/app/Lead Vox/pitch2/transpose` | -12 |
 | Correct in A minor | `/app/Lead Vox/pitch/key` + `/app/Lead Vox/pitch/scale` | 9, then 2 |

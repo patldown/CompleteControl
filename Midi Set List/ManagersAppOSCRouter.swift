@@ -15,6 +15,7 @@ enum AppOSCRouter {
 
     enum RouteError: LocalizedError {
         case malformed, unknownChannel(String), unknownEffect(String), unknownParam(String), needsValue
+        case unknownPreset(String)
 
         var errorDescription: String? {
             switch self {
@@ -23,6 +24,7 @@ enum AppOSCRouter {
             case .unknownEffect(let f):    "No \"\(f)\" effect on that channel"
             case .unknownParam(let p):     "Unknown parameter \"\(p)\""
             case .needsValue:              "This address needs a value"
+            case .unknownPreset(let p):    "No preset named \"\(p)\""
             }
         }
     }
@@ -48,9 +50,26 @@ enum AppOSCRouter {
             return "Engine stop"
         }
 
+        // /app/mix/<preset>[/<channel>] — a mix preset; the value is ignored
+        if parts[0].lowercased() == "mix" {
+            guard parts.count == 2 || parts.count == 3 else { throw RouteError.malformed }
+            let presets = MixPresetStore.shared
+            guard let preset = presets.preset(named: parts[1]) else { throw RouteError.unknownPreset(parts[1]) }
+            return presets.recall(preset, onlyChannel: parts.count == 3 ? parts[2] : nil)
+        }
+
         guard parts.count == 2 || parts.count == 3 else { throw RouteError.malformed }
         guard var channel = findChannel(parts[0], in: store.channels) else {
             throw RouteError.unknownChannel(parts[0])
+        }
+
+        // /app/<channel>/preset/<name> — one of the channel's own presets, applied live
+        if parts.count == 3, parts[1].lowercased() == "preset" {
+            let wanted = AppOSC.normalize(parts[2])
+            guard let macro = channel.macros.first(where: { AppOSC.normalize($0.name) == wanted }) else {
+                throw RouteError.unknownPreset(parts[2])
+            }
+            return MixPresetStore.shared.recall(macro, on: channel)
         }
 
         // /app/<channel>/volume | mute | output | stereoOut

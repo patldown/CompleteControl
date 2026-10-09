@@ -14,12 +14,14 @@ import Foundation
 // MARK: - FX type
 
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
-    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide
+    case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide, microDetune, harmony,
+         piezoBody, tone, warmth, air, punch, smartGate
 
     // reverb and delay kept in enum for JSON backward-compat but are no longer available;
     // the load() migration clears any saved slots of these types.
     static var allCases: [BuiltInFXType] {
-        [.gain, .eq3Band, .levelRider, .optoComp, .fetComp, .feedbackNotch, .pitchGuide]
+        [.tone, .gain, .eq3Band, .smartGate, .levelRider, .optoComp, .fetComp, .punch, .warmth, .air,
+         .feedbackNotch, .pitchGuide, .harmony, .microDetune, .piezoBody]
     }
 
     var id: String { rawValue }
@@ -35,6 +37,14 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .fetComp:    "FET Comp (1176 style)"
         case .feedbackNotch: "Feedback Notch"
         case .pitchGuide: "Pitch Guide"
+        case .microDetune: "Micro Detune (widener)"
+        case .harmony:    "Harmony (key-aware)"
+        case .piezoBody:  "Piezo Body (acoustic pickup)"
+        case .tone:       "Tone (instrument)"
+        case .warmth:     "Warmth (tape / tube)"
+        case .air:        "Air (exciter)"
+        case .punch:      "Punch (transient shaper)"
+        case .smartGate:  "Smart Gate"
         }
     }
 
@@ -49,6 +59,14 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .fetComp:    "bolt"
         case .feedbackNotch: "waveform.path.badge.minus"
         case .pitchGuide: "music.note"
+        case .microDetune: "arrow.left.and.right"
+        case .harmony:    "music.quarternote.3"
+        case .piezoBody:  "guitars"
+        case .tone:       "wand.and.rays"
+        case .warmth:     "flame"
+        case .air:        "wind"
+        case .punch:      "burst"
+        case .smartGate:  "door.left.hand.closed"
         }
     }
 }
@@ -150,6 +168,622 @@ struct FeedbackNotchParams: Codable, Equatable {
     var maxDepth: Float = -12       // dB, -18...-6; deepest any one notch may go
 }
 
+// MARK: - One-knob effects
+
+struct WarmthParams: Codable, Equatable {
+    enum Character: String, Codable, CaseIterable, Identifiable {
+        case tape, tube
+        var id: String { rawValue }
+        var displayName: String { self == .tape ? "Tape" : "Tube" }
+    }
+    var drive: Float = 40           // %, 0...100
+    var character: Character = .tape
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        drive = try c.decodeIfPresent(Float.self, forKey: .drive) ?? 40
+        character = (try? c.decodeIfPresent(Character.self, forKey: .character)) ?? .tape
+    }
+}
+
+struct AirParams: Codable, Equatable {
+    enum Focus: String, Codable, CaseIterable, Identifiable {
+        case presence, air
+        var id: String { rawValue }
+        var displayName: String { self == .presence ? "Presence (3 kHz up)" : "Air (6 kHz up)" }
+    }
+    var amount: Float = 40          // %, 0...100
+    var focus: Focus = .presence
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? 40
+        focus = (try? c.decodeIfPresent(Focus.self, forKey: .focus)) ?? .presence
+    }
+}
+
+struct PunchParams: Codable, Equatable {
+    var amount: Float = 0           // -100 (softer attack, more sustain) ... +100 (more attack)
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? 0
+    }
+}
+
+struct SmartGateParams: Codable, Equatable {
+    var sensitivity: Float = 50     // %, 0...100; higher gates more
+    var depth: Float = 40           // dB the gate turns down when closed, 0...80
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sensitivity = try c.decodeIfPresent(Float.self, forKey: .sensitivity) ?? 50
+        depth = try c.decodeIfPresent(Float.self, forKey: .depth) ?? 40
+    }
+}
+
+// MARK: - Tone (instrument-aware one-button sound)
+
+/// What a Tone effect shapes the sound for
+nonisolated enum ToneInstrument: Int, Codable, CaseIterable, Identifiable {
+    case leadVocal = 0, backingVocal, acousticGuitar, electricGuitar, bass, keys, synth, kick, snare, drumKit
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .leadVocal:      "Lead Vocal"
+        case .backingVocal:   "Backing Vocal"
+        case .acousticGuitar: "Acoustic Guitar"
+        case .electricGuitar: "Electric Guitar"
+        case .bass:           "Bass"
+        case .keys:           "Keys / Piano"
+        case .synth:          "Synth"
+        case .kick:           "Kick"
+        case .snare:          "Snare"
+        case .drumKit:        "Drum Kit / Overheads"
+        }
+    }
+
+    var shortName: String {
+        switch self {
+        case .leadVocal:      "Lead"
+        case .backingVocal:   "BGV"
+        case .acousticGuitar: "Acoustic"
+        case .electricGuitar: "Electric"
+        case .bass:           "Bass"
+        case .keys:           "Keys"
+        case .synth:          "Synth"
+        case .kick:           "Kick"
+        case .snare:          "Snare"
+        case .drumKit:        "Kit"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .leadVocal:      "🎤"
+        case .backingVocal:   "🎙️"
+        case .acousticGuitar, .electricGuitar, .bass: "🎸"
+        case .keys:           "🎹"
+        case .synth:          "🎛️"
+        case .kick, .snare, .drumKit: "🥁"
+        }
+    }
+
+    /// What Tone does for it, in words (shown in the editor)
+    var toneDescription: String {
+        switch self {
+        case .leadVocal:      "Cuts rumble and mud, adds presence and air, smooths level and tames sibilance."
+        case .backingVocal:   "Thinner and further back than a lead: more low cut, less presence, firmer level, de-essed."
+        case .acousticGuitar: "Cuts boom and boxiness, adds sparkle, gently evens out strumming."
+        case .electricGuitar: "Cuts mud and fizz, pushes the mids that cut through a band."
+        case .bass:           "Firms the lows, clears mud, adds growl for definition, steadies level."
+        case .keys:           "Clears low-mid clutter and adds a little clarity."
+        case .synth:          "Light clean-up: tidies the low mids and opens the top."
+        case .kick:           "Adds thump and beater click, scoops the cardboard mids, tight compression."
+        case .snare:          "Adds body and crack, cuts the boxy ring."
+        case .drumKit:        "Cuts low thud and boxiness from overheads, adds cymbal shimmer."
+        }
+    }
+
+    /// Target tonal balance in octave bands at 125, 250, 500, 1k, 2k, 4k and 8k Hz, in dB
+    /// relative to pink noise (only the shape matters). Adaptive Tone corrects toward it.
+    var balance: (Double, Double, Double, Double, Double, Double, Double) {
+        switch self {
+        case .leadVocal:      (-8, -1, 2, 2, 1, -1, -6)
+        case .backingVocal:   (-10, -3, 1, 2, 2, 0, -5)
+        case .acousticGuitar: (-4, -1, 0, 1, 1, 0, -3)
+        case .electricGuitar: (-6, -1, 2, 3, 1, -3, -10)
+        case .bass:           (6, 3, 0, -3, -6, -10, -16)
+        case .keys:           (-2, 0, 1, 0, -1, -2, -5)
+        case .synth:          (0, 0, 0, 0, -1, -2, -4)
+        case .kick:           (8, 2, -6, -6, -3, -2, -8)
+        case .snare:          (-6, 2, 0, -1, 0, 0, -3)
+        case .drumKit:        (-6, -3, -2, -1, 0, 1, 1)
+        }
+    }
+
+    /// Compressor threshold above the running average level, dB: lower = more leveling
+    var compOverAverageDB: Double {
+        switch self {
+        case .leadVocal:      6
+        case .backingVocal:   4
+        case .acousticGuitar, .electricGuitar: 8
+        case .bass:           6
+        case .keys, .synth:   10
+        case .kick, .snare:   8
+        case .drumKit:        10
+        }
+    }
+
+    /// Full-Amount settings: the most each EQ move may do (adaptive Tone applies only what's needed)
+    var profile: ToneProfile {
+        typealias B = ToneProfile.Band
+        switch self {
+        case .leadVocal:
+            return ToneProfile(highPass: 90, bands: (B(kind: .peak, freq: 250, q: 1.0, db: -3),
+                                                    B(kind: .peak, freq: 1_000, q: 1.5, db: -1),
+                                                    B(kind: .peak, freq: 3_200, q: 1.0, db: 3),
+                                                    B(kind: .highShelf, freq: 10_000, q: 0.7, db: 2.5)),
+                               compRatio: 3, compThreshold: -22, compAttackMs: 5, compReleaseMs: 120, deEss: true)
+        case .backingVocal:
+            return ToneProfile(highPass: 130, bands: (B(kind: .peak, freq: 250, q: 1.0, db: -4),
+                                                     B(kind: .peak, freq: 1_000, q: 1.5, db: -1),
+                                                     B(kind: .peak, freq: 3_200, q: 1.0, db: 2),
+                                                     B(kind: .highShelf, freq: 10_000, q: 0.7, db: 2)),
+                               compRatio: 4, compThreshold: -24, compAttackMs: 5, compReleaseMs: 120, deEss: true)
+        case .acousticGuitar:
+            return ToneProfile(highPass: 80, bands: (B(kind: .peak, freq: 220, q: 1.2, db: -3),
+                                                    B(kind: .peak, freq: 1_200, q: 1.5, db: -1.5),
+                                                    B(kind: .peak, freq: 5_000, q: 1.0, db: 2.5),
+                                                    B(kind: .highShelf, freq: 12_000, q: 0.7, db: 2)),
+                               compRatio: 2.5, compThreshold: -20, compAttackMs: 10, compReleaseMs: 150, deEss: false)
+        case .electricGuitar:
+            return ToneProfile(highPass: 90, bands: (B(kind: .peak, freq: 300, q: 1.0, db: -2),
+                                                    B(kind: .peak, freq: 800, q: 1.0, db: 1),
+                                                    B(kind: .peak, freq: 2_500, q: 1.2, db: 2),
+                                                    B(kind: .highShelf, freq: 7_000, q: 0.7, db: -3)),
+                               compRatio: 2, compThreshold: -18, compAttackMs: 15, compReleaseMs: 150, deEss: false)
+        case .bass:
+            return ToneProfile(highPass: 35, bands: (B(kind: .lowShelf, freq: 100, q: 0.7, db: 2.5),
+                                                    B(kind: .peak, freq: 250, q: 1.0, db: -3),
+                                                    B(kind: .peak, freq: 800, q: 1.2, db: 2),
+                                                    B(kind: .highShelf, freq: 5_000, q: 0.7, db: -2)),
+                               compRatio: 4, compThreshold: -20, compAttackMs: 10, compReleaseMs: 200, deEss: false)
+        case .keys:
+            return ToneProfile(highPass: 60, bands: (B(kind: .peak, freq: 300, q: 1.0, db: -2),
+                                                    B(kind: .peak, freq: 1_000, q: 1.0, db: 0),
+                                                    B(kind: .peak, freq: 4_000, q: 1.0, db: 1.5),
+                                                    B(kind: .highShelf, freq: 10_000, q: 0.7, db: 1.5)),
+                               compRatio: 2, compThreshold: -18, compAttackMs: 15, compReleaseMs: 200, deEss: false)
+        case .synth:
+            return ToneProfile(highPass: 40, bands: (B(kind: .peak, freq: 250, q: 1.0, db: -1.5),
+                                                    B(kind: .peak, freq: 2_000, q: 1.0, db: 0),
+                                                    B(kind: .peak, freq: 5_000, q: 1.0, db: 1),
+                                                    B(kind: .highShelf, freq: 12_000, q: 0.7, db: 1.5)),
+                               compRatio: 1.5, compThreshold: -16, compAttackMs: 20, compReleaseMs: 200, deEss: false)
+        case .kick:
+            return ToneProfile(highPass: 30, bands: (B(kind: .peak, freq: 60, q: 1.2, db: 3),
+                                                    B(kind: .peak, freq: 350, q: 1.0, db: -5),
+                                                    B(kind: .peak, freq: 4_000, q: 1.2, db: 3),
+                                                    B(kind: .highShelf, freq: 10_000, q: 0.7, db: -2)),
+                               compRatio: 4, compThreshold: -18, compAttackMs: 3, compReleaseMs: 80, deEss: false)
+        case .snare:
+            return ToneProfile(highPass: 80, bands: (B(kind: .peak, freq: 200, q: 1.2, db: 2),
+                                                    B(kind: .peak, freq: 500, q: 1.2, db: -3),
+                                                    B(kind: .peak, freq: 5_000, q: 1.0, db: 2.5),
+                                                    B(kind: .highShelf, freq: 10_000, q: 0.7, db: 1)),
+                               compRatio: 3, compThreshold: -18, compAttackMs: 3, compReleaseMs: 100, deEss: false)
+        case .drumKit:
+            return ToneProfile(highPass: 120, bands: (B(kind: .peak, freq: 400, q: 1.0, db: -2.5),
+                                                     B(kind: .peak, freq: 2_500, q: 1.5, db: -1),
+                                                     B(kind: .peak, freq: 6_000, q: 1.0, db: 0),
+                                                     B(kind: .highShelf, freq: 10_000, q: 0.7, db: 2)),
+                               compRatio: 2, compThreshold: -16, compAttackMs: 5, compReleaseMs: 150, deEss: false)
+        }
+    }
+}
+
+struct ToneParams: Codable, Equatable {
+    /// The instrument it shapes the sound for; nil = Tone does nothing
+    var instrument: ToneInstrument?
+    var amount: Float = 70          // %, 0...100
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = ToneParams()
+        instrument = try? c.decodeIfPresent(ToneInstrument.self, forKey: .instrument)
+        amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? d.amount
+    }
+}
+
+// MARK: - Piezo Body parameters
+
+/// Where the guitar's body resonances sit
+enum GuitarBodySize: String, Codable, CaseIterable, Identifiable {
+    case parlor, dreadnought, jumbo
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .parlor:      "Parlor"
+        case .dreadnought: "Dreadnought"
+        case .jumbo:       "Jumbo"
+        }
+    }
+    /// Air and top resonances, Hz
+    var resonances: (Float, Float) {
+        switch self {
+        case .parlor:      (130, 260)
+        case .dreadnought: (100, 210)
+        case .jumbo:       (85, 180)
+        }
+    }
+}
+
+/// Acoustic pickup enhancer: body resonance back in, quack and spikiness out, one knob
+struct PiezoBodyParams: Codable, Equatable {
+    var amount: Float = 60          // %, 0...100
+    var bodySize: GuitarBodySize = .dreadnought
+    var phaseInvert = false
+    var mute = false
+    var level: Float = 0            // dB, -12...+6
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PiezoBodyParams()
+        amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? d.amount
+        bodySize = (try? c.decodeIfPresent(GuitarBodySize.self, forKey: .bodySize)) ?? d.bodySize
+        phaseInvert = try c.decodeIfPresent(Bool.self, forKey: .phaseInvert) ?? d.phaseInvert
+        mute = try c.decodeIfPresent(Bool.self, forKey: .mute) ?? d.mute
+        level = try c.decodeIfPresent(Float.self, forKey: .level) ?? d.level
+    }
+}
+
+// MARK: - Harmony parameters
+
+/// A harmony voice's interval from the sung note, counted in steps of the key's scale
+nonisolated enum HarmonyInterval: Int, Codable, CaseIterable, Identifiable {
+    case octaveBelow = 0, sixthBelow, fifthBelow, fourthBelow, thirdBelow
+    case thirdAbove, fourthAbove, fifthAbove, sixthAbove, octaveAbove
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .octaveBelow: "Octave Below"
+        case .sixthBelow:  "6th Below"
+        case .fifthBelow:  "5th Below"
+        case .fourthBelow: "4th Below"
+        case .thirdBelow:  "3rd Below"
+        case .thirdAbove:  "3rd Above"
+        case .fourthAbove: "4th Above"
+        case .fifthAbove:  "5th Above"
+        case .sixthAbove:  "6th Above"
+        case .octaveAbove: "Octave Above"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .octaveBelow: "−8va"
+        case .sixthBelow:  "−6th"
+        case .fifthBelow:  "−5th"
+        case .fourthBelow: "−4th"
+        case .thirdBelow:  "−3rd"
+        case .thirdAbove:  "+3rd"
+        case .fourthAbove: "+4th"
+        case .fifthAbove:  "+5th"
+        case .sixthAbove:  "+6th"
+        case .octaveAbove: "+8va"
+        }
+    }
+
+    /// Scale steps from the sung note in a seven-note scale (a 3rd is two steps)
+    var steps: Int {
+        switch self {
+        case .octaveBelow: -7
+        case .sixthBelow:  -5
+        case .fifthBelow:  -4
+        case .fourthBelow: -3
+        case .thirdBelow:  -2
+        case .thirdAbove:  2
+        case .fourthAbove: 3
+        case .fifthAbove:  4
+        case .sixthAbove:  5
+        case .octaveAbove: 7
+        }
+    }
+
+    /// Semitone sizes to try, in order, for scales that aren't seven notes. A tuple so the
+    /// audio thread never builds an array.
+    var semitones: (Int, Int?, Int?) {
+        switch self {
+        case .octaveBelow: (-12, nil, nil)
+        case .sixthBelow:  (-9, -8, nil)
+        case .fifthBelow:  (-7, -8, -6)
+        case .fourthBelow: (-5, -6, nil)
+        case .thirdBelow:  (-3, -4, nil)
+        case .thirdAbove:  (4, 3, nil)
+        case .fourthAbove: (5, 6, nil)
+        case .fifthAbove:  (7, 6, 8)
+        case .sixthAbove:  (9, 8, nil)
+        case .octaveAbove: (12, nil, nil)
+        }
+    }
+}
+
+struct HarmonyVoice: Codable, Equatable {
+    /// False = muted (settings kept)
+    var enabled = true
+    var interval: HarmonyInterval = .thirdAbove
+    var level: Float = -3           // dB, -24...+6
+    var pan: Float = -40            // -100 (L) ... +100 (R)
+    /// Formant shift: + smaller/brighter, − bigger/deeper; the pitch doesn't move
+    var gender: Float = 0           // semitones, -6...+6
+
+    init(enabled: Bool = true, interval: HarmonyInterval = .thirdAbove, level: Float = -3,
+         pan: Float = -40, gender: Float = 0) {
+        self.enabled = enabled; self.interval = interval; self.level = level
+        self.pan = pan; self.gender = gender
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = HarmonyVoice()
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
+        interval = (try? c.decodeIfPresent(HarmonyInterval.self, forKey: .interval)) ?? d.interval
+        level = try c.decodeIfPresent(Float.self, forKey: .level) ?? d.level
+        pan = try c.decodeIfPresent(Float.self, forKey: .pan) ?? d.pan
+        gender = try c.decodeIfPresent(Float.self, forKey: .gender) ?? d.gender
+    }
+
+    var gain: Float { powf(10, level / 20) }
+    /// Rate grains are read at: 2^(gender/12)
+    var formantRate: Float { powf(2, max(-6, min(6, gender)) / 12) }
+}
+
+/// Key-aware harmonizer: up to three voices made from the singer, in the song's key
+struct HarmonyParams: Codable, Equatable {
+    var voice1 = HarmonyVoice()
+    var voice2 = HarmonyVoice(enabled: false, interval: .fourthBelow, level: -3, pan: 40)
+    var voice3 = HarmonyVoice(enabled: false, interval: .octaveBelow, level: -6, pan: 0)
+    /// Use the loaded song's key and scale; `key`/`scale` are the fallback
+    var songKeyDrive = true
+    var key = 0                     // 0=C … 11=B
+    var scale: PitchScale = .major
+    var humanize: Float = 30        // %, 0...100; small detune, drift and delay per voice
+    /// The singer's own voice in the output; at the bottom (-60) it's off = harmonies only
+    var leadLevel: Float = 0        // dB, -60...+6
+    var pickiness: Float = 50       // %, 0...100
+    var gateThreshold: Float = -45  // dBFS, -70...-20
+    var voiceRange: VoiceRange = .mid
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = HarmonyParams()
+        voice1 = try c.decodeIfPresent(HarmonyVoice.self, forKey: .voice1) ?? d.voice1
+        voice2 = try c.decodeIfPresent(HarmonyVoice.self, forKey: .voice2) ?? d.voice2
+        voice3 = try c.decodeIfPresent(HarmonyVoice.self, forKey: .voice3) ?? d.voice3
+        songKeyDrive = try c.decodeIfPresent(Bool.self, forKey: .songKeyDrive) ?? d.songKeyDrive
+        key = try c.decodeIfPresent(Int.self, forKey: .key) ?? d.key
+        scale = (try? c.decodeIfPresent(PitchScale.self, forKey: .scale)) ?? d.scale
+        humanize = try c.decodeIfPresent(Float.self, forKey: .humanize) ?? d.humanize
+        // The first version had an on/off Lead switch
+        let oldLead = try decoder.container(keyedBy: FirstVersionKeys.self)
+            .decodeIfPresent(Bool.self, forKey: .passLead)
+        leadLevel = try c.decodeIfPresent(Float.self, forKey: .leadLevel)
+            ?? oldLead.map { $0 ? 0 : Self.leadOff } ?? d.leadLevel
+        pickiness = try c.decodeIfPresent(Float.self, forKey: .pickiness) ?? d.pickiness
+        gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
+        voiceRange = (try? c.decodeIfPresent(VoiceRange.self, forKey: .voiceRange)) ?? d.voiceRange
+    }
+
+    private enum FirstVersionKeys: String, CodingKey { case passLead }
+
+    /// Lead Level at or below this is off
+    static let leadOff: Float = -60
+
+    var leadGain: Float { leadLevel <= Self.leadOff ? 0 : powf(10, leadLevel / 20) }
+
+    /// These params in the song's key and scale, when following it and it has a key
+    func resolved(songKey: MusicalKey?) -> HarmonyParams {
+        guard songKeyDrive, let songKey, let pc = songKey.pitchClass else { return self }
+        var p = self
+        p.key = ((pc % 12) + 12) % 12
+        p.scale = PitchScale(songKey.scale)
+        return p
+    }
+
+    /// 12-bit mask of the key's notes (bit 0 = C)
+    var allowedPitchClassMask: UInt32 {
+        scale.intervals.reduce(0) { $0 | (1 << UInt32((key + $1) % 12)) }
+    }
+
+    struct Stock: Identifiable {
+        let name: String
+        let voice1: HarmonyVoice
+        let voice2: HarmonyVoice
+        let voice3: HarmonyVoice
+        var id: String { name }
+
+        init(_ name: String, _ voice1: HarmonyVoice,
+             _ voice2: HarmonyVoice = HarmonyVoice(enabled: false, interval: .fourthBelow, level: -3, pan: 40),
+             _ voice3: HarmonyVoice = HarmonyVoice(enabled: false, interval: .octaveBelow, level: -6, pan: 0)) {
+            self.name = name; self.voice1 = voice1; self.voice2 = voice2; self.voice3 = voice3
+        }
+    }
+
+    /// Ready-made voicings; choosing one sets the voices and leaves key, lead and detection alone
+    static let stock: [Stock] = [
+        Stock("3rd Above", HarmonyVoice(interval: .thirdAbove, level: -3, pan: -30)),
+        Stock("3rd Below", HarmonyVoice(interval: .thirdBelow, level: -3, pan: 30)),
+        Stock("3rd & 5th Above",
+              HarmonyVoice(interval: .thirdAbove, level: -4, pan: -40),
+              HarmonyVoice(interval: .fifthAbove, level: -6, pan: 40)),
+        Stock("Trio (3rd Up, 4th Down)",
+              HarmonyVoice(interval: .thirdAbove, level: -4, pan: -40),
+              HarmonyVoice(interval: .fourthBelow, level: -5, pan: 40)),
+        Stock("Full Stack (3rd, 5th, Octave Down)",
+              HarmonyVoice(interval: .thirdAbove, level: -5, pan: -45),
+              HarmonyVoice(interval: .fifthAbove, level: -7, pan: 45),
+              HarmonyVoice(interval: .octaveBelow, level: -8, pan: 0, gender: -2)),
+        Stock("Octave Below",
+              HarmonyVoice(interval: .octaveBelow, level: -6, pan: 0)),
+        Stock("Deep Octave Below",
+              HarmonyVoice(interval: .octaveBelow, level: -6, pan: 0, gender: -4)),
+        Stock("Octaves Up & Down",
+              HarmonyVoice(interval: .octaveAbove, level: -9, pan: -25, gender: 2),
+              HarmonyVoice(interval: .octaveBelow, level: -6, pan: 25, gender: -2)),
+    ]
+}
+
+// MARK: - Micro Detune parameters
+
+/// Micro-pitch dual shifted delay, after Eventide's MicroPitch: voice A shifted up (left),
+/// voice B shifted down (right), each with its own delay and feedback loop.
+struct MicroDetuneParams: Codable, Equatable {
+    var pitchA: Float = 9           // cents, 0...50; voice A (left) shifted up
+    var pitchB: Float = -9          // cents, -50...0; voice B (right) shifted down
+    var delayA: Float = 0           // ms, 0...2000
+    var delayB: Float = 12          // ms, 0...2000
+    /// Delays follow the loaded song's tempo as note values instead of milliseconds
+    var tempoSync: Bool = false
+    var noteA: NoteDivision = .eighth
+    var noteB: NoteDivision = .dottedEighth
+    var pitchMix: Float = 50        // %, 0...100; 0 = only A, 50 = both full, 100 = only B
+    var mix: Float = 40             // %, 0...100; 50 = dry and wet both full
+    var feedback: Float = 0         // %, 0...95; each voice repeats through its own shifter
+    var tone: Float = 0             // -100 (darker) ... +100 (brighter); 0 = flat
+    var lowCut: Float = 20          // Hz, 20...600; 20 = off
+    var modDepth: Float = 0         // %, 0...100; at 100 each voice's pitch swings 0 to 2× its shift
+    var modRate: Float = 0.5        // Hz, 0.1...10
+
+    init() {}
+
+    // Missing keys decode as defaults; the first version's settings carry over
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let old = try decoder.container(keyedBy: FirstVersionKeys.self)
+        let d = MicroDetuneParams()
+        let oldDetune = try old.decodeIfPresent(Float.self, forKey: .detune)
+        let oldDelay = try old.decodeIfPresent(Float.self, forKey: .delay)
+        pitchA = try c.decodeIfPresent(Float.self, forKey: .pitchA) ?? oldDetune ?? d.pitchA
+        pitchB = try c.decodeIfPresent(Float.self, forKey: .pitchB) ?? oldDetune.map { -$0 } ?? d.pitchB
+        delayA = try c.decodeIfPresent(Float.self, forKey: .delayA) ?? oldDelay ?? d.delayA
+        delayB = try c.decodeIfPresent(Float.self, forKey: .delayB) ?? oldDelay.map { $0 * 1.4 } ?? d.delayB
+        tempoSync = try c.decodeIfPresent(Bool.self, forKey: .tempoSync) ?? d.tempoSync
+        noteA = (try? c.decodeIfPresent(NoteDivision.self, forKey: .noteA)) ?? d.noteA
+        noteB = (try? c.decodeIfPresent(NoteDivision.self, forKey: .noteB)) ?? d.noteB
+        pitchMix = try c.decodeIfPresent(Float.self, forKey: .pitchMix) ?? d.pitchMix
+        mix = try c.decodeIfPresent(Float.self, forKey: .mix) ?? d.mix
+        feedback = try c.decodeIfPresent(Float.self, forKey: .feedback) ?? d.feedback
+        tone = try c.decodeIfPresent(Float.self, forKey: .tone) ?? d.tone
+        lowCut = try c.decodeIfPresent(Float.self, forKey: .lowCut) ?? d.lowCut
+        modDepth = try c.decodeIfPresent(Float.self, forKey: .modDepth) ?? d.modDepth
+        modRate = try c.decodeIfPresent(Float.self, forKey: .modRate) ?? d.modRate
+    }
+
+    private enum FirstVersionKeys: String, CodingKey { case detune, delay }
+
+    static let maxDelayMs: Float = 2_000
+
+    /// Delay times in ms: the fixed times, or the note values at the song's tempo
+    func delays(bpm: Int?) -> (a: Float, b: Float) {
+        guard tempoSync, let bpm, bpm > 0 else { return (delayA, delayB) }
+        let beat = 60_000 / Float(bpm)
+        return (min(Self.maxDelayMs, noteA.beats * beat), min(Self.maxDelayMs, noteB.beats * beat))
+    }
+}
+
+/// A delay time as a note value, in beats (quarter notes)
+enum NoteDivision: String, Codable, CaseIterable, Identifiable {
+    case thirtySecond, sixteenthTriplet, sixteenth, eighthTriplet, dottedSixteenth
+    case eighth, quarterTriplet, dottedEighth, quarter, dottedQuarter, half
+
+    var id: String { rawValue }
+
+    var beats: Float {
+        switch self {
+        case .thirtySecond:     0.125
+        case .sixteenthTriplet: 1.0 / 6
+        case .sixteenth:        0.25
+        case .eighthTriplet:    1.0 / 3
+        case .dottedSixteenth:  0.375
+        case .eighth:           0.5
+        case .quarterTriplet:   2.0 / 3
+        case .dottedEighth:     0.75
+        case .quarter:          1
+        case .dottedQuarter:    1.5
+        case .half:             2
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .thirtySecond:     "1/32"
+        case .sixteenthTriplet: "1/16T"
+        case .sixteenth:        "1/16"
+        case .eighthTriplet:    "1/8T"
+        case .dottedSixteenth:  "1/16."
+        case .eighth:           "1/8"
+        case .quarterTriplet:   "1/4T"
+        case .dottedEighth:     "1/8."
+        case .quarter:          "1/4"
+        case .dottedQuarter:    "1/4."
+        case .half:             "1/2"
+        }
+    }
+}
+
+extension MicroDetuneParams {
+    struct Stock: Identifiable {
+        let name: String
+        let params: MicroDetuneParams
+        var id: String { name }
+        init(_ name: String, _ params: MicroDetuneParams) { self.name = name; self.params = params }
+    }
+
+    /// Ready-made settings offered in the editor
+    static let stock: [Stock] = [
+        Stock("Classic Micro Pitch", .make(a: 9, b: -9, delayA: 0, delayB: 12, mix: 40)),
+        Stock("Subtle Widen", .make(a: 6, b: -6, delayA: 8, delayB: 12, mix: 30, lowCut: 150)),
+        Stock("Thick Double", .make(a: 12, b: -12, delayA: 18, delayB: 32, mix: 45, lowCut: 120,
+                               modDepth: 15, modRate: 0.4)),
+        Stock("Wide Chorus", .make(a: 7, b: -7, delayA: 10, delayB: 14, mix: 50, tone: 20,
+                              modDepth: 50, modRate: 0.8)),
+        Stock("Pitch Slap", .make(a: 15, b: -15, delayA: 110, delayB: 160, mix: 35, feedback: 20,
+                             tone: -20, lowCut: 150)),
+        Stock("Rising Repeats", .make(a: 25, b: 0, delayA: 375, delayB: 500, mix: 30, feedback: 60,
+                                 pitchMix: 0, lowCut: 200, tempoSync: true,
+                                 noteA: .dottedEighth, noteB: .quarter)),
+    ]
+
+    private static func make(a: Float, b: Float, delayA: Float, delayB: Float, mix: Float,
+                             feedback: Float = 0, pitchMix: Float = 50, tone: Float = 0,
+                             lowCut: Float = 20, modDepth: Float = 0, modRate: Float = 0.5,
+                             tempoSync: Bool = false, noteA: NoteDivision = .eighth,
+                             noteB: NoteDivision = .dottedEighth) -> MicroDetuneParams {
+        var p = MicroDetuneParams()
+        p.pitchA = a; p.pitchB = b; p.delayA = delayA; p.delayB = delayB; p.mix = mix
+        p.feedback = feedback; p.pitchMix = pitchMix; p.tone = tone; p.lowCut = lowCut
+        p.modDepth = modDepth; p.modRate = modRate
+        p.tempoSync = tempoSync; p.noteA = noteA; p.noteB = noteB
+        return p
+    }
+}
+
 // MARK: - Pitch Guide parameters
 
 enum PitchScale: String, Codable, CaseIterable, Identifiable {
@@ -242,7 +876,7 @@ extension PitchScale {
 struct PitchGuideParams: Codable, Equatable {
     var key: Int = 0                    // 0=C … 11=B
     var scale: PitchScale = .major
-    var retuneSpeed: Float = 50         // ms, 0...400; 0 = instant (robotic)
+    var retuneSpeed: Float = 50         // ms to land on the note, 0...400; 0 = instant (robotic)
     var tolerance: Float = 10           // cents, 0...50; deviations this small are left alone
     var amount: Float = 100             // %, 0...100; how much of the error is removed
     var humanize: Float = 0             // %, 0...100; slows retune on held notes
@@ -264,6 +898,9 @@ struct PitchGuideParams: Codable, Equatable {
     var bleedDuck: Float = 0            // dB, -20...0
     /// Balance between processed and dry signal; 100 = fully processed, 0 = bypass
     var wetMix: Float = 100             // %, 0...100
+    /// Saved after Retune Speed came to mean time to land (like Auto-Tune) rather than the
+    /// glide's time constant. Missing on older saves, whose speeds are scaled to match.
+    var retuneSpeedLands: Bool = true
 
     init() {}
 
@@ -274,6 +911,11 @@ struct PitchGuideParams: Codable, Equatable {
         key = try c.decodeIfPresent(Int.self, forKey: .key) ?? d.key
         scale = (try? c.decodeIfPresent(PitchScale.self, forKey: .scale)) ?? d.scale
         retuneSpeed = try c.decodeIfPresent(Float.self, forKey: .retuneSpeed) ?? d.retuneSpeed
+        // Older saves stored the time constant; landing takes about 3× that, so keep their sound
+        if try c.decodeIfPresent(Bool.self, forKey: .retuneSpeedLands) != true,
+           c.contains(.retuneSpeed) {
+            retuneSpeed = min(400, retuneSpeed * 3)
+        }
         tolerance = try min(50, c.decodeIfPresent(Float.self, forKey: .tolerance) ?? d.tolerance)
         amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? d.amount
         humanize = try c.decodeIfPresent(Float.self, forKey: .humanize) ?? d.humanize
@@ -325,6 +967,14 @@ struct ChannelFXSlot: Codable, Equatable {
     var fetComp: FETCompParams = .init()
     var feedbackNotch: FeedbackNotchParams = .init()
     var pitchGuide: PitchGuideParams = .init()
+    var microDetune: MicroDetuneParams = .init()
+    var harmony: HarmonyParams = .init()
+    var piezoBody: PiezoBodyParams = .init()
+    var tone: ToneParams = .init()
+    var warmth: WarmthParams = .init()
+    var air: AirParams = .init()
+    var punch: PunchParams = .init()
+    var smartGate: SmartGateParams = .init()
 
     init() {}
 
@@ -342,6 +992,14 @@ struct ChannelFXSlot: Codable, Equatable {
         fetComp = try c.decodeIfPresent(FETCompParams.self, forKey: .fetComp) ?? .init()
         feedbackNotch = try c.decodeIfPresent(FeedbackNotchParams.self, forKey: .feedbackNotch) ?? .init()
         pitchGuide = try c.decodeIfPresent(PitchGuideParams.self, forKey: .pitchGuide) ?? .init()
+        microDetune = try c.decodeIfPresent(MicroDetuneParams.self, forKey: .microDetune) ?? .init()
+        harmony = try c.decodeIfPresent(HarmonyParams.self, forKey: .harmony) ?? .init()
+        piezoBody = try c.decodeIfPresent(PiezoBodyParams.self, forKey: .piezoBody) ?? .init()
+        tone = try c.decodeIfPresent(ToneParams.self, forKey: .tone) ?? .init()
+        warmth = try c.decodeIfPresent(WarmthParams.self, forKey: .warmth) ?? .init()
+        air = try c.decodeIfPresent(AirParams.self, forKey: .air) ?? .init()
+        punch = try c.decodeIfPresent(PunchParams.self, forKey: .punch) ?? .init()
+        smartGate = try c.decodeIfPresent(SmartGateParams.self, forKey: .smartGate) ?? .init()
     }
 }
 
@@ -381,6 +1039,8 @@ struct AudioChannel: Codable, Identifiable, Equatable {
     var isMuted: Bool = false
     var slots: [ChannelFXSlot] = Array(repeating: ChannelFXSlot(), count: 6)
     var macros: [ChannelMacro] = []
+    /// 1-based channel on the linked mixer; nil = same as the interface input
+    var mixerChannel: Int? = nil
 
     var displayName: String { name.isEmpty ? "Input \(inputIndex + 1)" : name }
 }
@@ -421,6 +1081,7 @@ extension AudioChannel {
         isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
         slots = try c.decodeIfPresent([ChannelFXSlot].self, forKey: .slots) ?? Array(repeating: ChannelFXSlot(), count: 6)
         macros = try c.decodeIfPresent([ChannelMacro].self, forKey: .macros) ?? []
+        mixerChannel = try c.decodeIfPresent(Int.self, forKey: .mixerChannel)
     }
 }
 

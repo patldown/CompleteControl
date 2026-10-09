@@ -64,6 +64,8 @@ final class AudioRoutingEngine {
 
     /// Key of the song loaded in Perform; Pitch Guide slots set to follow it use it
     private(set) var songKey: MusicalKey?
+    /// Tempo of the song loaded in Perform; tempo-synced Micro Detune delays use it
+    private(set) var songBPM: Int?
 
     private var engine: AVAudioEngine?
     private var graphs: [UUID: ChannelGraph] = [:]
@@ -123,6 +125,36 @@ final class AudioRoutingEngine {
             name: "Pitch Guide",
             version: 1
         )
+        for (description, name) in [(OneKnobAudioUnit.warmthDescription, "Warmth"),
+                                    (OneKnobAudioUnit.airDescription, "Air"),
+                                    (OneKnobAudioUnit.punchDescription, "Punch"),
+                                    (OneKnobAudioUnit.gateDescription, "Smart Gate")] {
+            AUAudioUnit.registerSubclass(OneKnobAudioUnit.self, as: description, name: name, version: 1)
+        }
+        AUAudioUnit.registerSubclass(
+            ToneAudioUnit.self,
+            as: ToneAudioUnit.componentDescription,
+            name: "Tone",
+            version: 1
+        )
+        AUAudioUnit.registerSubclass(
+            PiezoBodyAudioUnit.self,
+            as: PiezoBodyAudioUnit.componentDescription,
+            name: "Piezo Body",
+            version: 1
+        )
+        AUAudioUnit.registerSubclass(
+            HarmonyAudioUnit.self,
+            as: HarmonyAudioUnit.componentDescription,
+            name: "Harmony",
+            version: 1
+        )
+        AUAudioUnit.registerSubclass(
+            MicroDetuneAudioUnit.self,
+            as: MicroDetuneAudioUnit.componentDescription,
+            name: "Micro Detune",
+            version: 1
+        )
 
         // iOS stops the engine when the hardware configuration changes (interface
         // re-plugged, sample rate) — bring it straight back rather than going silent
@@ -130,9 +162,9 @@ final class AudioRoutingEngine {
             forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main
         ) { [weak self] note in
             let changed = note.object as AnyObject?
-            MainActor.assumeIsolated {
+            Task { @MainActor [weak self] in
                 guard let self, self.isRunning, let engine = self.engine, changed === engine else { return }
-                Task { await self.start() }
+                await self.start()
             }
         }
         // A phone call or Siri interrupts the session; resume when it's over
@@ -140,10 +172,10 @@ final class AudioRoutingEngine {
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
             let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-            MainActor.assumeIsolated {
+            Task { @MainActor [weak self] in
                 guard let self, self.isRunning, raw == AVAudioSession.InterruptionType.ended.rawValue,
                       self.engine?.isRunning != true else { return }
-                Task { await self.start() }
+                await self.start()
             }
         }
     }
@@ -318,9 +350,7 @@ final class AudioRoutingEngine {
         guard isRunning, let eng = engine else { return }
         guard !syncing.contains(id) else { pendingSync.insert(id); return }
         let started = Date()
-        let existing = graphs[id]
-
-        guard let existing else {
+        guard graphs[id] != nil else {
             // Added
             guard let channel = store.channels.first(where: { $0.id == id }) else { return }
             buildChannel(channel, in: eng, startSilent: true)
@@ -343,27 +373,9 @@ final class AudioRoutingEngine {
             return
         }
 
-        // Channel removed: fade to silence, then tear down
-        syncing.insert(id)
-        fade(existing.inputMixer, to: 0) { [weak self] in
-            guard let self else { return }
-            guard let eng = self.engine, let graph = self.graphs[id] else {
-                self.syncing.remove(id)
-                return
-            }
-            self.teardownChain(graph, in: eng)
-            for node in [graph.inputMixer, graph.picker] as [AVAudioNode] {
-                eng.disconnectNodeInput(node)
-                eng.disconnectNodeOutput(node)
-                eng.detach(node)
-            }
-            self.graphs[id] = nil
-            if let bus = self.packerBus.removeValue(forKey: id) {
-                (self.packer?.auAudioUnit as? OutputPackerAudioUnit)?.routes.clear(bus: bus)
-            }
-            self.connectInputs(in: eng)
-            self.finishSync(id)
-        }
+        // Channel removed: restart cleanly to avoid racing the packer's render block
+        logRebuild(store.channels.first { $0.id == id }?.displayName ?? "channel", "restarting engine for channel removal", since: started)
+        Task { await start() }
     }
 
     private func finishSync(_ id: UUID) {
@@ -435,6 +447,38 @@ final class AudioRoutingEngine {
             (effect.auAudioUnit as? PitchGuideAudioUnit)?.kernel
                 .applyParams(slot.pitchGuide.resolved(songKey: songKey))
             return effect
+        case .microDetune:
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: MicroDetuneAudioUnit.componentDescription)
+            (effect.auAudioUnit as? MicroDetuneAudioUnit)?.kernel.applyParams(slot.microDetune, bpm: songBPM)
+            return effect
+        case .harmony:
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: HarmonyAudioUnit.componentDescription)
+            (effect.auAudioUnit as? HarmonyAudioUnit)?.kernel
+                .applyParams(slot.harmony.resolved(songKey: songKey))
+            return effect
+        case .piezoBody:
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: PiezoBodyAudioUnit.componentDescription)
+            (effect.auAudioUnit as? PiezoBodyAudioUnit)?.kernel.applyParams(slot.piezoBody)
+            return effect
+        case .tone:
+            let effect = AVAudioUnitEffect(
+                audioComponentDescription: ToneAudioUnit.componentDescription)
+            (effect.auAudioUnit as? ToneAudioUnit)?.kernel
+                .applyParams(instrument: slot.tone.instrument, amount: slot.tone.amount)
+            return effect
+        case .warmth, .air, .punch, .smartGate:
+            let description: AudioComponentDescription = switch type {
+            case .air:       OneKnobAudioUnit.airDescription
+            case .punch:     OneKnobAudioUnit.punchDescription
+            case .smartGate: OneKnobAudioUnit.gateDescription
+            default:         OneKnobAudioUnit.warmthDescription
+            }
+            let effect = AVAudioUnitEffect(audioComponentDescription: description)
+            applyOneKnob(slot, to: (effect.auAudioUnit as? OneKnobAudioUnit)?.kernel)
+            return effect
         }
     }
 
@@ -485,14 +529,29 @@ final class AudioRoutingEngine {
         return effect.auAudioUnit
     }
 
-    /// A song loaded (or its transpose changed): retarget every Pitch Guide following the song key
+    /// A song loaded (or its transpose changed): retarget every Pitch Guide and Harmony following the song key
     func followSongKey(_ key: MusicalKey?) {
         guard key != songKey else { return }
         songKey = key
         for channel in store.channels {
             guard let graph = graphs[channel.id] else { continue }
             for (i, slot) in channel.slots.enumerated()
-            where slot.type == .pitchGuide && slot.pitchGuide.songKeyDrive && i < graph.fxNodes.count {
+            where i < graph.fxNodes.count
+                && ((slot.type == .pitchGuide && slot.pitchGuide.songKeyDrive)
+                    || (slot.type == .harmony && slot.harmony.songKeyDrive)) {
+                applySlotParams(slot, to: graph.fxNodes[i])
+            }
+        }
+    }
+
+    /// A song loaded: retime every tempo-synced Micro Detune to its tempo
+    func followSongTempo(_ bpm: Int?) {
+        guard bpm != songBPM else { return }
+        songBPM = bpm
+        for channel in store.channels {
+            guard let graph = graphs[channel.id] else { continue }
+            for (i, slot) in channel.slots.enumerated()
+            where slot.type == .microDetune && slot.microDetune.tempoSync && i < graph.fxNodes.count {
                 applySlotParams(slot, to: graph.fxNodes[i])
             }
         }
@@ -548,12 +607,37 @@ final class AudioRoutingEngine {
         case .pitchGuide:
             ((node as? AVAudioUnitEffect)?.auAudioUnit as? PitchGuideAudioUnit)?
                 .kernel.applyParams(slot.pitchGuide.resolved(songKey: songKey))
+        case .microDetune:
+            ((node as? AVAudioUnitEffect)?.auAudioUnit as? MicroDetuneAudioUnit)?
+                .kernel.applyParams(slot.microDetune, bpm: songBPM)
+        case .harmony:
+            ((node as? AVAudioUnitEffect)?.auAudioUnit as? HarmonyAudioUnit)?
+                .kernel.applyParams(slot.harmony.resolved(songKey: songKey))
+        case .piezoBody:
+            ((node as? AVAudioUnitEffect)?.auAudioUnit as? PiezoBodyAudioUnit)?
+                .kernel.applyParams(slot.piezoBody)
+        case .tone:
+            ((node as? AVAudioUnitEffect)?.auAudioUnit as? ToneAudioUnit)?
+                .kernel.applyParams(instrument: slot.tone.instrument, amount: slot.tone.amount)
+        case .warmth, .air, .punch, .smartGate:
+            applyOneKnob(slot, to: ((node as? AVAudioUnitEffect)?.auAudioUnit as? OneKnobAudioUnit)?.kernel)
         case nil:
             break
         }
     }
 
     // MARK: - FX parameter helpers
+
+    private func applyOneKnob(_ slot: ChannelFXSlot, to kernel: OneKnobKernel?) {
+        guard let kernel else { return }
+        switch slot.type {
+        case .warmth:    kernel.applyParams(slot.warmth)
+        case .air:       kernel.applyParams(slot.air)
+        case .punch:     kernel.applyParams(slot.punch)
+        case .smartGate: kernel.applyParams(slot.smartGate)
+        default:         break
+        }
+    }
 
     private func applyEQ(_ p: EQ3BandParams, to eq: AVAudioUnitEQ) {
         let b = eq.bands

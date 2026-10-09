@@ -275,6 +275,7 @@ final class PerformanceSession {
     /// changing the song's key, transpose or capo.
     func followSongKey() {
         AudioRoutingEngine.shared.followSongKey(activeSong?.currentKey)
+        AudioRoutingEngine.shared.followSongTempo(activeSong?.bpm)
     }
 
     /// If the MIDI clock is running, move it to the new song's tempo (or stop it).
