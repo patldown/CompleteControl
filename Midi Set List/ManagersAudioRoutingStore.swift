@@ -93,6 +93,11 @@ final class AudioRoutingStore {
                     needsSave = true
                 }
             }
+            // Migrate: Bleed Duck moved from Pitch Guide to Smart Gate
+            if channel.slots.moveBleedDuckToSmartGate() != nil { needsSave = true }
+            for mi in channel.macros.indices where channel.macros[mi].slots.moveBleedDuckToSmartGate() != nil {
+                needsSave = true
+            }
             fixed.append(channel)
         }
         channels = fixed

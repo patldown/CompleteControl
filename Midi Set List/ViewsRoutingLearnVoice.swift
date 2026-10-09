@@ -4,7 +4,7 @@
 //
 //  "Learn Voice": a guided pre-show check, like ring-out, that measures one mic three
 //  ways — bleed (band playing, singer quiet), the singer's softest line and their
-//  loudest — and turns that into gate, bleed-duck and level-rider settings.
+//  loudest — and turns that into gate and level-rider settings.
 //
 
 import SwiftUI
@@ -22,9 +22,6 @@ struct VoiceLevels: Equatable {
 
     /// Halfway between bleed and the softest singing (or just above the bleed when they overlap)
     var gate: Float { separable ? bleed + gap / 2 : bleed + 1 }
-
-    /// Duck the gaps by most of the measured headroom, but not so far it sounds gated
-    var bleedDuck: Float { separable ? -min(12, max(3, (gap * 0.75).rounded())) : 0 }
 }
 
 @Observable

@@ -264,8 +264,6 @@ extension BuiltInFXType {
             toggle("shiftOnlyWhileSinging", "Shift Only While Singing",
                    "Transpose/Formant switch off between phrases.",
                    get: { $0.pitchGuide.shiftOnlyWhileSinging }, set: { $0.pitchGuide.shiftOnlyWhileSinging = $1 }),
-            num("bleedDuck", "Bleed Duck", -20...0, "dB", "Turns the mic down between phrases. 0 = off.",
-                get: { Double($0.pitchGuide.bleedDuck) }, set: { $0.pitchGuide.bleedDuck = Float($1) }),
         ]
         case .warmth: [
             num("drive", "Drive", 0...100, "%", "Gentle thickening at low settings, grit when pushed. 0 = off.",
@@ -290,6 +288,8 @@ extension BuiltInFXType {
                 get: { Double($0.smartGate.sensitivity) }, set: { $0.smartGate.sensitivity = Float($1) }),
             num("depth", "Depth", 0...80, "dB", "How far it turns down when closed.",
                 get: { Double($0.smartGate.depth) }, set: { $0.smartGate.depth = Float($1) }),
+            toggle("bleedDuck", "Bleed Duck", "Only opens for singing, so loud bleed between phrases is turned down too.",
+                   get: { $0.smartGate.bleedDuck }, set: { $0.smartGate.bleedDuck = $1 }),
         ]
         case .tone: [
             num("amount", "Amount", 0...100, "%", "How much of the instrument's tone profile. 0 = flat.",

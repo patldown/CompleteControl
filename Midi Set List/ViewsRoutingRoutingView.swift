@@ -989,6 +989,7 @@ extension ChannelFXSlot {
             return [a == 0 ? "Off" : a > 0 ? "Attack +\(a)" : "Sustain +\(-a)"]
         case .smartGate:
             return ["Sens \(Int(smartGate.sensitivity))%", "Depth \(Int(smartGate.depth)) dB"]
+                + (smartGate.bleedDuck ? ["Bleed Duck"] : [])
         case .tone:
             guard let instrument = tone.instrument else { return ["Pick instrument", "Does nothing"] }
             return ["\(instrument.icon) \(instrument.shortName)", "Amount \(Int(tone.amount))%"]
@@ -1489,11 +1490,10 @@ private struct PitchGuideEditor: View {
             LearnVoiceSection(
                 readLevel: { Float(bitPattern: kernel.inputLevelBits.load(ordering: .relaxed)) },
                 describe: { levels in
-                    "Apply sets Gate to \(Int(min(-20, max(-70, levels.gate.rounded())))) dBFS and Bleed Duck to \(Int(levels.bleedDuck)) dB."
+                    "Apply sets Gate to \(Int(min(-20, max(-70, levels.gate.rounded())))) dBFS."
                 },
                 apply: { levels in
                     params.gateThreshold = min(-20, max(-70, levels.gate.rounded()))
-                    params.bleedDuck = levels.bleedDuck
                 }
             )
         }
@@ -1576,13 +1576,16 @@ private struct PitchGuideEditor: View {
                 Slider(value: $params.gateThreshold, in: -70.0...(-20.0), step: 1)
             }
             Toggle("Shift Only While Singing", isOn: $params.shiftOnlyWhileSinging)
-            LabeledContent("Bleed Duck: \(params.bleedDuck == 0 ? "Off" : "\(Int(params.bleedDuck)) dB")") {
-                Slider(value: $params.bleedDuck, in: -20.0...0.0, step: 1)
+            // Left from before Bleed Duck moved to Smart Gate, on a chain with no free slot
+            if params.bleedDuck != 0 {
+                LabeledContent("Bleed Duck: \(Int(params.bleedDuck)) dB") {
+                    Slider(value: $params.bleedDuck, in: -20.0...0.0, step: 1)
+                }
             }
         } header: {
             Text("Bleed")
         } footer: {
-            Text("Higher Pickiness only corrects clear, steady sung notes. Raise the Gate until bleed stops showing up in the Live meter. Between phrases (after a 0.3 s hold), Shift Only While Singing lets bleed through without Transpose or Formant, and Bleed Duck turns the mic down. Bleed under the singing itself can't be separated.")
+            Text("Higher Pickiness only corrects clear, steady sung notes. Raise the Gate until bleed stops showing up in the Live meter. Between phrases (after a 0.3 s hold), Shift Only While Singing lets bleed through without Transpose or Formant. Bleed under the singing itself can't be separated." + (params.bleedDuck != 0 ? " Bleed Duck has moved to Smart Gate: set this to 0, then add a Smart Gate and switch on its Bleed Duck." : " To turn the mic down between phrases, add a Smart Gate and switch on its Bleed Duck."))
         }
         .onChange(of: params) {
             kernel?.applyParams(params.resolved(songKey: AudioRoutingEngine.shared.songKey))
@@ -1853,6 +1856,7 @@ private struct OneKnobEditor: View {
             LabeledContent("Depth: \(Int(slot.smartGate.depth)) dB") {
                 Slider(value: $slot.smartGate.depth, in: 0.0...80.0, step: 1)
             }
+            Toggle("Bleed Duck", isOn: $slot.smartGate.bleedDuck)
             if let kernel {
                 TimelineView(.animation(minimumInterval: 0.05)) { _ in
                     let open = kernel.gateOpenFlag.load(ordering: .relaxed)
@@ -1865,12 +1869,18 @@ private struct OneKnobEditor: View {
                         Text(threshold < -110 ? "—" : String(format: "%.0f / %.0f dBFS", floor, threshold))
                             .monospacedDigit().foregroundStyle(.secondary)
                     }
+                    if slot.smartGate.bleedDuck {
+                        let singing = kernel.voiceFlag.load(ordering: .relaxed)
+                        LabeledContent("Singing") {
+                            Text(singing ? "Yes" : "—").foregroundStyle(singing ? Color.green : Color.secondary)
+                        }
+                    }
                 }
             }
         } header: {
             Text("Smart Gate")
         } footer: {
-            Text("Turns the channel down between notes to cut bleed and hiss, setting its own threshold: it learns the noise floor in the gaps and the level you play at, and opens between the two. Raise Sensitivity to gate more; lower it if quiet notes get cut. Depth is how far it turns down when closed. Zero latency.")
+            Text("Turns the channel down between notes to cut bleed and hiss, setting its own threshold: it learns the noise floor in the gaps and the level you play at, and opens between the two. Raise Sensitivity to gate more; lower it if quiet notes get cut. Depth is how far it turns down when closed. Bleed Duck is for vocal mics: it only opens for singing, so loud drums and cymbals between phrases are turned down too (a few dB of Depth is usually enough). Zero latency.")
         }
     }
 

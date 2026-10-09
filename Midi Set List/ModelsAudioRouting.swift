@@ -217,12 +217,15 @@ struct PunchParams: Codable, Equatable {
 struct SmartGateParams: Codable, Equatable {
     var sensitivity: Float = 50     // %, 0...100; higher gates more
     var depth: Float = 40           // dB the gate turns down when closed, 0...80
+    /// Only open for singing, so loud unpitched bleed between phrases is turned down too
+    var bleedDuck: Bool = false
 
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         sensitivity = try c.decodeIfPresent(Float.self, forKey: .sensitivity) ?? 50
         depth = try c.decodeIfPresent(Float.self, forKey: .depth) ?? 40
+        bleedDuck = try c.decodeIfPresent(Bool.self, forKey: .bleedDuck) ?? false
     }
 }
 
@@ -894,7 +897,9 @@ struct PitchGuideParams: Codable, Equatable {
     var formantShift: Float = 0         // semitones, -6...6
     /// Transpose and Formant switch off between phrases, so bleed in the gaps isn't shifted
     var shiftOnlyWhileSinging: Bool = true
-    /// How far to turn the mic down between phrases; 0 = off
+    /// How far to turn the mic down between phrases; 0 = off. Superseded by Smart Gate's
+    /// Bleed Duck: loading moves it there (see `movingBleedDuckToSmartGate`). Still honoured
+    /// when it can't move (no free slot), and shown in the editor only then.
     var bleedDuck: Float = 0            // dB, -20...0
     /// Balance between processed and dry signal; 100 = fully processed, 0 = bypass
     var wetMix: Float = 100             // %, 0...100
@@ -1000,6 +1005,61 @@ struct ChannelFXSlot: Codable, Equatable {
         air = try c.decodeIfPresent(AirParams.self, forKey: .air) ?? .init()
         punch = try c.decodeIfPresent(PunchParams.self, forKey: .punch) ?? .init()
         smartGate = try c.decodeIfPresent(SmartGateParams.self, forKey: .smartGate) ?? .init()
+    }
+}
+
+// MARK: - Bleed Duck migration
+
+extension Array where Element == ChannelFXSlot {
+    /// Bleed Duck used to be a Pitch Guide setting; it's now Smart Gate's Bleed Duck mode.
+    /// Moves each Pitch Guide's duck to a Smart Gate: the channel's existing one if it has
+    /// one, otherwise a new one right after the Pitch Guide, where the duck acted (effects
+    /// shift along into a free slot, before or after). A duck with no free slot to move
+    /// into stays on the Pitch Guide.
+    ///
+    /// Returns where each original slot now sits (old index → new index) and which slots
+    /// were added, or nil when nothing changed.
+    mutating func moveBleedDuckToSmartGate() -> (newIndex: [Int: Int], added: [Int])? {
+        var position = Dictionary(uniqueKeysWithValues: indices.map { ($0, $0) })
+        var changed = false
+        while let pg = firstIndex(where: { $0.type == .pitchGuide && $0.pitchGuide.bleedDuck < 0 }) {
+            let duckDB = self[pg].pitchGuide.bleedDuck
+            self[pg].pitchGuide.bleedDuck = 0
+            if let gate = firstIndex(where: { $0.type == .smartGate }) {
+                self[gate].smartGate.bleedDuck = true
+                changed = true
+                continue
+            }
+            var gate = ChannelFXSlot()
+            gate.type = .smartGate
+            gate.isBypassed = self[pg].isBypassed
+            gate.smartGate.bleedDuck = true
+            gate.smartGate.depth = -duckDB
+            // The voice check does the sorting, so the level only needs to clear the floor
+            gate.smartGate.sensitivity = 25
+            if let free = indices.first(where: { $0 > pg && self[$0].type == nil }) {
+                position = position.filter { $0.value != free }   // the free slot is used up
+                // Effects after the Pitch Guide move down one; the gate lands right after it
+                for j in stride(from: free, to: pg + 1, by: -1) { self[j] = self[j - 1] }
+                for (old, now) in position where now > pg && now < free { position[old] = now + 1 }
+                self[pg + 1] = gate
+            } else if let free = indices.last(where: { $0 < pg && self[$0].type == nil }) {
+                position = position.filter { $0.value != free }
+                // Effects from the free slot up to the Pitch Guide move up one; the gate lands right after it
+                for j in free..<pg { self[j] = self[j + 1] }
+                for (old, now) in position where now > free && now <= pg { position[old] = now - 1 }
+                self[pg] = gate
+            } else {
+                // Chain is full: keep the duck where it was (and stop; nothing else can move either)
+                self[pg].pitchGuide.bleedDuck = duckDB
+                break
+            }
+            changed = true
+        }
+        guard changed else { return nil }
+        let kept = Set(position.values)
+        let added = indices.filter { !kept.contains($0) && self[$0].type == .smartGate }
+        return (position, added)
     }
 }
 

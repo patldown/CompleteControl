@@ -185,7 +185,6 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `autoFormant` | toggle | Keeps the singer's natural tone when shifting |
 | `formant` | -6 to 6 semitones | + smaller/brighter, − bigger/darker |
 | `shiftOnlyWhileSinging` | toggle | Transpose/Formant switch off between phrases |
-| `bleedDuck` | -20 to 0 dB | Turns the mic down between phrases. 0 = off |
 
 ### `warmth` — Warmth
 | Param | Range | Notes |
@@ -209,6 +208,7 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 |---|---|---|
 | `sensitivity` | 0 to 100 % | Higher gates more of the quiet between notes |
 | `depth` | 0 to 80 dB | How far it turns down when closed |
+| `bleedDuck` | toggle | Only opens for singing, so loud bleed between phrases is turned down too |
 
 ### `tone` — Tone
 | Param | Range | Notes |
