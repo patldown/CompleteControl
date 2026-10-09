@@ -72,7 +72,7 @@ struct ContentView: View {
         .overlay(alignment: .bottomLeading) {
             SystemStatsView()
                 .padding(.leading, 8)
-                .padding(.bottom, 8)
+                .padding(.bottom, 60)   // clear tab bar + latency bar
         }
         .liveFollowPrompts()
         .environment(navigation)

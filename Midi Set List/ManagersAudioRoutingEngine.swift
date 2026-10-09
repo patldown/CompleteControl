@@ -162,9 +162,9 @@ final class AudioRoutingEngine {
             forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main
         ) { [weak self] note in
             let changed = note.object as AnyObject?
-            MainActor.assumeIsolated {
+            Task { @MainActor [weak self] in
                 guard let self, self.isRunning, let engine = self.engine, changed === engine else { return }
-                Task { await self.start() }
+                await self.start()
             }
         }
         // A phone call or Siri interrupts the session; resume when it's over
@@ -172,10 +172,10 @@ final class AudioRoutingEngine {
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
             let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-            MainActor.assumeIsolated {
+            Task { @MainActor [weak self] in
                 guard let self, self.isRunning, raw == AVAudioSession.InterruptionType.ended.rawValue,
                       self.engine?.isRunning != true else { return }
-                Task { await self.start() }
+                await self.start()
             }
         }
     }
@@ -350,9 +350,7 @@ final class AudioRoutingEngine {
         guard isRunning, let eng = engine else { return }
         guard !syncing.contains(id) else { pendingSync.insert(id); return }
         let started = Date()
-        let existing = graphs[id]
-
-        guard let existing else {
+        guard graphs[id] != nil else {
             // Added
             guard let channel = store.channels.first(where: { $0.id == id }) else { return }
             buildChannel(channel, in: eng, startSilent: true)
@@ -375,27 +373,9 @@ final class AudioRoutingEngine {
             return
         }
 
-        // Channel removed: fade to silence, then tear down
-        syncing.insert(id)
-        fade(existing.inputMixer, to: 0) { [weak self] in
-            guard let self else { return }
-            guard let eng = self.engine, let graph = self.graphs[id] else {
-                self.syncing.remove(id)
-                return
-            }
-            self.teardownChain(graph, in: eng)
-            for node in [graph.inputMixer, graph.picker] as [AVAudioNode] {
-                eng.disconnectNodeInput(node)
-                eng.disconnectNodeOutput(node)
-                eng.detach(node)
-            }
-            self.graphs[id] = nil
-            if let bus = self.packerBus.removeValue(forKey: id) {
-                (self.packer?.auAudioUnit as? OutputPackerAudioUnit)?.routes.clear(bus: bus)
-            }
-            self.connectInputs(in: eng)
-            self.finishSync(id)
-        }
+        // Channel removed: restart cleanly to avoid racing the packer's render block
+        logRebuild(store.channels.first { $0.id == id }?.displayName ?? "channel", "restarting engine for channel removal", since: started)
+        Task { await start() }
     }
 
     private func finishSync(_ id: UUID) {

@@ -10,6 +10,8 @@ import Observation
 @Observable
 class OSCManager {
     private(set) var connectedTargets: Set<UUID> = []
+    /// Targets currently connecting but not yet `.ready`
+    private(set) var pendingTargets: Set<UUID> = []
     private(set) var lastSentAddress: String?
     private(set) var lastError: String?
 
@@ -49,7 +51,8 @@ class OSCManager {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 guard let self, let targets = self.targetsProvider?() else { return }
                 for target in targets where self.desiredTargetIDs.contains(target.id)
-                                        && !self.connectedTargets.contains(target.id) {
+                                        && !self.connectedTargets.contains(target.id)
+                                        && !self.pendingTargets.contains(target.id) {
                     self.connect(to: target)
                 }
             }
@@ -60,11 +63,16 @@ class OSCManager {
     // MARK: - Connection Management
 
     func connect(to target: OSCTarget) {
-        guard !connectedTargets.contains(target.id) else { return }
+        guard !connectedTargets.contains(target.id), !pendingTargets.contains(target.id) else { return }
         guard let port = NWEndpoint.Port(rawValue: UInt16(clamping: target.sendPort)) else {
             lastError = "Invalid send port \(target.sendPort) for \(target.name)"
             return
         }
+
+        pendingTargets.insert(target.id)
+        desiredTargetIDs.insert(target.id)
+        persistDesiredTargetIDs()
+        activityLog?.log("OSC connecting: \(target.name) (\(target.host) tx:\(target.sendPort) rx:\(target.receivePort))", direction: .system, proto: .osc)
 
         let connection = NWConnection(
             host: NWEndpoint.Host(target.host),
@@ -74,13 +82,31 @@ class OSCManager {
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                self?.activityLog?.log("OSC ready: \(target.name) (\(target.host):\(target.sendPort))", direction: .system, proto: .osc)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.pendingTargets.remove(target.id)
+                    self.connectedTargets.insert(target.id)
+                    self.activityLog?.log("OSC ready: \(target.name) (\(target.host):\(target.sendPort))", direction: .system, proto: .osc)
+                    // Small delay so /xremote keepalive reaches XR18 before we query values
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        MixerLink.shared.requestCurrentValues()
+                    }
+                }
             case .waiting(let error):
                 self?.activityLog?.log("OSC waiting: \(target.name) — \(error.localizedDescription)", direction: .error, proto: .osc)
             case .failed(let error):
                 DispatchQueue.main.async {
-                    self?.lastError = "OSC connection to \(target.name) failed: \(error.localizedDescription)"
-                    self?.activityLog?.log("OSC failed: \(target.name) — \(error.localizedDescription)", direction: .error, proto: .osc)
+                    guard let self else { return }
+                    self.pendingTargets.remove(target.id)
+                    self.connectedTargets.remove(target.id)
+                    self.connections.removeValue(forKey: target.id)
+                    self.lastError = "OSC connection to \(target.name) failed: \(error.localizedDescription)"
+                    self.activityLog?.log("OSC failed: \(target.name) — \(error.localizedDescription)", direction: .error, proto: .osc)
+                }
+            case .cancelled:
+                DispatchQueue.main.async {
+                    self?.pendingTargets.remove(target.id)
+                    self?.connectedTargets.remove(target.id)
                 }
             default:
                 break
@@ -93,18 +119,9 @@ class OSCManager {
         receiveLoop(connection)
 
         connections[target.id] = connection
-        connectedTargets.insert(target.id)
-        desiredTargetIDs.insert(target.id)
-        persistDesiredTargetIDs()
-        activityLog?.log("OSC connecting: \(target.name) (\(target.host) tx:\(target.sendPort) rx:\(target.receivePort))", direction: .system, proto: .osc)
 
         startKeepalive(for: target)
         startListener(for: target)
-
-        // Pull current fader/gain values from the mixer after connection settles
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            MixerLink.shared.requestCurrentValues()
-        }
     }
 
     func disconnect(from target: OSCTarget) {
@@ -113,6 +130,7 @@ class OSCManager {
         connections[target.id]?.cancel()
         connections.removeValue(forKey: target.id)
         connectedTargets.remove(target.id)
+        pendingTargets.remove(target.id)
         desiredTargetIDs.remove(target.id)
         persistDesiredTargetIDs()
         activityLog?.log("OSC disconnected: \(target.name)", direction: .system, proto: .osc)

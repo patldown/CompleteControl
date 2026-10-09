@@ -116,8 +116,10 @@ struct RoutingView: View {
                 MetronomeStripView()
             }
             .padding(16)
+            .frame(maxHeight: .infinity, alignment: .top)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     @ToolbarContentBuilder
@@ -190,7 +192,6 @@ struct ChannelStripView: View {
     @State private var showingMacroSave = false
     @State private var newMacroName = ""
     @State private var confirmingRemove = false
-    @State private var stripExpanded = false
     @State private var showingWizard = false
     /// Shared by every strip so they flip together and stay lined up side by side
     @AppStorage("routingFXExpanded") private var fxExpanded = false
@@ -218,8 +219,8 @@ struct ChannelStripView: View {
             macroSection
             stripFader
         }
-        .frame(width: stripExpanded ? 270 : 185)
-        .animation(.snappy, value: stripExpanded)
+        .frame(width: fxExpanded ? 270 : 185)
+        .animation(.snappy, value: fxExpanded)
         .frame(maxHeight: .infinity, alignment: .top)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
@@ -293,15 +294,6 @@ struct ChannelStripView: View {
                 }
 
                 ChannelWizardButton(channel: channel, isPresented: $showingWizard)
-
-                Button {
-                    withAnimation(.snappy) { stripExpanded.toggle() }
-                } label: {
-                    Image(systemName: stripExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(stripExpanded ? "Collapse strip" : "Expand strip")
 
                 Button(role: .destructive) {
                     confirmingRemove = true
@@ -399,6 +391,27 @@ struct ChannelStripView: View {
                     } onBypassToggle: {
                         toggleBypass(i)
                     }
+                    .contextMenu {
+                        if channel.slots[i].type != nil {
+                            Button { fxEditTarget = FXEditTarget(slotIndex: i) } label: {
+                                Label("Edit", systemImage: "slider.horizontal.3")
+                            }
+                            if i > 0 {
+                                Button { moveFXSlot(from: i, to: i - 1) } label: {
+                                    Label("Move Up", systemImage: "arrow.up")
+                                }
+                            }
+                            if i < 5 {
+                                Button { moveFXSlot(from: i, to: i + 1) } label: {
+                                    Label("Move Down", systemImage: "arrow.down")
+                                }
+                            }
+                            Divider()
+                            Button(role: .destructive) { removeFXSlot(i) } label: {
+                                Label("Remove Effect", systemImage: "trash")
+                            }
+                        }
+                    }
                     if i < 5 { Divider() }
                 }
             }
@@ -416,6 +429,20 @@ struct ChannelStripView: View {
                 to: channelID
             )
         }
+    }
+
+    private func removeFXSlot(_ i: Int) {
+        var c = channel
+        c.slots[i] = ChannelFXSlot()
+        store.update(c)
+        if engine.isRunning { engine.syncChannel(channelID) }
+    }
+
+    private func moveFXSlot(from src: Int, to dst: Int) {
+        var c = channel
+        c.slots.swapAt(src, dst)
+        store.update(c)
+        if engine.isRunning { engine.syncChannel(channelID) }
     }
 
     // MARK: Footer
@@ -509,7 +536,7 @@ struct ChannelStripView: View {
     @ViewBuilder
     private var stripFader: some View {
         let link = MixerLink.shared
-        if link.settings.showFader {
+        if link.settings.showFader && link.isConnected {
             let s = link.settings
             let db = link.faderDB[channel.id]
             Divider()
@@ -573,12 +600,23 @@ struct MixerLinkControls: View {
 
     var body: some View {
         let s = link.settings
-        if s.showGain {
-            VStack(alignment: .leading, spacing: 6) {
-                gainRow(s)
-                if let state = link.autoGain[channel.id] { autoGainStatus(state) }
+        if s.showGain || s.showFader {
+            if link.isConnected {
+                if s.showGain {
+                    VStack(alignment: .leading, spacing: 6) {
+                        gainRow(s)
+                        if let state = link.autoGain[channel.id] { autoGainStatus(state) }
+                    }
+                    .padding(.top, 2)
+                }
+            } else {
+                HStack(spacing: 4) {
+                    Image(systemName: "cable.connector.slash").font(.caption2)
+                    Text("OSC not connected").font(.caption2)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
             }
-            .padding(.top, 2)
         }
     }
 
