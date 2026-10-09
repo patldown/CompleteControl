@@ -85,8 +85,6 @@ final class InputPickerAudioUnit: AUAudioUnit {
     )
 
     let selection = InputSelection()
-    /// Measures this channel for any Make Room keyed to it (idle unless one is)
-    let analyzer = BandAnalyzer()
     private let inputScratch = RoutingScratch()
     private let outputScratch = RoutingScratch()
     private var _inputBusses: AUAudioUnitBusArray!
@@ -120,7 +118,6 @@ final class InputPickerAudioUnit: AUAudioUnit {
         let frames = Int(maximumFramesToRender)
         inputScratch.allocate(channels: Int(inputBusses[0].format.channelCount), frames: frames)
         outputScratch.allocate(channels: 2, frames: frames)
-        analyzer.setSampleRate(outputBusses[0].format.sampleRate)
     }
 
     override func deallocateRenderResources() {
@@ -130,7 +127,7 @@ final class InputPickerAudioUnit: AUAudioUnit {
     }
 
     override var internalRenderBlock: AUInternalRenderBlock {
-        let sel = selection, inBuf = inputScratch, outBuf = outputScratch, bands = analyzer
+        let sel = selection, inBuf = inputScratch, outBuf = outputScratch
         return { _, timestamp, frameCount, _, outputData, _, pullInput in
             guard let inList = inBuf.list, let spare = outBuf.list else { return kAudioUnitErr_Uninitialized }
             let frames = Int(frameCount)
@@ -158,10 +155,6 @@ final class InputPickerAudioUnit: AUAudioUnit {
                 var peak: Float = 0
                 for i in 0..<frames { let v = abs(s[i]); if v > peak { peak = v } }
                 sel.levelBits.store((peak > 1e-7 ? 20 * log10f(peak) : -120).bitPattern, ordering: .relaxed)
-            }
-            // Before this channel's effects, so its own carving never changes what it measures
-            if out.count > 1, let l = samples(out[0]), let r = samples(out[1]) {
-                bands.process(left: l, right: r, frames: frames)
             }
             return noErr
         }

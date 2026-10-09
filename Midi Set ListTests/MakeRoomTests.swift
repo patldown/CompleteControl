@@ -2,7 +2,7 @@
 //  MakeRoomTests.swift
 //  Midi Set ListTests
 //
-//  Make Room: when a band dips and by how much, what the analyzer hears, and the kernel
+//  Make Room: when a band dips and by how much, Tone listening for it, and the kernel
 //  stepping aside only while a key channel is playing.
 //
 
@@ -27,20 +27,30 @@ struct MakeRoomTests {
         #expect(MakeRoomKernel.wantedCut(keyDB: -10, ownDB: 0, weight: 1, maxCut: 2) == 2)
     }
 
-    @Test func analyzerHearsTheRightBand() {
-        let a = BandAnalyzer()
-        a.setSampleRate(48_000)
+    @Test @MainActor func toneWithNoInstrumentStillListens() throws {
         let row = KeyBandTable.maxKeys - 1
-        a.keySlot.store(row, ordering: .relaxed)
+        KeyBandTable.clear(key: row)
+        let tone = ToneKernel()
+        tone.setSampleRate(48_000)
+        tone.applyParams(instrument: nil, amount: 70)
+        tone.keySlot.store(row, ordering: .relaxed)
+
         let frames = 48_000
-        let tone = (0..<frames).map { Float(0.5 * sin(2 * Double.pi * 1_200 * Double($0) / 48_000)) }
-        tone.withUnsafeBufferPointer { buf in
-            a.process(left: buf.baseAddress!, right: buf.baseAddress!, frames: frames)
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)))
+        buffer.frameLength = AVAudioFrameCount(frames)
+        for ch in 0..<2 {
+            let d = buffer.floatChannelData![ch]
+            for i in 0..<frames { d[i] = Float(0.5 * sin(2 * Double.pi * 1_000 * Double(i) / 48_000)) }
         }
+        let before = buffer.floatChannelData![0][1_000]
+        tone.process(buffer.mutableAudioBufferList, frameCount: frames)
+
         let levels = (0..<MakeRoomBands.count).map { KeyBandTable.level(key: row, band: $0) }
         let loudest = levels.indices.max { levels[$0] < levels[$1] }
-        #expect(loudest == 4)   // 1.2 kHz
-        #expect(abs(levels[4] - 20 * log10(0.5)) < 1.5)
+        #expect(loudest == 3)                                  // 1 kHz
+        #expect(abs(levels[3] - 20 * log10(0.5)) < 1.5)
+        #expect(buffer.floatChannelData![0][1_000] == before)  // listening only: sound untouched
         KeyBandTable.clear(key: row)
     }
 
@@ -58,25 +68,25 @@ struct MakeRoomTests {
         func run() {
             for ch in 0..<2 {
                 let d = buffer.floatChannelData![ch]
-                for i in 0..<frames { d[i] = Float(0.3 * sin(2 * Double.pi * 1_200 * Double(i) / 48_000)) }
+                for i in 0..<frames { d[i] = Float(0.3 * sin(2 * Double.pi * 1_000 * Double(i) / 48_000)) }
             }
             k.process(buffer.mutableAudioBufferList, frameCount: frames)
         }
 
         // Key silent: no dip
         run()
-        #expect(k.cutDB(band: 4) < 0.1)
+        #expect(k.cutDB(band: 3) < 0.1)
 
-        // Key singing in the 1.2 kHz band: that band dips, close to the full 4 dB
-        KeyBandTable.levels[row * MakeRoomBands.count + 4] = -15
+        // Key singing in the 1 kHz band: that band dips, close to the full 4 dB
+        KeyBandTable.levels[row * MakeRoomBands.count + 3] = -15
         for _ in 0..<3 { run() }
-        #expect(k.cutDB(band: 4) > 3)
+        #expect(k.cutDB(band: 3) > 3)
         #expect(k.cutDB(band: 0) < 0.1)   // 125 Hz: nothing of ours there
 
         // Key stops: it lets go
         KeyBandTable.clear(key: row)
         for _ in 0..<20 { run() }
-        #expect(k.cutDB(band: 4) < 0.2)
+        #expect(k.cutDB(band: 3) < 0.2)
     }
 
     @Test func toneWeightsCoverEveryBand() {

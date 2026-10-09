@@ -5,13 +5,13 @@
 //  Make Room: a sidechain dynamic EQ that unmasks one or more key channels (usually the
 //  singers). Two halves:
 //
-//  • BandAnalyzer runs in a key channel's InputPickerAudioUnit, before its effects, so a
-//    channel's own carving can never feed back into what it measures. Ten band-pass
-//    filters (125 Hz–9 kHz, about an octave apart) each feed a level follower (5 ms up,
-//    120 ms down); the band levels go into KeyBandTable once per buffer.
+//  • Listening is done by each key channel's Tone (DSPTone.swift), which already splits
+//    its input into these seven octave bands for its own analysis; it adds fast level
+//    followers (5 ms up, 120 ms down) and publishes them to KeyBandTable once per buffer.
+//    No second analysis of the same signal.
 //
 //  • MakeRoomKernel runs on the channel that steps aside. It splits its own signal with
-//    the same ten band-passes and follows its own band levels. A band dips only where a
+//    the same seven band-passes and follows its own band levels. A band dips only where a
 //    key is present in it (above -45 dBFS, fully by -35) AND this channel is loud enough
 //    there to mask it (within 10 dB of the key, fully at its level). The dip is scaled by
 //    the key's band weight (from its Tone instrument) and capped at Amount. With several
@@ -34,11 +34,12 @@ import Synchronization
 // MARK: - Bands
 
 nonisolated enum MakeRoomBands {
-    static let count = 10
-    static let centres: [Double] = [125, 250, 500, 800, 1_200, 1_800, 2_700, 4_000, 6_000, 9_000]
-    static let q = 1.4
+    /// One octave apart, shared with Tone's analysis so Tone's measurements line up
+    static let count = 7
+    static let centres: [Double] = [125, 250, 500, 1_000, 2_000, 4_000, 8_000]
+    static let q = 1.41                     // one octave wide
     /// Display labels for the meter
-    static let labels = ["125", "250", "500", "800", "1.2k", "1.8k", "2.7k", "4k", "6k", "9k"]
+    static let labels = ["125", "250", "500", "1k", "2k", "4k", "8k"]
 
     /// RBJ band-pass (0 dB peak) coefficients, b0, b2 (b1 = 0), a1, a2, for each band
     static func coefficients(sampleRate sr: Double, into c: UnsafeMutablePointer<Double>) {
@@ -55,7 +56,7 @@ nonisolated enum MakeRoomBands {
 
 // MARK: - Shared table of key-channel band levels
 
-/// Band levels of every channel being listened to, written by its analyzer, read by any
+/// Band levels of every channel being listened to, written by its Tone, read by any
 /// Make Room keyed to it. Fixed-size and never freed, so the audio thread can index it
 /// directly. Aligned 32-bit stores don't tear, same as the routing AUs' tables.
 nonisolated enum KeyBandTable {
@@ -73,59 +74,6 @@ nonisolated enum KeyBandTable {
     static func clear(key: Int) {
         guard key >= 0, key < maxKeys else { return }
         (levels + key * MakeRoomBands.count).update(repeating: -120, count: MakeRoomBands.count)
-    }
-}
-
-// MARK: - Analyzer (in a key channel's input picker)
-
-nonisolated final class BandAnalyzer: @unchecked Sendable {
-    /// Which row of KeyBandTable to fill; -1 = nobody is listening, skip the work
-    let keySlot = Atomic<Int>(-1)
-
-    private let coeffs = UnsafeMutablePointer<Double>.allocate(capacity: MakeRoomBands.count * 4)
-    private let state = UnsafeMutablePointer<Double>.allocate(capacity: MakeRoomBands.count * 2)
-    private let env = UnsafeMutablePointer<Double>.allocate(capacity: MakeRoomBands.count)
-    private var attack = 0.0, release = 0.0
-
-    init() {
-        coeffs.initialize(repeating: 0, count: MakeRoomBands.count * 4)
-        state.initialize(repeating: 0, count: MakeRoomBands.count * 2)
-        env.initialize(repeating: 0, count: MakeRoomBands.count)
-        setSampleRate(48_000)
-    }
-
-    deinit { coeffs.deallocate(); state.deallocate(); env.deallocate() }
-
-    func setSampleRate(_ sr: Double) {
-        guard sr > 0 else { return }
-        MakeRoomBands.coefficients(sampleRate: sr, into: coeffs)
-        state.update(repeating: 0, count: MakeRoomBands.count * 2)
-        env.update(repeating: 0, count: MakeRoomBands.count)
-        attack = 1 - exp(-1 / (sr * 0.005))
-        release = 1 - exp(-1 / (sr * 0.120))
-    }
-
-    /// Analyses one buffer (left and right summed to mono) and publishes its band levels
-    func process(left: UnsafePointer<Float>, right: UnsafePointer<Float>, frames: Int) {
-        let slot = keySlot.load(ordering: .relaxed)
-        guard slot >= 0, slot < KeyBandTable.maxKeys else { return }
-        for b in 0..<MakeRoomBands.count {
-            let b0 = coeffs[b * 4], b2 = coeffs[b * 4 + 1], a1 = coeffs[b * 4 + 2], a2 = coeffs[b * 4 + 3]
-            var z1 = state[b * 2], z2 = state[b * 2 + 1], e = env[b]
-            for i in 0..<frames {
-                // Transposed direct form II; b1 = 0 for a band-pass
-                let x = 0.5 * Double(left[i] + right[i])
-                let y = b0 * x + z1
-                z1 = -a1 * y + z2
-                z2 = b2 * x - a2 * y
-                let p = y * y
-                e += (p > e ? attack : release) * (p - e)
-            }
-            state[b * 2] = z1; state[b * 2 + 1] = z2; env[b] = e
-            // Up fast, down slow: the follower rides near each cycle's peak, so this reads as
-            // the band's peak level (a 0.5 sine reads about -6.5 dBFS)
-            KeyBandTable.levels[slot * MakeRoomBands.count + b] = e > 1e-12 ? Float(10 * log10(e)) : -120
-        }
     }
 }
 
@@ -262,7 +210,7 @@ nonisolated final class MakeRoomKernel: @unchecked Sendable {
     private func decide(maxCut: Float) {
         let n = MakeRoomBands.count
         for b in 0..<n {
-            // Same follower as BandAnalyzer, so the two levels compare directly
+            // Same follower as Tone uses for Make Room, so the two levels compare directly
             let ownDB: Float = env[b] > 1e-12 ? Float(10 * log10(env[b])) : -120
             var cut: Float = 0
             for k in 0..<Self.maxKeys {

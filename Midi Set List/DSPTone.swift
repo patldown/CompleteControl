@@ -18,6 +18,11 @@
 //    in ─▶ HPF ─▶ EQ ×4 (adaptive) ─▶ de-esser (dynamic cut ~7 kHz) ─▶ compressor ─▶ out
 //    in ─▶ (mono) analysis: 7 octave band-passes + broadband level ──┘ (sets the above)
 //
+//  Make Room listens through Tone: when one is keyed to this channel, the same seven
+//  band-passes also feed fast level followers (5 ms up, 120 ms down) published to
+//  KeyBandTable, even with no instrument set (then Tone only listens). The band-passes then
+//  run all the time instead of only while playing; nothing else is added.
+//
 //  Biquads are RBJ cookbook, transposed direct form II. No lookahead: zero latency.
 //  Strict real-time contract: no allocations, locks, or Swift runtime calls in process().
 //
@@ -57,12 +62,14 @@ nonisolated final class ToneKernel: @unchecked Sendable {
     let band3Bits = Atomic<UInt32>(Float(0).bitPattern)
     /// 0…1: how much it has heard so far (corrections ramp in as this fills)
     let confidenceBits = Atomic<UInt32>(Float(0).bitPattern)
+    /// KeyBandTable row to publish this channel's band levels to, for Make Room; -1 = none
+    let keySlot = Atomic<Int>(-1)
 
     // MARK: - Audio thread state
     private static let stages = 5                  // HPF + 4 bands
     private static let maxChannels = 2
-    private static let analysisBands = 7           // octaves at 125 Hz … 8 kHz
-    private static let analysisCentres: [Double] = [125, 250, 500, 1_000, 2_000, 4_000, 8_000]
+    private static let analysisBands = MakeRoomBands.count   // octaves at 125 Hz … 8 kHz
+    private static let analysisCentres = MakeRoomBands.centres
     private static let updateInterval = 1_024      // samples between correction updates
 
     private var sampleRate: Double = 48_000
@@ -75,6 +82,9 @@ nonisolated final class ToneKernel: @unchecked Sendable {
     private let anaState = UnsafeMutablePointer<Double>.allocate(capacity: analysisBands * 2)
     private let anaPower = UnsafeMutablePointer<Double>.allocate(capacity: analysisBands)
     private let anaAccum = UnsafeMutablePointer<Double>.allocate(capacity: analysisBands)
+    /// Fast band levels for Make Room (power)
+    private let keyEnv = UnsafeMutablePointer<Double>.allocate(capacity: analysisBands)
+    private var keyAttack = 0.0, keyRelease = 0.0
     /// The EQ moves applied now, dB, gliding toward what the analysis asks for
     private let applied = UnsafeMutablePointer<Double>.allocate(capacity: 4)
     private let lastBuilt = UnsafeMutablePointer<Double>.allocate(capacity: 4)
@@ -102,6 +112,7 @@ nonisolated final class ToneKernel: @unchecked Sendable {
         anaState.initialize(repeating: 0, count: Self.analysisBands * 2)
         anaPower.initialize(repeating: 0, count: Self.analysisBands)
         anaAccum.initialize(repeating: 0, count: Self.analysisBands)
+        keyEnv.initialize(repeating: 0, count: Self.analysisBands)
         applied.initialize(repeating: 0, count: 4)
         lastBuilt.initialize(repeating: .nan, count: 4)
     }
@@ -110,6 +121,7 @@ nonisolated final class ToneKernel: @unchecked Sendable {
         coeffs.deallocate(); state.deallocate()
         essCoeffs.deallocate(); essState.deallocate()
         anaCoeffs.deallocate(); anaState.deallocate(); anaPower.deallocate(); anaAccum.deallocate()
+        keyEnv.deallocate()
         applied.deallocate(); lastBuilt.deallocate()
     }
 
@@ -119,12 +131,15 @@ nonisolated final class ToneKernel: @unchecked Sendable {
         guard sr > 0 else { return }
         sampleRate = sr
         for b in 0..<Self.analysisBands {
-            let c = Self.bandPass(Self.analysisCentres[b], q: 1.41, sr: sr)   // one octave wide
+            let c = Self.bandPass(Self.analysisCentres[b], q: MakeRoomBands.q, sr: sr)   // one octave wide
             anaCoeffs[b * 5] = c.0; anaCoeffs[b * 5 + 1] = c.1; anaCoeffs[b * 5 + 2] = c.2
             anaCoeffs[b * 5 + 3] = c.3; anaCoeffs[b * 5 + 4] = c.4
         }
         lastProfile = -2
         resetAnalysis()
+        keyEnv.update(repeating: 0, count: Self.analysisBands)
+        keyAttack = 1 - exp(-1 / (sr * 0.005))
+        keyRelease = 1 - exp(-1 / (sr * 0.120))
         state.update(repeating: 0, count: Self.maxChannels * Self.stages * 2)
         essState.update(repeating: 0, count: Self.maxChannels * 2)
     }
@@ -142,11 +157,25 @@ nonisolated final class ToneKernel: @unchecked Sendable {
 
         let raw = profileBits.load(ordering: .relaxed)
         let amt = Float(bitPattern: amountBits.load(ordering: .relaxed))
-        // No instrument: Tone does nothing
+        let keyRow = keySlot.load(ordering: .relaxed)
+        let publishing = keyRow >= 0 && keyRow < KeyBandTable.maxKeys
+        // No instrument: Tone leaves the sound alone (it may still listen for Make Room)
         guard raw >= 0, let inst = ToneInstrument(rawValue: raw) else {
             lastProfile = -1
             profile = nil
             storeMeters(gr: 0, ess: 0)
+            if publishing {
+                let channels = min(Self.maxChannels, ptr.count)
+                for i in 0..<frameCount {
+                    var mono = 0.0
+                    for ch in 0..<channels {
+                        if let d = ptr[ch].mData?.assumingMemoryBound(to: Float.self) { mono += Double(d[i]) }
+                    }
+                    mono /= Double(max(1, channels))
+                    for b in 0..<Self.analysisBands { followKey(b, analysisBand(b, mono)) }
+                }
+                publishKeyBands(row: keyRow)
+            }
             return
         }
         if raw != lastProfile {
@@ -182,7 +211,7 @@ nonisolated final class ToneKernel: @unchecked Sendable {
         let essMaxCut = 9.0 * a
 
         let channels = min(Self.maxChannels, ptr.count)
-        let c = coeffs, z = state, ec = essCoeffs, ez = essState, ac = anaCoeffs, az = anaState
+        let c = coeffs, z = state, ec = essCoeffs, ez = essState
         var maxGR = 0.0, maxEss = 0.0
         var comp = compEnvDB, ess = essEnvDB
         var fast = fastPower
@@ -201,14 +230,15 @@ nonisolated final class ToneKernel: @unchecked Sendable {
             if playing {
                 averagePower += slowCoeff * (p - averagePower)
                 broadAccum += p
-                for b in 0..<Self.analysisBands {
-                    let k = b * 5, zi = b * 2
-                    let y = ac[k] * mono + az[zi]
-                    az[zi] = ac[k + 1] * mono - ac[k + 3] * y + az[zi + 1]
-                    az[zi + 1] = ac[k + 2] * mono - ac[k + 4] * y
-                    anaAccum[b] += y * y
-                }
                 accumCount += 1
+            }
+            // Band-passes: while playing (for Tone), or always while Make Room listens
+            if playing || publishing {
+                for b in 0..<Self.analysisBands {
+                    let y = analysisBand(b, mono)
+                    if playing { anaAccum[b] += y * y }
+                    if publishing { followKey(b, y) }
+                }
             }
 
             // --- Processing ---
@@ -273,10 +303,35 @@ nonisolated final class ToneKernel: @unchecked Sendable {
                 adapt(profile)
             }
         }
+        if publishing { publishKeyBands(row: keyRow) }
         fastPower = fast
         compEnvDB = max(-120, comp)
         essEnvDB = max(-120, ess)
         storeMeters(gr: maxGR, ess: maxEss)
+    }
+
+    // MARK: - Band analysis (audio thread)
+
+    /// One sample through analysis band-pass `b`
+    @inline(__always) private func analysisBand(_ b: Int, _ x: Double) -> Double {
+        let k = b * 5, zi = b * 2
+        let y = anaCoeffs[k] * x + anaState[zi]
+        anaState[zi] = anaCoeffs[k + 1] * x - anaCoeffs[k + 3] * y + anaState[zi + 1]
+        anaState[zi + 1] = anaCoeffs[k + 2] * x - anaCoeffs[k + 4] * y
+        return y
+    }
+
+    /// Fast level follower for Make Room: up in 5 ms, down in 120 ms, so it rides each
+    /// cycle's peak (a 0.5 sine reads about -6.5 dBFS)
+    @inline(__always) private func followKey(_ b: Int, _ y: Double) {
+        let p = y * y
+        keyEnv[b] += (p > keyEnv[b] ? keyAttack : keyRelease) * (p - keyEnv[b])
+    }
+
+    private func publishKeyBands(row: Int) {
+        for b in 0..<Self.analysisBands {
+            KeyBandTable.levels[row * MakeRoomBands.count + b] = keyEnv[b] > 1e-12 ? Float(10 * log10(keyEnv[b])) : -120
+        }
     }
 
     // MARK: - Adaptation (every ~20 ms, audio thread)

@@ -433,30 +433,35 @@ struct MakeRoomParams: Codable, Equatable {
         amount = (try? c.decodeIfPresent(Amount.self, forKey: .amount)) ?? .subtle
     }
 
-    /// How much each Make Room band (125 Hz … 9 kHz) matters to a key, from its Tone
-    /// instrument; nil = no Tone, so a general voice-and-instrument middle
+    /// How much each Make Room band (125 Hz … 8 kHz, octaves) matters to a key, from its
+    /// Tone instrument; nil = no instrument set, so a general voice-and-instrument middle
     static func bandWeights(for instrument: ToneInstrument?) -> [Float] {
-        //                     125  250  500  800  1.2k 1.8k 2.7k  4k   6k   9k
-        guard let instrument else { return [0.2, 0.5, 0.7, 0.8, 0.8, 0.8, 0.8, 0.7, 0.5, 0.3] }
+        //                     125  250  500   1k   2k   4k   8k
+        guard let instrument else { return [0.2, 0.5, 0.7, 0.8, 0.8, 0.7, 0.4] }
         switch instrument {
-        case .leadVocal:      [0.0, 0.2, 0.5, 0.8, 1.0, 1.0, 1.0, 1.0, 0.7, 0.4]
-        case .backingVocal:   [0.0, 0.2, 0.4, 0.7, 0.8, 0.8, 0.8, 0.7, 0.5, 0.3]
-        case .acousticGuitar: [0.2, 0.6, 0.8, 0.8, 0.7, 0.7, 0.8, 0.6, 0.4, 0.2]
-        case .electricGuitar: [0.1, 0.5, 0.8, 1.0, 1.0, 0.8, 0.6, 0.4, 0.2, 0.1]
-        case .bass:           [1.0, 0.8, 0.5, 0.4, 0.3, 0.1, 0.0, 0.0, 0.0, 0.0]
-        case .keys:           [0.3, 0.6, 0.8, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]
-        case .synth:          [0.4, 0.6, 0.7, 0.7, 0.7, 0.6, 0.5, 0.5, 0.4, 0.3]
-        case .kick:           [1.0, 0.6, 0.2, 0.0, 0.0, 0.0, 0.3, 0.4, 0.0, 0.0]
-        case .snare:          [0.0, 0.6, 0.5, 0.3, 0.2, 0.3, 0.5, 0.6, 0.5, 0.3]
-        case .drumKit:        [0.8, 0.5, 0.3, 0.2, 0.2, 0.3, 0.4, 0.5, 0.5, 0.4]
+        case .leadVocal:      return [0.0, 0.2, 0.5, 0.9, 1.0, 1.0, 0.5]
+        case .backingVocal:   return [0.0, 0.2, 0.4, 0.7, 0.8, 0.7, 0.4]
+        case .acousticGuitar: return [0.2, 0.6, 0.8, 0.8, 0.7, 0.6, 0.3]
+        case .electricGuitar: return [0.1, 0.5, 0.8, 1.0, 0.8, 0.5, 0.2]
+        case .bass:           return [1.0, 0.8, 0.5, 0.3, 0.1, 0.0, 0.0]
+        case .keys:           return [0.3, 0.6, 0.8, 0.8, 0.6, 0.4, 0.2]
+        case .synth:          return [0.4, 0.6, 0.7, 0.7, 0.6, 0.5, 0.4]
+        case .kick:           return [1.0, 0.6, 0.2, 0.0, 0.0, 0.4, 0.0]
+        case .snare:          return [0.0, 0.6, 0.5, 0.2, 0.3, 0.6, 0.4]
+        case .drumKit:        return [0.8, 0.5, 0.3, 0.2, 0.3, 0.5, 0.5]
         }
     }
 }
 
 extension AudioChannel {
-    /// The instrument its first active Tone is set to, if any
+    /// Its first active Tone: Make Room listens to the channel through it
+    var listeningToneIndex: Int? {
+        slots.firstIndex { $0.type == .tone && !$0.isBypassed }
+    }
+
+    /// The instrument that Tone is set to, if any
     var toneInstrument: ToneInstrument? {
-        slots.first { $0.type == .tone && !$0.isBypassed && $0.tone.instrument != nil }?.tone.instrument
+        listeningToneIndex.flatMap { slots[$0].tone.instrument }
     }
 }
 

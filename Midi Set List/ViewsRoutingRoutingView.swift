@@ -254,6 +254,7 @@ struct ChannelStripView: View {
                 makeRoomFor: store.channels.filter { $0.id != channelID }.map { other in
                     MakeRoomCandidate(
                         id: other.id, name: other.displayName, instrument: other.toneInstrument,
+                        hasTone: other.listeningToneIndex != nil,
                         makesRoomForThis: other.slots.contains {
                             $0.type == .makeRoom && $0.makeRoom.keyChannels.contains(channelID)
                         })
@@ -1631,6 +1632,8 @@ struct MakeRoomCandidate: Identifiable {
     let id: UUID
     let name: String
     let instrument: ToneInstrument?
+    /// Make Room hears a channel through its Tone
+    let hasTone: Bool
     /// It already makes room for the channel being edited
     let makesRoomForThis: Bool
 }
@@ -1661,7 +1664,10 @@ private struct MakeRoomEditor: View {
                 )) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(other.name.isEmpty ? "Unnamed channel" : other.name)
-                        if let instrument = other.instrument {
+                        if !other.hasTone {
+                            Label("Add a Tone to this channel so Make Room can hear it", systemImage: "exclamationmark.triangle")
+                                .font(.caption).foregroundStyle(.orange)
+                        } else if let instrument = other.instrument {
                             Text("\(instrument.icon) \(instrument.displayName)")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -1684,7 +1690,7 @@ private struct MakeRoomEditor: View {
                 }
             }
         } footer: {
-            Text("Only dips where the chosen channels are playing and this channel covers them, and only while they play. With several chosen, it follows whoever is in each band; dips never add up. Zero latency. A Tone on the chosen channel tells it which bands matter most.")
+            Text("Only dips where the chosen channels are playing and this channel covers them, and only while they play. With several chosen, it follows whoever is in each band; dips never add up. Zero latency. It hears each chosen channel through that channel's Tone, which already measures it; the Tone's instrument says which bands matter most. A Tone set to None only listens.")
         }
     }
 

@@ -524,29 +524,35 @@ final class AudioRoutingEngine {
 
     // MARK: - Make Room links
 
-    /// Points every Make Room at its key channels: each key channel's input picker measures
-    /// into its own KeyBandTable row (pickers no Make Room listens to stay idle), and each
-    /// Make Room gets those rows plus the bands that matter to each key (from its Tone).
-    /// Cheap; run after anything that could change who listens to whom.
+    /// Points every Make Room at its key channels: each key channel's Tone (which already
+    /// splits its signal into Make Room's bands) publishes its band levels to its own
+    /// KeyBandTable row (Tones nobody listens to don't), and each Make Room gets those rows
+    /// plus the bands that matter to each key. A key channel with no active Tone isn't
+    /// heard; the editor says so. Cheap; run after anything that could change who listens.
     func linkMakeRoom() {
         let channels = store.channels
-        let present = Set(channels.map(\.id))
+        let listenable = Set(channels.filter { $0.listeningToneIndex != nil }.map(\.id))
         var rows: [UUID: Int] = [:]
         for channel in channels {
             for slot in channel.slots where slot.type == .makeRoom && !slot.isBypassed {
                 for key in slot.makeRoom.keyChannels
-                where key != channel.id && present.contains(key) && rows[key] == nil
+                where key != channel.id && listenable.contains(key) && rows[key] == nil
                     && rows.count < KeyBandTable.maxKeys {
                     rows[key] = rows.count
                 }
             }
         }
-        for (id, graph) in graphs {
-            let row = rows[id] ?? -1
-            let analyzer = (graph.picker.auAudioUnit as? InputPickerAudioUnit)?.analyzer
-            if analyzer?.keySlot.load(ordering: .relaxed) != row {
-                if row >= 0 { KeyBandTable.clear(key: row) }
-                analyzer?.keySlot.store(row, ordering: .relaxed)
+        for channel in channels {
+            guard let graph = graphs[channel.id] else { continue }
+            let listening = channel.listeningToneIndex
+            for (i, slot) in channel.slots.enumerated() where slot.type == .tone && i < graph.fxNodes.count {
+                guard let tone = ((graph.fxNodes[i] as? AVAudioUnitEffect)?.auAudioUnit
+                                  as? ToneAudioUnit)?.kernel else { continue }
+                let row = i == listening ? rows[channel.id] ?? -1 : -1
+                if tone.keySlot.load(ordering: .relaxed) != row {
+                    if row >= 0 { KeyBandTable.clear(key: row) }
+                    tone.keySlot.store(row, ordering: .relaxed)
+                }
             }
         }
         for channel in channels {
