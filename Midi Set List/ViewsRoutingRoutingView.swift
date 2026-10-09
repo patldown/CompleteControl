@@ -11,6 +11,7 @@ import AVFoundation
 import CoreData
 import SwiftUI
 import Synchronization
+import UniformTypeIdentifiers
 
 // MARK: - Top-level tab view
 
@@ -193,6 +194,7 @@ struct ChannelStripView: View {
     @State private var newMacroName = ""
     @State private var confirmingRemove = false
     @State private var showingWizard = false
+    @State private var draggingFXIndex: Int?
     /// Shared by every strip so they flip together and stay lined up side by side
     @AppStorage("routingFXExpanded") private var fxExpanded = false
 
@@ -391,22 +393,19 @@ struct ChannelStripView: View {
                     } onBypassToggle: {
                         toggleBypass(i)
                     }
+                    .opacity(draggingFXIndex == i ? 0.4 : 1.0)
+                    .onDrag {
+                        draggingFXIndex = i
+                        return NSItemProvider(object: "\(i)" as NSString)
+                    }
+                    .onDrop(of: [UTType.text], isTargeted: nil) { _ in
+                        defer { draggingFXIndex = nil }
+                        guard let src = draggingFXIndex, src != i else { return false }
+                        moveFXSlot(from: src, to: i)
+                        return true
+                    }
                     .contextMenu {
                         if channel.slots[i].type != nil {
-                            Button { fxEditTarget = FXEditTarget(slotIndex: i) } label: {
-                                Label("Edit", systemImage: "slider.horizontal.3")
-                            }
-                            if i > 0 {
-                                Button { moveFXSlot(from: i, to: i - 1) } label: {
-                                    Label("Move Up", systemImage: "arrow.up")
-                                }
-                            }
-                            if i < 5 {
-                                Button { moveFXSlot(from: i, to: i + 1) } label: {
-                                    Label("Move Down", systemImage: "arrow.down")
-                                }
-                            }
-                            Divider()
                             Button(role: .destructive) { removeFXSlot(i) } label: {
                                 Label("Remove Effect", systemImage: "trash")
                             }
