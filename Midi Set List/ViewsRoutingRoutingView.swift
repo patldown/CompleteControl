@@ -607,33 +607,41 @@ struct MixerLinkControls: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Stop Auto Gain")
         } else {
-            Button { Task { await link.runAutoGain(for: channel.id) } } label: {
-                Text("A")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 40, height: 30)
-                    .background(Color.accentColor.opacity(0.15), in: Capsule())
-                    .frame(width: 44, height: 40)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Auto Gain")
-            .contextMenu {
-                Section("Target: \(Int(link.settings.autoGainTargetDB)) dBFS") {
+            Menu {
+                Button { Task { await link.runAutoGain(for: channel.id) } } label: {
+                    Label("Run Auto Gain", systemImage: "waveform.badge.magnifyingglass")
+                }
+                Divider()
+                Section("Target Level") {
                     ForEach(MixerLinkSettings.autoGainPresets) { preset in
                         Button {
                             link.settings.autoGainTargetDB = preset.targetDB
-                            Task { await link.runAutoGain(for: channel.id) }
                         } label: {
                             Label(
                                 "\(preset.name) (\(Int(preset.targetDB)) dBFS)",
                                 systemImage: link.settings.autoGainTargetDB == preset.targetDB
-                                    ? "checkmark.circle.fill" : "waveform"
+                                    ? "checkmark.circle.fill" : "circle"
                             )
                         }
                     }
                 }
+            } label: {
+                VStack(spacing: 1) {
+                    Text("A")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.accentColor)
+                    Text("\(Int(link.settings.autoGainTargetDB))")
+                        .font(.system(size: 8).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .frame(width: 40, height: 30)
+                .background(Color.accentColor.opacity(0.15), in: Capsule())
+                .frame(width: 44, height: 40)
+                .contentShape(Rectangle())
             }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Auto Gain — target \(Int(link.settings.autoGainTargetDB)) dBFS")
         }
     }
 
