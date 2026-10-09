@@ -1154,6 +1154,17 @@ struct FXSlotEditorSheet: View {
         self.onSave = onSave
     }
 
+    /// Make Room listens to other channels through their Tone, so it needs one to exist
+    private var canMakeRoom: Bool { makeRoomFor.contains(where: \.hasTone) }
+
+    /// The effect list: one Compressor, and Make Room only when it has something to hear
+    /// (kept while this slot already is one, so it can still be edited or removed)
+    private var addableTypes: [BuiltInFXType] {
+        BuiltInFXType.allCases.filter {
+            $0 != .fetComp && ($0 != .makeRoom || canMakeRoom || original.type == .makeRoom)
+        }
+    }
+
     /// One "Compressor" in the list; its Character picks the Smooth (opto) or Punchy (FET) engine
     private var typeSelection: Binding<BuiltInFXType?> {
         Binding(
@@ -1176,7 +1187,7 @@ struct FXSlotEditorSheet: View {
                 Section("Effect") {
                     Picker("Type", selection: typeSelection) {
                         Text("None").tag(Optional<BuiltInFXType>.none)
-                        ForEach(BuiltInFXType.allCases.filter { $0 != .fetComp }) { type in
+                        ForEach(addableTypes) { type in
                             Label(type == .optoComp ? "Compressor" : type.displayName,
                                   systemImage: type == .optoComp ? "gauge.with.dots.needle.33percent" : type.systemImage)
                                 .tag(Optional(type))
@@ -1184,6 +1195,10 @@ struct FXSlotEditorSheet: View {
                     }
                     if slot.type != nil {
                         Toggle("Bypassed", isOn: $slot.isBypassed)
+                    }
+                    if slot.type == nil && !canMakeRoom {
+                        Text("Make Room appears here once another channel has a Tone: it listens through it.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 if let type = slot.type, !slot.isBypassed {
@@ -1673,8 +1688,9 @@ private struct MakeRoomEditor: View {
                         }
                     }
                 }
+                // Without a Tone it can't be heard; one already chosen stays so it can be unticked
                 .disabled(!params.keyChannels.contains(other.id)
-                          && params.keyChannels.count >= MakeRoomKernel.maxKeys)
+                          && (!other.hasTone || params.keyChannels.count >= MakeRoomKernel.maxKeys))
             }
         } header: {
             Text("Make Room For")
