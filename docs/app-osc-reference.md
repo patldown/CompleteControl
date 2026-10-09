@@ -61,8 +61,8 @@ the first (lower slot) is `<fx>` and the second is `<fx>2`, e.g. `pitch` and `pi
 | `reverb` | Reverb |
 | `delay` | Delay |
 | `rider` | Level Rider |
-| `opto` | Opto Comp (LA-2A style) |
-| `fet` | FET Comp (1176 style) |
+| `opto` | Compressor – Smooth (LA-2A style) |
+| `fet` | Compressor – Punchy (1176 style) |
 | `notch` | Feedback Notch |
 | `pitch` | Pitch Guide (pitch correction, transpose, formant) |
 | `detune` | Micro Detune (micro-pitch stereo widener) |
@@ -73,6 +73,7 @@ the first (lower slot) is `<fx>` and the second is `<fx>2`, e.g. `pitch` and `pi
 | `air` | Air (harmonic exciter) |
 | `punch` | Punch (transient shaper) |
 | `gate` | Smart Gate (self-setting noise gate) |
+| `room` | Make Room (steps aside for chosen channels, e.g. the singers) |
 
 ### Value conventions
 
@@ -145,14 +146,16 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `gate` | -60 to -20 dBFS | Below this it holds still |
 | `outputTrim` | -12 to 12 dB | |
 
-### `opto` — Opto Comp (LA-2A style)
+### `opto` — Compressor – Smooth (LA-2A style)
 | Param | Range | Notes |
 |---|---|---|
 | `peakReduction` | 0 to 100 | More = more compression |
 | `gain` | 0 to 40 dB | Makeup |
 | `limit` | toggle | 0 Compress (~3:1), 1 Limit (~10:1) |
+| `sidechain` | toggle | Compress when the chosen channels play (picked in the app) |
+| `sidechainPost` | toggle | 1 = hear them after their effects and fader, 0 = as they come in |
 
-### `fet` — FET Comp (1176 style)
+### `fet` — Compressor – Punchy (1176 style)
 | Param | Range | Notes |
 |---|---|---|
 | `input` | 0 to 48 dB | Drives into the fixed threshold: more = more compression |
@@ -160,6 +163,8 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `ratio` | choice | 0 = 4:1, 1 = 8:1, 2 = 12:1, 3 = 20:1, 4 = All buttons |
 | `attack` | 1 to 7 (whole) | 7 fastest (20 µs), 1 slowest (800 µs) |
 | `release` | 1 to 7 (whole) | 7 fastest (50 ms), 1 slowest (1.1 s) |
+| `sidechain` | toggle | Compress when the chosen channels play (picked in the app) |
+| `sidechainPost` | toggle | 1 = hear them after their effects and fader, 0 = as they come in |
 
 ### `notch` — Feedback Notch
 | Param | Range | Notes |
@@ -185,7 +190,6 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 | `autoFormant` | toggle | Keeps the singer's natural tone when shifting |
 | `formant` | -6 to 6 semitones | + smaller/brighter, − bigger/darker |
 | `shiftOnlyWhileSinging` | toggle | Transpose/Formant switch off between phrases |
-| `bleedDuck` | -20 to 0 dB | Turns the mic down between phrases. 0 = off |
 
 ### `warmth` — Warmth
 | Param | Range | Notes |
@@ -209,6 +213,12 @@ Two Pitch Guides on the **same** channel are told apart by the number suffix:
 |---|---|---|
 | `sensitivity` | 0 to 100 % | Higher gates more of the quiet between notes |
 | `depth` | 0 to 80 dB | How far it turns down when closed |
+| `bleedDuck` | toggle | Opens For: 1 = Singing (loud bleed between phrases stays down), 0 = Any Sound |
+
+### `room` — Make Room
+| Param | Range | Notes |
+|---|---|---|
+| `amount` | choice | 0 Subtle (up to 2 dB), 1 Clear (up to 4 dB). Which channels to make room for is set in the app |
 
 ### `tone` — Tone
 | Param | Range | Notes |
@@ -242,6 +252,7 @@ Turn Tone on and off with `/app/<channel>/tone/bypass` (1 = off, 0 = on), like a
 | `scale` | choice | Same as `pitch` |
 | `pickiness` | 0 to 100 % | Higher = only clear, steady notes get harmonies |
 | `gate` | -70 to -20 dBFS | Quieter input (bleed) gets no harmonies |
+| `usePitchGuide` | toggle | Key, voice range, pickiness and gate come from the channel's Pitch Guide (when it has one); the four above are then overwritten by it |
 
 ### `detune` — Micro Detune
 | Param | Range | Notes |

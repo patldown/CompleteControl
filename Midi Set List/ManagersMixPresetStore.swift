@@ -76,9 +76,28 @@ final class MixPresetStore {
 
     private init() {
         if let data = try? Data(contentsOf: Self.fileURL),
-           let saved = try? JSONDecoder().decode([MixPreset].self, from: data) {
+           var saved = try? JSONDecoder().decode([MixPreset].self, from: data) {
+            let migrated = Self.moveBleedDuckToSmartGate(&saved)
             presets = saved
+            if migrated { save() }
         }
+    }
+
+    /// Bleed Duck moved from Pitch Guide to Smart Gate. A gate added for a recalled Pitch
+    /// Guide is recalled with it; the other ticks follow their effects to their new slots.
+    private static func moveBleedDuckToSmartGate(_ presets: inout [MixPreset]) -> Bool {
+        var changed = false
+        for p in presets.indices {
+            for c in presets[p].channels.indices {
+                guard let moved = presets[p].channels[c].slots.moveBleedDuckToSmartGate() else { continue }
+                var included = Set(presets[p].channels[c].includedSlots.compactMap { moved.newIndex[$0] })
+                // Each added gate sits right after the Pitch Guide it came from
+                for gate in moved.added where included.contains(gate - 1) { included.insert(gate) }
+                presets[p].channels[c].includedSlots = included
+                changed = true
+            }
+        }
+        return changed
     }
 
     private func save() {

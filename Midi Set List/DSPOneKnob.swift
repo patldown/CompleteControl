@@ -19,7 +19,10 @@
 //  • Smart Gate — finds its own threshold. It tracks the noise floor (the quiet between
 //    notes) and the playing level, and opens between the two: Sensitivity moves the
 //    threshold toward the playing level. Hysteresis, 1 ms attack, 80 ms hold, 150 ms
-//    release (both linear in dB); closed = turned down by Depth.
+//    release (both linear in dB); closed = turned down by Depth. Bleed Duck mode also
+//    listens for singing (VoiceDetector): it opens only for pitched voice, so loud
+//    unpitched bleed (drums, cymbals) between phrases is turned down too. 300 ms hold, as
+//    syllables have unpitched consonants; opening waits for the first pitched frame (~10 ms).
 //
 //  No lookahead: zero latency. Strict real-time contract: no allocations, locks, or Swift
 //  runtime calls in process().
@@ -38,11 +41,14 @@ nonisolated final class OneKnobKernel: @unchecked Sendable {
     private let p1Bits = Atomic<UInt32>(Float(0.4).bitPattern)   // main knob (0…1, Punch −1…1)
     private let p2Bits = Atomic<UInt32>(Float(40).bitPattern)    // Gate depth, dB
     private let choiceBits = Atomic<Int>(0)                      // Warmth: 0 tape, 1 tube; Air: 0 presence, 1 air
+    private let bleedDuckBits = Atomic<Bool>(false)              // Gate: only open for singing
 
     // MARK: - Meters (audio thread → main thread)
     let gateOpenFlag = Atomic<Bool>(false)
     let gateThresholdBits = Atomic<UInt32>(Float(-120).bitPattern)  // dBFS
     let floorBits = Atomic<UInt32>(Float(-120).bitPattern)          // dBFS
+    /// Gate, Bleed Duck mode: singing heard within the hold
+    let voiceFlag = Atomic<Bool>(false)
     let punchGainBits = Atomic<UInt32>(Float(0).bitPattern)         // dB, latest
 
     // MARK: - Audio thread state
@@ -68,6 +74,8 @@ nonisolated final class OneKnobKernel: @unchecked Sendable {
     private var gateGain = 0.0                      // dB
     private var gateOpen = false
     private var holdSamples = 0
+    private let voice = VoiceDetector()
+    private var voiceHoldLeft = 0
 
     init(mode: OneKnobMode) {
         self.mode = mode
@@ -89,6 +97,8 @@ nonisolated final class OneKnobKernel: @unchecked Sendable {
         floorKnown = false
         windowSamples = 0
         warmup = Int(sr * 0.05)
+        voice.reset(sampleRate: sr)
+        voiceHoldLeft = 0
         z.update(repeating: 0, count: Self.maxChannels * 16)
         prev.update(repeating: 0, count: Self.maxChannels)
     }
@@ -110,6 +120,7 @@ nonisolated final class OneKnobKernel: @unchecked Sendable {
     @MainActor func applyParams(_ p: SmartGateParams) {
         p1Bits.store((max(0, min(100, p.sensitivity)) / 100).bitPattern, ordering: .relaxed)
         p2Bits.store(max(0, min(80, p.depth)).bitPattern, ordering: .relaxed)
+        bleedDuckBits.store(p.bleedDuck, ordering: .relaxed)
     }
 
     // MARK: - Render (audio thread only — no allocations, no runtime)
@@ -248,17 +259,21 @@ nonisolated final class OneKnobKernel: @unchecked Sendable {
         let openStep = max(1, depthDB) / (sampleRate * 0.001)
         let closeStep = max(1, depthDB) / (sampleRate * 0.150)
         let hold = Int(sampleRate * 0.080)
+        let duck = bleedDuckBits.load(ordering: .relaxed)
+        let voiceHold = Int(sampleRate * 0.3)
+        var voiceLeft = voiceHoldLeft
         var level = levelEnv, floor = floorDB, signal = signalDB
         var windowMin = windowMinDB, windowCount = windowSamples, known = floorKnown
         var settle = warmup
         var gain = gateGain, open = gateOpen, holdLeft = holdSamples
+        var effective = open
         var threshold = -120.0
 
         for i in 0..<frames {
-            var p = 0.0
+            var p = 0.0, sum: Float = 0
             for ch in 0..<channels {
                 if let d = ptr[ch].mData?.assumingMemoryBound(to: Float.self) {
-                    let v = Double(d[i]); p = max(p, v * v)
+                    let v = Double(d[i]); p = max(p, v * v); sum += d[i]
                 }
             }
             level += levelCoeff * (p - level)
@@ -285,8 +300,19 @@ nonisolated final class OneKnobKernel: @unchecked Sendable {
             } else if db < threshold - 2 {
                 if holdLeft > 0 { holdLeft -= 1 } else { open = false }
             }
+            effective = open
+            if duck {
+                // Only listen while the level could open the gate; quieter input isn't singing
+                if voice.push(sum / Float(channels), worthChecking: db > threshold - 2),
+                   voice.isVoiced {
+                    voiceLeft = voiceHold
+                } else if voiceLeft > 0 {
+                    voiceLeft -= 1
+                }
+                effective = open && voiceLeft > 0
+            }
             // gain holds dB here: 0 = open, −depth = closed
-            gain = open ? min(0, gain + openStep) : max(-depthDB, gain - closeStep)
+            gain = effective ? min(0, gain + openStep) : max(-depthDB, gain - closeStep)
             let g = Float(pow(10, gain / 20))
             for ch in 0..<channels {
                 if let d = ptr[ch].mData?.assumingMemoryBound(to: Float.self) { d[i] *= g }
@@ -294,8 +320,9 @@ nonisolated final class OneKnobKernel: @unchecked Sendable {
         }
         levelEnv = level; floorDB = floor; signalDB = signal
         windowMinDB = windowMin; windowSamples = windowCount; floorKnown = known; warmup = settle
-        gateGain = gain; gateOpen = open; holdSamples = holdLeft
-        gateOpenFlag.store(open, ordering: .relaxed)
+        gateGain = gain; gateOpen = open; holdSamples = holdLeft; voiceHoldLeft = voiceLeft
+        gateOpenFlag.store(effective, ordering: .relaxed)
+        voiceFlag.store(duck && voiceLeft > 0, ordering: .relaxed)
         gateThresholdBits.store(Float(threshold).bitPattern, ordering: .relaxed)
         floorBits.store(Float(floor).bitPattern, ordering: .relaxed)
     }

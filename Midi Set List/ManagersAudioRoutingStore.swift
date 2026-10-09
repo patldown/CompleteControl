@@ -93,6 +93,12 @@ final class AudioRoutingStore {
                     needsSave = true
                 }
             }
+            // Migrate: Bleed Duck moved from Pitch Guide to Smart Gate
+            if channel.slots.moveBleedDuckToSmartGate() != nil { needsSave = true }
+            if channel.slots.syncHarmonyWithPitchGuide() { needsSave = true }
+            for mi in channel.macros.indices where channel.macros[mi].slots.moveBleedDuckToSmartGate() != nil {
+                needsSave = true
+            }
             fixed.append(channel)
         }
         channels = fixed
@@ -151,6 +157,8 @@ final class AudioRoutingStore {
 
     func update(_ channel: AudioChannel) {
         guard let i = channels.firstIndex(where: { $0.id == channel.id }) else { return }
+        var channel = channel
+        channel.slots.syncHarmonyWithPitchGuide()
         channels[i] = channel
         save()
     }

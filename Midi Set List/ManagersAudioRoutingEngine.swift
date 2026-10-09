@@ -155,6 +155,12 @@ final class AudioRoutingEngine {
             name: "Micro Detune",
             version: 1
         )
+        AUAudioUnit.registerSubclass(
+            MakeRoomAudioUnit.self,
+            as: MakeRoomAudioUnit.componentDescription,
+            name: "Make Room",
+            version: 1
+        )
 
         // iOS stops the engine when the hardware configuration changes (interface
         // re-plugged, sample rate) — bring it straight back rather than going silent
@@ -206,6 +212,7 @@ final class AudioRoutingEngine {
             else { throw RoutingError.noOutput }
 
             buildGraph(in: eng, stereo: stereo, hardwareIn: hardwareIn, hardwareOut: hardwareOut)
+            linkMakeRoom()
             eng.prepare()
             try eng.start()
             engine = eng
@@ -279,6 +286,7 @@ final class AudioRoutingEngine {
            let free = (0..<OutputPackerAudioUnit.maxChannels).first(where: { !packerBus.values.contains($0) }) {
             packerBus[channel.id] = free
         }
+        (picker.auAudioUnit as? InputPickerAudioUnit)?.levelRow.store(packerBus[channel.id] ?? -1, ordering: .relaxed)
         var graph = ChannelGraph(picker: picker, inputMixer: inputMixer, fxNodes: [])
         buildChain(for: channel, into: &graph, in: eng)
         graphs[channel.id] = graph
@@ -355,6 +363,7 @@ final class AudioRoutingEngine {
             guard let channel = store.channels.first(where: { $0.id == id }) else { return }
             buildChannel(channel, in: eng, startSilent: true)
             connectInputs(in: eng)
+            linkMakeRoom()
             if !eng.isRunning { try? eng.start() }
             if let mixer = graphs[id]?.inputMixer {
                 fade(mixer, to: channel.isMuted ? 0 : channel.volume) { [weak self] in
@@ -469,6 +478,9 @@ final class AudioRoutingEngine {
             (effect.auAudioUnit as? ToneAudioUnit)?.kernel
                 .applyParams(instrument: slot.tone.instrument, amount: slot.tone.amount)
             return effect
+        case .makeRoom:
+            // Linked to its key channels by linkMakeRoom once the graph is built
+            return AVAudioUnitEffect(audioComponentDescription: MakeRoomAudioUnit.componentDescription)
         case .warmth, .air, .punch, .smartGate:
             let description: AudioComponentDescription = switch type {
             case .air:       OneKnobAudioUnit.airDescription
@@ -507,6 +519,77 @@ final class AudioRoutingEngine {
         for (i, slot) in macro.slots.enumerated() where i < graph.fxNodes.count {
             applySlot(slot, channelID: channelID, slotIndex: i)
         }
+        // Make Room or sidechain choices, or a key channel's Tone, may have changed
+        linkMakeRoom()
+    }
+
+    // MARK: - Make Room links
+
+    /// Points every Make Room at its key channels: each key channel's Tone (which already
+    /// splits its signal into Make Room's bands) publishes its band levels to its own
+    /// KeyBandTable row (Tones nobody listens to don't), and each Make Room gets those rows
+    /// plus the bands that matter to each key. A key channel with no active Tone isn't
+    /// heard; the editor says so. Cheap; run after anything that could change who listens.
+    func linkMakeRoom() {
+        let channels = store.channels
+        let listenable = Set(channels.filter { $0.listeningToneIndex != nil }.map(\.id))
+        var rows: [UUID: Int] = [:]
+        for channel in channels {
+            for slot in channel.slots where slot.type == .makeRoom && !slot.isBypassed {
+                for key in slot.makeRoom.keyChannels
+                where key != channel.id && listenable.contains(key) && rows[key] == nil
+                    && rows.count < KeyBandTable.maxKeys {
+                    rows[key] = rows.count
+                }
+            }
+        }
+        for channel in channels {
+            guard let graph = graphs[channel.id] else { continue }
+            let listening = channel.listeningToneIndex
+            for (i, slot) in channel.slots.enumerated() where slot.type == .tone && i < graph.fxNodes.count {
+                guard let tone = ((graph.fxNodes[i] as? AVAudioUnitEffect)?.auAudioUnit
+                                  as? ToneAudioUnit)?.kernel else { continue }
+                let row = i == listening ? rows[channel.id] ?? -1 : -1
+                if tone.keySlot.load(ordering: .relaxed) != row {
+                    if row >= 0 { KeyBandTable.clear(key: row) }
+                    tone.keySlot.store(row, ordering: .relaxed)
+                }
+            }
+        }
+        for channel in channels {
+            guard let graph = graphs[channel.id] else { continue }
+            for (i, slot) in channel.slots.enumerated()
+            where slot.type == .makeRoom && i < graph.fxNodes.count {
+                guard let kernel = ((graph.fxNodes[i] as? AVAudioUnitEffect)?.auAudioUnit
+                                    as? MakeRoomAudioUnit)?.kernel else { continue }
+                let keys = slot.makeRoom.keyChannels.compactMap { key -> (slot: Int, weights: [Float])? in
+                    guard key != channel.id, let row = rows[key],
+                          let keyChannel = channels.first(where: { $0.id == key }) else { return nil }
+                    return (row, MakeRoomParams.bandWeights(for: keyChannel.toneInstrument))
+                }
+                kernel.apply(maxCutDB: slot.makeRoom.amount.maxCutDB,
+                             keys: Array(keys.prefix(MakeRoomKernel.maxKeys)))
+            }
+        }
+        linkSidechains()
+    }
+
+    /// Points each compressor with a sidechain at its key channels' rows in
+    /// ChannelLevelTable (their packer busses); compressors without one follow themselves
+    private func linkSidechains() {
+        for channel in store.channels {
+            guard let graph = graphs[channel.id] else { continue }
+            for (i, slot) in channel.slots.enumerated()
+            where (slot.type == .optoComp || slot.type == .fetComp) && i < graph.fxNodes.count {
+                guard let kernel = ((graph.fxNodes[i] as? AVAudioUnitEffect)?.auAudioUnit
+                                    as? VintageCompressorAudioUnit)?.kernel else { continue }
+                let rows = slot.sidechain.enabled
+                    ? slot.sidechain.keyChannels.filter { $0 != channel.id }.compactMap { packerBus[$0] }
+                    : []
+                kernel.applySidechain(rows: Array(rows.prefix(VintageCompressorKernel.maxKeys)),
+                                      post: slot.sidechain.post)
+            }
+        }
     }
 
     /// Applies one slot's settings to the running graph (OSC control, live edits). Bypass
@@ -519,6 +602,8 @@ final class AudioRoutingEngine {
             return
         }
         applySlotParams(slot, to: node)
+        // Make Room and sidechains read other channels; a Tone sets what its channel needs room in
+        if let type = slot.type, [.makeRoom, .tone, .optoComp, .fetComp].contains(type) { linkMakeRoom() }
     }
 
     /// The running in-house AU in a channel's slot, for live editing, ring-out and meters.
@@ -621,6 +706,8 @@ final class AudioRoutingEngine {
                 .kernel.applyParams(instrument: slot.tone.instrument, amount: slot.tone.amount)
         case .warmth, .air, .punch, .smartGate:
             applyOneKnob(slot, to: ((node as? AVAudioUnitEffect)?.auAudioUnit as? OneKnobAudioUnit)?.kernel)
+        case .makeRoom:
+            break   // needs the other channels: linkMakeRoom
         case nil:
             break
         }

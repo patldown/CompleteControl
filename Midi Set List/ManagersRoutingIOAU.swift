@@ -74,6 +74,31 @@ nonisolated final class InputSelection: Sendable {
     let levelBits = Atomic<UInt32>(Float(-120).bitPattern)
 }
 
+// MARK: - Channel levels for sidechains
+
+/// Every channel's peak level each buffer, before its effects (from its input picker) and
+/// after them (from the output packer), indexed by the channel's packer bus. A compressor's
+/// sidechain reads its key channels here. Fixed-size and never freed, so the audio thread
+/// can index it directly; aligned 32-bit stores don't tear.
+nonisolated enum ChannelLevelTable {
+    static let count = OutputPackerAudioUnit.maxChannels
+    nonisolated(unsafe) static let pre: UnsafeMutablePointer<Float> = {
+        let p = UnsafeMutablePointer<Float>.allocate(capacity: count)
+        p.initialize(repeating: -120, count: count)
+        return p
+    }()
+    nonisolated(unsafe) static let post: UnsafeMutablePointer<Float> = {
+        let p = UnsafeMutablePointer<Float>.allocate(capacity: count)
+        p.initialize(repeating: -120, count: count)
+        return p
+    }()
+
+    @inline(__always) static func level(row: Int, post usePost: Bool) -> Float {
+        guard row >= 0, row < count else { return -120 }
+        return usePost ? post[row] : pre[row]
+    }
+}
+
 final class InputPickerAudioUnit: AUAudioUnit {
 
     static let componentDescription = AudioComponentDescription(
@@ -85,6 +110,8 @@ final class InputPickerAudioUnit: AUAudioUnit {
     )
 
     let selection = InputSelection()
+    /// This channel's row in ChannelLevelTable (its packer bus); -1 = not published
+    let levelRow = Atomic<Int>(-1)
     private let inputScratch = RoutingScratch()
     private let outputScratch = RoutingScratch()
     private var _inputBusses: AUAudioUnitBusArray!
@@ -127,7 +154,7 @@ final class InputPickerAudioUnit: AUAudioUnit {
     }
 
     override var internalRenderBlock: AUInternalRenderBlock {
-        let sel = selection, inBuf = inputScratch, outBuf = outputScratch
+        let sel = selection, inBuf = inputScratch, outBuf = outputScratch, row = levelRow
         return { _, timestamp, frameCount, _, outputData, _, pullInput in
             guard let inList = inBuf.list, let spare = outBuf.list else { return kAudioUnitErr_Uninitialized }
             let frames = Int(frameCount)
@@ -154,7 +181,10 @@ final class InputPickerAudioUnit: AUAudioUnit {
             if out.count > 0, let s = samples(out[0]) {
                 var peak: Float = 0
                 for i in 0..<frames { let v = abs(s[i]); if v > peak { peak = v } }
-                sel.levelBits.store((peak > 1e-7 ? 20 * log10f(peak) : -120).bitPattern, ordering: .relaxed)
+                let db: Float = peak > 1e-7 ? 20 * log10f(peak) : -120
+                sel.levelBits.store(db.bitPattern, ordering: .relaxed)
+                let r = row.load(ordering: .relaxed)
+                if r >= 0, r < ChannelLevelTable.count { ChannelLevelTable.pre[r] = db }
             }
             return noErr
         }
@@ -282,7 +312,9 @@ final class OutputPackerAudioUnit: AUAudioUnit {
                 // Compute per-bus peak dBFS for the channel output level meter
                 var peak: Float = 0
                 for i in 0..<frames { let v = abs(left[i]); if v > peak { peak = v } }
-                routes.storeLevel(bus, bits: (peak > 1e-7 ? 20 * log10f(peak) : Float(-120)).bitPattern)
+                let db: Float = peak > 1e-7 ? 20 * log10f(peak) : -120
+                routes.storeLevel(bus, bits: db.bitPattern)
+                if bus < ChannelLevelTable.count { ChannelLevelTable.post[bus] = db }
 
                 if stereo {
                     if let dst = samples(out[start]) { for i in 0..<frames { dst[i] += left[i] } }

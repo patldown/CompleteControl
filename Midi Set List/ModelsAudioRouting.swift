@@ -15,12 +15,12 @@ import Foundation
 
 enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
     case gain, eq3Band, reverb, delay, levelRider, optoComp, fetComp, feedbackNotch, pitchGuide, microDetune, harmony,
-         piezoBody, tone, warmth, air, punch, smartGate
+         piezoBody, tone, warmth, air, punch, smartGate, makeRoom
 
     // reverb and delay kept in enum for JSON backward-compat but are no longer available;
     // the load() migration clears any saved slots of these types.
     static var allCases: [BuiltInFXType] {
-        [.tone, .gain, .eq3Band, .smartGate, .levelRider, .optoComp, .fetComp, .punch, .warmth, .air,
+        [.tone, .gain, .eq3Band, .makeRoom, .smartGate, .levelRider, .optoComp, .fetComp, .punch, .warmth, .air,
          .feedbackNotch, .pitchGuide, .harmony, .microDetune, .piezoBody]
     }
 
@@ -33,8 +33,8 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .reverb:     "Reverb"
         case .delay:      "Delay"
         case .levelRider: "Level Rider"
-        case .optoComp:   "Opto Comp (LA-2A style)"
-        case .fetComp:    "FET Comp (1176 style)"
+        case .optoComp:   "Compressor – Smooth (LA-2A style)"
+        case .fetComp:    "Compressor – Punchy (1176 style)"
         case .feedbackNotch: "Feedback Notch"
         case .pitchGuide: "Pitch Guide"
         case .microDetune: "Micro Detune (widener)"
@@ -45,6 +45,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .air:        "Air (exciter)"
         case .punch:      "Punch (transient shaper)"
         case .smartGate:  "Smart Gate"
+        case .makeRoom:   "Make Room (unmask)"
         }
     }
 
@@ -67,6 +68,7 @@ enum BuiltInFXType: String, Codable, CaseIterable, Identifiable {
         case .air:        "wind"
         case .punch:      "burst"
         case .smartGate:  "door.left.hand.closed"
+        case .makeRoom:   "rectangle.split.2x1"
         }
     }
 }
@@ -106,21 +108,125 @@ struct DelayParams: Codable, Equatable {
 struct LevelRiderParams: Codable, Equatable {
     var inputTrim: Float = 0        // dB, -12...+12; applied before the detector
     var targetLevel: Float = -18    // dBFS, -30...-6
+    // Defaults are the Steady style
     var maxCut: Float = -9          // dB, -18...0
     var maxBoost: Float = 4         // dB, 0...+9
     var cutSpeed: Float = 80        // ms, 20...300  (how fast to cut)
     var boostSpeed: Float = 600     // ms, 200...2000 (how fast to boost)
     var gateThreshold: Float = -50  // dBFS, -60...-20; below this, gain freezes
     var outputTrim: Float = 0       // dB, -12...+12; applied after rider
+    /// Show every slider instead of the Style choice
+    var custom: Bool = false
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = LevelRiderParams()
+        inputTrim = try c.decodeIfPresent(Float.self, forKey: .inputTrim) ?? d.inputTrim
+        targetLevel = try c.decodeIfPresent(Float.self, forKey: .targetLevel) ?? d.targetLevel
+        maxCut = try c.decodeIfPresent(Float.self, forKey: .maxCut) ?? d.maxCut
+        maxBoost = try c.decodeIfPresent(Float.self, forKey: .maxBoost) ?? d.maxBoost
+        cutSpeed = try c.decodeIfPresent(Float.self, forKey: .cutSpeed) ?? d.cutSpeed
+        boostSpeed = try c.decodeIfPresent(Float.self, forKey: .boostSpeed) ?? d.boostSpeed
+        gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
+        outputTrim = try c.decodeIfPresent(Float.self, forKey: .outputTrim) ?? d.outputTrim
+        // Saved before the styles: hand-set values stay exact, shown as sliders
+        custom = try c.decodeIfPresent(Bool.self, forKey: .custom) ?? !matchesStyle
+    }
+
+    /// How hard it rides the level
+    enum Style: CaseIterable, Identifiable {
+        case gentle, steady, firm
+        var id: Self { self }
+
+        var name: String {
+            switch self { case .gentle: "Gentle"; case .steady: "Steady"; case .firm: "Firm" }
+        }
+
+        var sound: String {
+            switch self {
+            case .gentle: "Evens out big jumps only. You'll barely notice it."
+            case .steady: "Keeps the voice at an even level, line to line."
+            case .firm:   "Always right up front. Quiet words come up fast."
+            }
+        }
+
+        var maxCut: Float { switch self { case .gentle: -6; case .steady: -9; case .firm: -12 } }
+        var maxBoost: Float { switch self { case .gentle: 3; case .steady: 4; case .firm: 6 } }
+        var cutSpeed: Float { switch self { case .gentle: 150; case .steady: 80; case .firm: 40 } }
+        var boostSpeed: Float { switch self { case .gentle: 1200; case .steady: 600; case .firm: 400 } }
+    }
+
+    /// The style these values match, or nil
+    var style: Style? {
+        get {
+            Style.allCases.first {
+                $0.maxCut == maxCut && $0.maxBoost == maxBoost
+                    && $0.cutSpeed == cutSpeed && $0.boostSpeed == boostSpeed
+            }
+        }
+        set {
+            guard let newValue else { return }
+            maxCut = newValue.maxCut; maxBoost = newValue.maxBoost
+            cutSpeed = newValue.cutSpeed; boostSpeed = newValue.boostSpeed
+        }
+    }
+
+    /// The style describes everything not shown beside it (Target and Gate are shown)
+    var matchesStyle: Bool { style != nil && inputTrim == 0 && outputTrim == 0 }
+
+    /// Moves to the nearest style, trims back to 0 (leaving Custom)
+    mutating func snapToStyle() {
+        let nearest = Style.allCases.min {
+            abs($0.cutSpeed - cutSpeed) / 110 + abs($0.maxCut - maxCut) / 6
+                < abs($1.cutSpeed - cutSpeed) / 110 + abs($1.maxCut - maxCut) / 6
+        }
+        style = nearest
+        inputTrim = 0; outputTrim = 0
+        custom = false
+    }
 }
 
 // MARK: - Compressor parameters
 
 /// LA-2A style: two knobs and a Compress/Limit switch.
 struct OptoCompParams: Codable, Equatable {
-    var peakReduction: Float = 40   // 0...100; higher = more compression
-    var gain: Float = 6             // dB makeup, 0...40
+    // Defaults are Medium
+    var peakReduction: Float = 68   // 0...100; higher = more compression
+    var gain: Float = 5             // dB makeup, 0...40
     var limitMode: Bool = false     // false = Compress (~3:1), true = Limit (~10:1)
+    /// Show the knobs instead of the Amount choice
+    var custom: Bool = false
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        peakReduction = try c.decodeIfPresent(Float.self, forKey: .peakReduction) ?? 40
+        gain = try c.decodeIfPresent(Float.self, forKey: .gain) ?? 6
+        limitMode = try c.decodeIfPresent(Bool.self, forKey: .limitMode) ?? false
+        // Saved before the choices: keep the exact values, shown as knobs unless they match one
+        custom = try c.decodeIfPresent(Bool.self, forKey: .custom) ?? (amount == nil)
+    }
+
+    var amount: CompressionAmount? {
+        get {
+            CompressionAmount.allCases.first {
+                let o = $0.opto
+                return o.peakReduction == peakReduction && o.gain == gain && o.limit == limitMode
+            }
+        }
+        set {
+            guard let o = newValue?.opto else { return }
+            peakReduction = o.peakReduction; gain = o.gain; limitMode = o.limit
+        }
+    }
+
+    mutating func snapToAmount() {
+        amount = CompressionAmount.allCases.min {
+            abs($0.opto.peakReduction - peakReduction) < abs($1.opto.peakReduction - peakReduction)
+        }
+        custom = false
+    }
 }
 
 /// 1176 style: Input drives into a fixed threshold, Output sets level.
@@ -138,11 +244,96 @@ struct FETCompParams: Codable, Equatable {
             }
         }
     }
+    // Defaults are Medium
     var input: Float = 6            // dB, 0...48
-    var output: Float = 0           // dB, -24...+12
-    var ratio: Ratio = .r4
+    var output: Float = 2           // dB, -24...+12
+    var ratio: Ratio = .r8
     var attack: Float = 3           // 1 (slow, 800 µs) ... 7 (fast, 20 µs)
     var release: Float = 5          // 1 (slow, 1.1 s) ... 7 (fast, 50 ms)
+    /// Show the knobs instead of the Amount choice
+    var custom: Bool = false
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        input = try c.decodeIfPresent(Float.self, forKey: .input) ?? 6
+        output = try c.decodeIfPresent(Float.self, forKey: .output) ?? 0
+        ratio = (try? c.decodeIfPresent(Ratio.self, forKey: .ratio)) ?? .r4
+        attack = try c.decodeIfPresent(Float.self, forKey: .attack) ?? 3
+        release = try c.decodeIfPresent(Float.self, forKey: .release) ?? 5
+        custom = try c.decodeIfPresent(Bool.self, forKey: .custom) ?? (amount == nil)
+    }
+
+    var amount: CompressionAmount? {
+        get {
+            CompressionAmount.allCases.first {
+                let f = $0.fet
+                return f.input == input && f.output == output && f.ratio == ratio
+                    && f.attack == attack && f.release == release
+            }
+        }
+        set {
+            guard let f = newValue?.fet else { return }
+            input = f.input; output = f.output; ratio = f.ratio; attack = f.attack; release = f.release
+        }
+    }
+
+    mutating func snapToAmount() {
+        amount = CompressionAmount.allCases.min { abs($0.fet.input - input) < abs($1.fet.input - input) }
+        custom = false
+    }
+}
+
+/// A compressor following other channels instead of its own: this channel is turned down
+/// when they play (kick → bass, vocals → backing track). Off by default; under Custom Values.
+struct SidechainParams: Codable, Equatable {
+    var enabled = false
+    var keyChannels: [UUID] = []
+    /// Read the keys after their effects and fader (true) or as they come in (false)
+    var post = false
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        keyChannels = try c.decodeIfPresent([UUID].self, forKey: .keyChannels) ?? []
+        post = try c.decodeIfPresent(Bool.self, forKey: .post) ?? false
+    }
+}
+
+/// The Compressor's Amount choice. Each sets its own make-up gain so the level stays
+/// roughly where it was (for a voice around -18 dBFS).
+enum CompressionAmount: CaseIterable, Identifiable {
+    case light, medium, heavy
+    var id: Self { self }
+
+    var name: String {
+        switch self { case .light: "Light"; case .medium: "Medium"; case .heavy: "Heavy" }
+    }
+
+    var sound: String {
+        switch self {
+        case .light:  "Just takes the edge off the loudest moments."
+        case .medium: "Holds it together: a solid, even sound."
+        case .heavy:  "Squashed and in your face. Every word the same level."
+        }
+    }
+
+    var opto: (peakReduction: Float, gain: Float, limit: Bool) {
+        switch self {
+        case .light:  (56, 3, false)
+        case .medium: (68, 5, false)
+        case .heavy:  (83, 8, true)
+        }
+    }
+
+    var fet: (input: Float, output: Float, ratio: FETCompParams.Ratio, attack: Float, release: Float) {
+        switch self {
+        case .light:  (0, 3, .r4, 3, 5)
+        case .medium: (6, 2, .r8, 3, 5)
+        case .heavy:  (12, 1, .r12, 4, 6)
+        }
+    }
 }
 
 // MARK: - Feedback Notch parameters
@@ -217,12 +408,77 @@ struct PunchParams: Codable, Equatable {
 struct SmartGateParams: Codable, Equatable {
     var sensitivity: Float = 50     // %, 0...100; higher gates more
     var depth: Float = 40           // dB the gate turns down when closed, 0...80
+    /// "Opens For: Singing": only open for singing, so loud bleed between phrases stays down.
+    /// Named for the Pitch Guide setting it replaced.
+    var bleedDuck: Bool = false
 
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         sensitivity = try c.decodeIfPresent(Float.self, forKey: .sensitivity) ?? 50
         depth = try c.decodeIfPresent(Float.self, forKey: .depth) ?? 40
+        bleedDuck = try c.decodeIfPresent(Bool.self, forKey: .bleedDuck) ?? false
+    }
+}
+
+// MARK: - Make Room (sidechain unmasking)
+
+/// Steps this channel aside, gently and only while they play, in the bands where the
+/// chosen channels (usually the singers) need to be heard
+struct MakeRoomParams: Codable, Equatable {
+    /// The channels to make room for
+    var keyChannels: [UUID] = []
+    var amount: Amount = .subtle
+
+    enum Amount: String, Codable, CaseIterable, Identifiable {
+        case subtle, clear
+        var id: Self { self }
+        var name: String { self == .subtle ? "Subtle" : "Clear" }
+        var sound: String {
+            self == .subtle
+                ? "A gentle step aside. You'll hear the singer more than the change."
+                : "A clear gap for the singer in a busy mix."
+        }
+        /// Deepest dip in any band, dB
+        var maxCutDB: Float { self == .subtle ? 2 : 4 }
+    }
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        keyChannels = try c.decodeIfPresent([UUID].self, forKey: .keyChannels) ?? []
+        amount = (try? c.decodeIfPresent(Amount.self, forKey: .amount)) ?? .subtle
+    }
+
+    /// How much each Make Room band (125 Hz … 8 kHz, octaves) matters to a key, from its
+    /// Tone instrument; nil = no instrument set, so a general voice-and-instrument middle
+    static func bandWeights(for instrument: ToneInstrument?) -> [Float] {
+        //                     125  250  500   1k   2k   4k   8k
+        guard let instrument else { return [0.2, 0.5, 0.7, 0.8, 0.8, 0.7, 0.4] }
+        switch instrument {
+        case .leadVocal:      return [0.0, 0.2, 0.5, 0.9, 1.0, 1.0, 0.5]
+        case .backingVocal:   return [0.0, 0.2, 0.4, 0.7, 0.8, 0.7, 0.4]
+        case .acousticGuitar: return [0.2, 0.6, 0.8, 0.8, 0.7, 0.6, 0.3]
+        case .electricGuitar: return [0.1, 0.5, 0.8, 1.0, 0.8, 0.5, 0.2]
+        case .bass:           return [1.0, 0.8, 0.5, 0.3, 0.1, 0.0, 0.0]
+        case .keys:           return [0.3, 0.6, 0.8, 0.8, 0.6, 0.4, 0.2]
+        case .synth:          return [0.4, 0.6, 0.7, 0.7, 0.6, 0.5, 0.4]
+        case .kick:           return [1.0, 0.6, 0.2, 0.0, 0.0, 0.4, 0.0]
+        case .snare:          return [0.0, 0.6, 0.5, 0.2, 0.3, 0.6, 0.4]
+        case .drumKit:        return [0.8, 0.5, 0.3, 0.2, 0.3, 0.5, 0.5]
+        }
+    }
+}
+
+extension AudioChannel {
+    /// Its first active Tone: Make Room listens to the channel through it
+    var listeningToneIndex: Int? {
+        slots.firstIndex { $0.type == .tone && !$0.isBypassed }
+    }
+
+    /// The instrument that Tone is set to, if any
+    var toneInstrument: ToneInstrument? {
+        listeningToneIndex.flatMap { slots[$0].tone.instrument }
     }
 }
 
@@ -567,6 +823,9 @@ struct HarmonyParams: Codable, Equatable {
     var pickiness: Float = 50       // %, 0...100
     var gateThreshold: Float = -45  // dBFS, -70...-20
     var voiceRange: VoiceRange = .mid
+    /// Take key and detection (the fields in `syncKeyAndDetection`) from the channel's
+    /// Pitch Guide, so they're set once. Only applies when the channel has one.
+    var usePitchGuide = true
 
     init() {}
 
@@ -588,12 +847,47 @@ struct HarmonyParams: Codable, Equatable {
         pickiness = try c.decodeIfPresent(Float.self, forKey: .pickiness) ?? d.pickiness
         gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
         voiceRange = (try? c.decodeIfPresent(VoiceRange.self, forKey: .voiceRange)) ?? d.voiceRange
+        // Saved before the link: only link if key and detection were never changed, so a
+        // hand-set Harmony keeps its own
+        usePitchGuide = try c.decodeIfPresent(Bool.self, forKey: .usePitchGuide)
+            ?? (songKeyDrive == d.songKeyDrive && pickiness == d.pickiness
+                && gateThreshold == d.gateThreshold && voiceRange == d.voiceRange)
     }
 
     private enum FirstVersionKeys: String, CodingKey { case passLead }
 
     /// Lead Level at or below this is off
     static let leadOff: Float = -60
+
+    /// Copies key and detection from a Pitch Guide; true if anything changed
+    mutating func syncKeyAndDetection(from p: PitchGuideParams) -> Bool {
+        let before = self
+        songKeyDrive = p.songKeyDrive; key = p.key; scale = p.scale
+        voiceRange = p.voiceRange; pickiness = p.pickiness; gateThreshold = p.gateThreshold
+        return self != before
+    }
+
+    /// How much the voices drift from each other, like real singers
+    enum Feel: CaseIterable, Identifiable {
+        case tight, natural, loose
+        var id: Self { self }
+        var name: String {
+            switch self { case .tight: "Tight"; case .natural: "Natural"; case .loose: "Loose" }
+        }
+        var sound: String {
+            switch self {
+            case .tight:   "Locked to the singer, like a studio double."
+            case .natural: "Like real backing singers."
+            case .loose:   "A loose group: each voice drifts and lags a little."
+            }
+        }
+        var humanize: Float { switch self { case .tight: 10; case .natural: 30; case .loose: 65 } }
+    }
+
+    var feel: Feel? {
+        get { Feel.allCases.first { $0.humanize == humanize } }
+        set { if let newValue { humanize = newValue.humanize } }
+    }
 
     var leadGain: Float { leadLevel <= Self.leadOff ? 0 : powf(10, leadLevel / 20) }
 
@@ -876,10 +1170,13 @@ extension PitchScale {
 struct PitchGuideParams: Codable, Equatable {
     var key: Int = 0                    // 0=C … 11=B
     var scale: PitchScale = .major
-    var retuneSpeed: Float = 50         // ms to land on the note, 0...400; 0 = instant (robotic)
+    // Defaults are Natural – Tight, A Little, All the Way
+    var retuneSpeed: Float = 60         // ms to land on the note, 0...400; 0 = instant (robotic)
     var tolerance: Float = 10           // cents, 0...50; deviations this small are left alone
     var amount: Float = 100             // %, 0...100; how much of the error is removed
-    var humanize: Float = 0             // %, 0...100; slows retune on held notes
+    var humanize: Float = 20            // %, 0...100; slows retune on held notes
+    /// Show the four correction sliders instead of the Speed / Flex / Amount choices
+    var customCorrection: Bool = false
     var pickiness: Float = 50           // %, 0...100; higher = only clear, steady notes
     var gateThreshold: Float = -45      // dBFS, -70...-20; quieter input (bleed) is ignored
     var voiceRange: VoiceRange = .mid
@@ -894,7 +1191,9 @@ struct PitchGuideParams: Codable, Equatable {
     var formantShift: Float = 0         // semitones, -6...6
     /// Transpose and Formant switch off between phrases, so bleed in the gaps isn't shifted
     var shiftOnlyWhileSinging: Bool = true
-    /// How far to turn the mic down between phrases; 0 = off
+    /// How far to turn the mic down between phrases; 0 = off. Superseded by Smart Gate's
+    /// Bleed Duck: loading moves it there (see `moveBleedDuckToSmartGate`). Still honoured
+    /// when it can't move (no free slot), and shown in the editor only then.
     var bleedDuck: Float = 0            // dB, -20...0
     /// Balance between processed and dry signal; 100 = fully processed, 0 = bypass
     var wetMix: Float = 100             // %, 0...100
@@ -919,6 +1218,15 @@ struct PitchGuideParams: Codable, Equatable {
         tolerance = try min(50, c.decodeIfPresent(Float.self, forKey: .tolerance) ?? d.tolerance)
         amount = try c.decodeIfPresent(Float.self, forKey: .amount) ?? d.amount
         humanize = try c.decodeIfPresent(Float.self, forKey: .humanize) ?? d.humanize
+        if let custom = try c.decodeIfPresent(Bool.self, forKey: .customCorrection) {
+            customCorrection = custom
+        } else if retuneSpeed == 50 && tolerance == 10 && amount == 100 && humanize == 0 {
+            // Saved before the choices, on the old defaults: move to the nearest choices
+            snapToChoices()
+        } else {
+            // Hand-set before the choices: keep the exact values, shown as sliders
+            customCorrection = !matchesChoices
+        }
         pickiness = try c.decodeIfPresent(Float.self, forKey: .pickiness) ?? d.pickiness
         gateThreshold = try c.decodeIfPresent(Float.self, forKey: .gateThreshold) ?? d.gateThreshold
         voiceRange = (try? c.decodeIfPresent(VoiceRange.self, forKey: .voiceRange)) ?? d.voiceRange
@@ -945,6 +1253,164 @@ struct PitchGuideParams: Codable, Equatable {
     /// key they sing in; Transpose then moves the corrected voice (sung in D, +2 → heard in E).
     var allowedPitchClassMask: UInt32 {
         scale.intervals.reduce(0) { $0 | (1 << UInt32((key + $1) % 12)) }
+    }
+}
+
+// MARK: - Pitch Guide: correction by description
+
+/// How fast the voice lands on the note
+enum TuneSpeed: CaseIterable, Identifiable {
+    case off, naturalLoose, naturalTight, hard, exact
+    var id: Self { self }
+
+    var name: String {
+        switch self {
+        case .off:          "Off"
+        case .naturalLoose: "Natural – Loose"
+        case .naturalTight: "Natural – Tight"
+        case .hard:         "Hard"
+        case .exact:        "Exact"
+        }
+    }
+
+    var sound: String {
+        switch self {
+        case .off:          "The voice as sung. No tuning."
+        case .naturalLoose: "A good singer on a good night. Tuning you won't notice."
+        case .naturalTight: "A polished studio vocal."
+        case .hard:         "Modern pop: clearly tuned, still musical."
+        case .exact:        "The robot effect. Jumps straight to each note."
+        }
+    }
+
+    /// Retune Speed, ms; nil for Off
+    var retuneMs: Float? {
+        switch self {
+        case .off:          nil
+        case .naturalLoose: 150
+        case .naturalTight: 60
+        case .hard:         20
+        case .exact:        0
+        }
+    }
+}
+
+/// How much of the singer's own movement (drift, vibrato, scoops) is kept
+enum TuneFlex: CaseIterable, Identifiable {
+    case locked, aLittle, expressive, free
+    var id: Self { self }
+
+    var name: String {
+        switch self {
+        case .locked:     "Locked"
+        case .aLittle:    "A Little"
+        case .expressive: "Expressive"
+        case .free:       "Free"
+        }
+    }
+
+    var sound: String {
+        switch self {
+        case .locked:     "Every note pinned. No wobble."
+        case .aLittle:    "Small drift cleaned up; phrasing kept."
+        case .expressive: "Vibrato, scoops and bends come through."
+        case .free:       "Only clearly wrong notes are fixed."
+        }
+    }
+
+    var tolerance: Float {
+        switch self { case .locked: 0; case .aLittle: 10; case .expressive: 25; case .free: 40 }
+    }
+
+    var humanize: Float {
+        switch self { case .locked: 0; case .aLittle: 20; case .expressive: 50; case .free: 80 }
+    }
+}
+
+/// How far toward the note the voice is pulled
+enum TuneAmount: CaseIterable, Identifiable {
+    case nudge, mostly, allTheWay
+    var id: Self { self }
+
+    var name: String {
+        switch self { case .nudge: "Nudge"; case .mostly: "Mostly"; case .allTheWay: "All the Way" }
+    }
+
+    var sound: String {
+        switch self {
+        case .nudge:     "Still clearly the singer, just safer."
+        case .mostly:    "In tune, with a little character left."
+        case .allTheWay: "Right on the note."
+        }
+    }
+
+    var amount: Float {
+        switch self { case .nudge: 40; case .mostly: 75; case .allTheWay: 100 }
+    }
+}
+
+extension PitchGuideParams {
+    /// The Speed choice these values match, or nil when they match none
+    var tuneSpeed: TuneSpeed? {
+        get {
+            if amount == 0 { return .off }
+            return TuneSpeed.allCases.first { $0.retuneMs == retuneSpeed }
+        }
+        set {
+            guard let newValue else { return }
+            switch newValue {
+            case .off:
+                amount = 0
+            case .exact:
+                // The robot sound needs every note pinned, all the way
+                retuneSpeed = 0
+                tuneFlex = .locked
+                tuneAmount = .allTheWay
+            default:
+                retuneSpeed = newValue.retuneMs ?? retuneSpeed
+                if amount == 0 { amount = TuneAmount.allTheWay.amount }
+            }
+        }
+    }
+
+    var tuneFlex: TuneFlex? {
+        get { TuneFlex.allCases.first { $0.tolerance == tolerance && $0.humanize == humanize } }
+        set {
+            guard let newValue else { return }
+            tolerance = newValue.tolerance
+            humanize = newValue.humanize
+        }
+    }
+
+    var tuneAmount: TuneAmount? {
+        get { TuneAmount.allCases.first { $0.amount == amount } }
+        set { if let newValue { amount = newValue.amount } }
+    }
+
+    /// Whether the choices describe these values exactly (Flex and Amount don't matter when Off)
+    var matchesChoices: Bool {
+        switch tuneSpeed {
+        case .none:      false
+        case .some(.off): true
+        case .some:      tuneFlex != nil && tuneAmount != nil
+        }
+    }
+
+    /// Moves each value to the nearest choice (leaving Custom)
+    mutating func snapToChoices() {
+        if amount > 0 {
+            let speeds = TuneSpeed.allCases.filter { $0 != .off }
+            let speed = speeds.min { abs(($0.retuneMs ?? 0) - retuneSpeed) < abs(($1.retuneMs ?? 0) - retuneSpeed) }
+            let flex = TuneFlex.allCases.min {
+                abs($0.tolerance - tolerance) / 40 + abs($0.humanize - humanize) / 80
+                    < abs($1.tolerance - tolerance) / 40 + abs($1.humanize - humanize) / 80
+            }
+            let pull = TuneAmount.allCases.min { abs($0.amount - amount) < abs($1.amount - amount) }
+            tuneFlex = flex
+            tuneAmount = pull
+            tuneSpeed = speed
+        }
+        customCorrection = false
     }
 }
 
@@ -975,6 +1441,9 @@ struct ChannelFXSlot: Codable, Equatable {
     var air: AirParams = .init()
     var punch: PunchParams = .init()
     var smartGate: SmartGateParams = .init()
+    var makeRoom: MakeRoomParams = .init()
+    /// Compressor (either character) sidechain
+    var sidechain: SidechainParams = .init()
 
     init() {}
 
@@ -1000,6 +1469,81 @@ struct ChannelFXSlot: Codable, Equatable {
         air = try c.decodeIfPresent(AirParams.self, forKey: .air) ?? .init()
         punch = try c.decodeIfPresent(PunchParams.self, forKey: .punch) ?? .init()
         smartGate = try c.decodeIfPresent(SmartGateParams.self, forKey: .smartGate) ?? .init()
+        makeRoom = try c.decodeIfPresent(MakeRoomParams.self, forKey: .makeRoom) ?? .init()
+        sidechain = try c.decodeIfPresent(SidechainParams.self, forKey: .sidechain) ?? .init()
+    }
+}
+
+// MARK: - Harmony follows Pitch Guide
+
+extension Array where Element == ChannelFXSlot {
+    /// Each Harmony set to use the Pitch Guide's settings gets the channel's first Pitch
+    /// Guide's key and detection. True if anything changed.
+    @discardableResult
+    mutating func syncHarmonyWithPitchGuide() -> Bool {
+        guard let guide = first(where: { $0.type == .pitchGuide })?.pitchGuide else { return false }
+        var changed = false
+        for i in indices where self[i].type == .harmony && self[i].harmony.usePitchGuide {
+            if self[i].harmony.syncKeyAndDetection(from: guide) { changed = true }
+        }
+        return changed
+    }
+
+    var hasPitchGuide: Bool { contains { $0.type == .pitchGuide } }
+}
+
+// MARK: - Bleed Duck migration
+
+extension Array where Element == ChannelFXSlot {
+    /// Bleed Duck used to be a Pitch Guide setting; it's now Smart Gate's "Opens For: Singing".
+    /// Moves each Pitch Guide's duck to a Smart Gate: the channel's existing one if it has
+    /// one, otherwise a new one right after the Pitch Guide, where the duck acted (effects
+    /// shift along into a free slot, before or after). A duck with no free slot to move
+    /// into stays on the Pitch Guide.
+    ///
+    /// Returns where each original slot now sits (old index → new index) and which slots
+    /// were added, or nil when nothing changed.
+    mutating func moveBleedDuckToSmartGate() -> (newIndex: [Int: Int], added: [Int])? {
+        var position = Dictionary(uniqueKeysWithValues: indices.map { ($0, $0) })
+        var changed = false
+        while let pg = firstIndex(where: { $0.type == .pitchGuide && $0.pitchGuide.bleedDuck < 0 }) {
+            let duckDB = self[pg].pitchGuide.bleedDuck
+            self[pg].pitchGuide.bleedDuck = 0
+            if let gate = firstIndex(where: { $0.type == .smartGate }) {
+                self[gate].smartGate.bleedDuck = true
+                changed = true
+                continue
+            }
+            var gate = ChannelFXSlot()
+            gate.type = .smartGate
+            gate.isBypassed = self[pg].isBypassed
+            gate.smartGate.bleedDuck = true
+            gate.smartGate.depth = -duckDB
+            // The voice check does the sorting, so the level only needs to clear the floor
+            gate.smartGate.sensitivity = 25
+            if let free = indices.first(where: { $0 > pg && self[$0].type == nil }) {
+                position = position.filter { $0.value != free }   // the free slot is used up
+                // Effects after the Pitch Guide move down one; the gate lands right after it
+                for j in stride(from: free, to: pg + 1, by: -1) { self[j] = self[j - 1] }
+                for (old, now) in position where now > pg && now < free { position[old] = now + 1 }
+                self[pg + 1] = gate
+            } else if let free = indices.last(where: { $0 < pg && self[$0].type == nil }) {
+                position = position.filter { $0.value != free }
+                // Effects from the free slot up to the Pitch Guide move up one; the gate lands right after it
+                for j in free..<pg { self[j] = self[j + 1] }
+                for (old, now) in position where now > free && now <= pg { position[old] = now - 1 }
+                self[pg] = gate
+            } else {
+                // Chain is full: keep the duck where it was (and stop; nothing else can move either)
+                self[pg].pitchGuide.bleedDuck = duckDB
+                break
+            }
+            changed = true
+        }
+        guard changed else { return nil }
+        let kept = Set(position.values)
+        let added = indices.filter { !kept.contains($0) && self[$0].type == .smartGate }
+        return (position, added)
     }
 }
 

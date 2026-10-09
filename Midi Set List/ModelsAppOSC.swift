@@ -134,6 +134,7 @@ extension BuiltInFXType {
         case .air:           "air"
         case .punch:         "punch"
         case .smartGate:     "gate"
+        case .makeRoom:      "room"
         }
     }
 
@@ -208,6 +209,10 @@ extension BuiltInFXType {
                 get: { Double($0.optoComp.gain) }, set: { $0.optoComp.gain = Float($1) }),
             toggle("limit", "Limit Mode", "0 = Compress (~3:1), 1 = Limit (~10:1).",
                    get: { $0.optoComp.limitMode }, set: { $0.optoComp.limitMode = $1 }),
+            toggle("sidechain", "Sidechain", "Compress when the chosen channels play (picked in the app).",
+                   get: { $0.sidechain.enabled }, set: { $0.sidechain.enabled = $1 }),
+            toggle("sidechainPost", "Sidechain Post", "1 = hear them after their effects and fader, 0 = as they come in.",
+                   get: { $0.sidechain.post }, set: { $0.sidechain.post = $1 }),
         ]
         case .fetComp: [
             num("input", "Input", 0...48, "dB", "Drives into the fixed threshold: more = more compression.",
@@ -221,6 +226,10 @@ extension BuiltInFXType {
                 get: { Double($0.fetComp.attack) }, set: { $0.fetComp.attack = Float($1) }),
             num("release", "Release", 1...7, "", "7 = fastest (50 ms), 1 = slowest (1.1 s).", whole: true,
                 get: { Double($0.fetComp.release) }, set: { $0.fetComp.release = Float($1) }),
+            toggle("sidechain", "Sidechain", "Compress when the chosen channels play (picked in the app).",
+                   get: { $0.sidechain.enabled }, set: { $0.sidechain.enabled = $1 }),
+            toggle("sidechainPost", "Sidechain Post", "1 = hear them after their effects and fader, 0 = as they come in.",
+                   get: { $0.sidechain.post }, set: { $0.sidechain.post = $1 }),
         ]
         case .feedbackNotch: [
             num("sensitivity", "Sensitivity", 0...100, "", "Ring-out detection sensitivity.",
@@ -264,8 +273,6 @@ extension BuiltInFXType {
             toggle("shiftOnlyWhileSinging", "Shift Only While Singing",
                    "Transpose/Formant switch off between phrases.",
                    get: { $0.pitchGuide.shiftOnlyWhileSinging }, set: { $0.pitchGuide.shiftOnlyWhileSinging = $1 }),
-            num("bleedDuck", "Bleed Duck", -20...0, "dB", "Turns the mic down between phrases. 0 = off.",
-                get: { Double($0.pitchGuide.bleedDuck) }, set: { $0.pitchGuide.bleedDuck = Float($1) }),
         ]
         case .warmth: [
             num("drive", "Drive", 0...100, "%", "Gentle thickening at low settings, grit when pushed. 0 = off.",
@@ -290,6 +297,14 @@ extension BuiltInFXType {
                 get: { Double($0.smartGate.sensitivity) }, set: { $0.smartGate.sensitivity = Float($1) }),
             num("depth", "Depth", 0...80, "dB", "How far it turns down when closed.",
                 get: { Double($0.smartGate.depth) }, set: { $0.smartGate.depth = Float($1) }),
+            toggle("bleedDuck", "Opens For Singing", "1 = only opens for singing, so loud bleed between phrases stays down. 0 = any sound.",
+                   get: { $0.smartGate.bleedDuck }, set: { $0.smartGate.bleedDuck = $1 }),
+        ]
+        case .makeRoom: [
+            choice("amount", "Amount", MakeRoomParams.Amount.allCases.map(\.name),
+                   "0 = Subtle (up to 2 dB), 1 = Clear (up to 4 dB). Which channels to make room for is set in the app.",
+                   get: { MakeRoomParams.Amount.allCases.firstIndex(of: $0.makeRoom.amount) ?? 0 },
+                   set: { $0.makeRoom.amount = MakeRoomParams.Amount.allCases[$1] }),
         ]
         case .tone: [
             num("amount", "Amount", 0...100, "%", "How much of the instrument's tone profile. 0 = flat.",
@@ -329,6 +344,9 @@ extension BuiltInFXType {
                 get: { Double($0.harmony.pickiness) }, set: { $0.harmony.pickiness = Float($1) }),
             num("gate", "Gate", -70...(-20), "dBFS", "Quieter input (bleed) gets no harmonies.",
                 get: { Double($0.harmony.gateThreshold) }, set: { $0.harmony.gateThreshold = Float($1) }),
+            toggle("usePitchGuide", "Use Pitch Guide's Settings",
+                   "Key, voice range, pickiness and gate come from the channel's Pitch Guide (when it has one).",
+                   get: { $0.harmony.usePitchGuide }, set: { $0.harmony.usePitchGuide = $1 }),
         ]
         case .microDetune: [
             num("pitchA", "Pitch A", 0...50, "cents", "Voice A (left) shifted up. 9 = classic.",
