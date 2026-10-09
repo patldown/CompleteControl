@@ -75,7 +75,7 @@ struct ChannelWizardButton: View {
     var body: some View {
         if !ChannelWizardConfig.build(for: channel).isEmpty {
             Button { isPresented = true } label: {
-                Image(systemName: "tuningfork")
+                Image(systemName: "dial.medium")
                     .font(.caption)
                     .foregroundStyle(.purple)
             }
@@ -205,7 +205,7 @@ struct ChannelWizardSheet: View {
 
     private var readyView: some View {
         VStack(spacing: 24) {
-            Image(systemName: "tuningfork")
+            Image(systemName: "dial.medium")
                 .font(.system(size: 56))
                 .foregroundStyle(.purple)
             VStack(spacing: 8) {
